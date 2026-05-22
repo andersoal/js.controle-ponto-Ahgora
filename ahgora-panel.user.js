@@ -1,14 +1,15 @@
 // ==UserScript==
-// @name         Ahgora — Painel Inteligente Local
+// @name         Ahgora — Painel Inteligente Local + Modal Logger
 // @namespace    https://github.com/jonathanfiss
-// @version      1.1.2
-// @description  Painel inteligente local para Ahgora com totais no calendário
+// @version      1.4.0
+// @description  Painel com totais no calendário e logger de batidas com sugestões inteligentes
 // @author       Jonathan Fiss
 
-// @match https://mirror.app.ahgora.com.br/*
-// @match https://app.ahgora.com.br/*
+// @match        https://mirror.app.ahgora.com.br/*
+// @match        https://app.ahgora.com.br/*
 
-// @grant        none
+// @grant        GM_setValue
+// @grant        GM_getValue
 // @run-at       document-idle
 
 // @downloadURL  https://raw.githubusercontent.com/jonathanfiss/js.controle-ponto-Ahgora/main/ahgora-panel.user.js
@@ -20,7 +21,7 @@
     'use strict';
 
     /* =========================================================
-       CONFIG
+       CONFIGURAÇÕES PRINCIPAIS
     ========================================================= */
 
     const CONFIG = {
@@ -33,6 +34,9 @@
         NOTIFICAR_ANTES: 5,
         AUTO_REFRESH_MINUTES: 15,
         URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
+
+        // Configuração do Logger
+        LOGGER_HISTORY_SIZE: 5,
     };
 
     let NEXT_REFRESH = Date.now() + (CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
@@ -182,7 +186,6 @@
             const isBusinessDay = (weekDay !== 0 && weekDay !== 6 && !isHoliday) || possuiBatidas;
             const trabalhado = batidas.length > 0 ? calcularTrabalhado(batidas) : 0;
 
-            // --- INJETAR TOTAL DIÁRIO NO DOM ---
             if (trabalhado > 0) {
                 let totalDiv = day.querySelector('.ahg-day-total');
                 if (!totalDiv) {
@@ -201,7 +204,7 @@
     }
 
     /* =========================================================
-       RESUMO
+       RESUMO E EXPORTAÇÃO CROSS-PAGE (PAINEL -> LOGGER)
     ========================================================= */
 
     function calcularResumo() {
@@ -210,6 +213,11 @@
         if (!hoje) return null;
 
         const saldoSemana = dias.filter(x => sameWeek(x.data, new Date()) && !x.isFuture && !x.isToday && x.isBusinessDay).reduce((a, b) => a + b.saldo, 0);
+
+        // Exportar para o Logger
+        GM_setValue('ahgora_mirror_today', JSON.stringify(hoje.batidas || []));
+        GM_setValue('ahgora_saldo_semana_anterior', saldoSemana);
+
         const saldoMes = dias.filter(x => x.data.getMonth() === new Date().getMonth() && !x.isFuture && x.isBusinessDay).reduce((a, b) => a + b.saldo, 0);
         const totalMes = dias.filter(x => x.data.getMonth() === new Date().getMonth() && !x.isFuture && x.isBusinessDay).reduce((a, b) => a + b.trabalhado, 0);
         const diasRestantesMes = dias.filter(x => x.isFuture && x.isBusinessDay).length;
@@ -283,7 +291,7 @@
     }
 
     /* =========================================================
-       CSS
+       CSS (PAINEL)
     ========================================================= */
 
     function injectCSS() {
@@ -315,17 +323,16 @@
         .a-body::-webkit-scrollbar-thumb, #ahg-details *::-webkit-scrollbar-thumb{ background:#444466; border-radius:10px; }
         .a-body::-webkit-scrollbar-track, #ahg-details *::-webkit-scrollbar-track{ background:transparent; }
 
-        /* ESTILOS DOS TOTAIS NO CALENDÁRIO */
         .v-calendar-weekly__day { position: relative !important; }
         .ahg-day-total {
             position: absolute;
-            top: 4px; /* Move para o topo */
-            left: 50%; /* Centraliza horizontalmente */
-            transform: translateX(-50%); /* Ajuste fino de centralização */
-            background: rgba(59, 45, 130, 0.85); /* Fundo sutilmente translúcido */
+            top: 4px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(59, 45, 130, 0.85);
             color: #ffffff;
             padding: 2px 8px;
-            border-radius: 12px; /* Mais arredondado */
+            border-radius: 12px;
             font-size: 11px;
             font-weight: 700;
             box-shadow: 0 2px 4px rgba(0,0,0,0.15);
@@ -340,7 +347,7 @@
     }
 
     /* =========================================================
-       ESTRUTURA
+       ESTRUTURA (PAINEL)
     ========================================================= */
 
     function criarEstrutura() {
@@ -355,7 +362,6 @@
         };
         document.body.appendChild(fab);
 
-        // Botão de Olho (Flutuante para quando o painel estiver minimizado)
         const eyeFab = document.createElement('div');
         eyeFab.id = 'ahg-eye-fab';
         eyeFab.innerHTML = '👁️';
@@ -409,7 +415,7 @@
     }
 
     /* =========================================================
-       RENDER
+       RENDER (PAINEL)
     ========================================================= */
 
     function render() {
@@ -607,11 +613,7 @@
         modal.onclick = e => { if (e.target === modal) modal.remove(); };
     }
 
-    /* =========================================================
-       INIT
-    ========================================================= */
-
-    function start() {
+    function startPanel() {
         injectCSS();
         criarEstrutura();
         render();
@@ -622,22 +624,176 @@
         }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
     }
 
-    const initInterval = setInterval(() => {
-        const calendar = document.querySelector('.v-calendar-weekly');
-        if (calendar) {
-            clearInterval(initInterval);
-            start();
+    /* =========================================================
+       PRECISE MODAL LOGGER COM SUGESTÕES (NOVABATIDAONLINE)
+    ========================================================= */
+
+    function savePunch(time, date) {
+        let history = JSON.parse(GM_getValue("ahgora_history_v6", "[]"));
+
+        if (history.length > 0) {
+            const last = history[history.length - 1];
+            if (last.time === time && last.date === date) return;
         }
-    }, 1000);
 
-    pedirNotif();
+        // NOVIDADE: Adiciona timestamp local para podermos filtrar "apenas as batidas de hoje"
+        history.push({ time, date, timestamp: Date.now() });
 
-    const IS_TOP = window.top === window;
-    if (IS_TOP) {
+        // Evita que o log fique infinito, limitando ao dobro da configuração só pra ter margem de segurança no localStorage
+        if (history.length > (CONFIG.LOGGER_HISTORY_SIZE * 2)) history.shift();
+
+        GM_setValue("ahgora_history_v6", JSON.stringify(history));
+        renderUILogger();
+    }
+
+    function monitorModal() {
+        const confirmBtn = document.querySelector('.jss83');
+
+        if (confirmBtn && !confirmBtn.dataset.hooked) {
+            confirmBtn.dataset.hooked = "true";
+
+            confirmBtn.addEventListener('click', () => {
+                const timeParts = document.querySelectorAll('.jss77');
+                const datePart = document.querySelector('.jss79');
+
+                if (timeParts.length >= 2 && datePart) {
+                    const hours = timeParts[0].innerText.toString().padStart(2, '0');
+                    const minutes = timeParts[1].innerText.toString().padStart(2, '0');
+                    const time = `${hours}:${minutes}`;
+
+                    const dateRaw = datePart.innerText;
+                    const date = dateRaw.replace(/from\s/g, '').trim();
+
+                    console.log("[AHGORA LOGGER] Captured Confirmation:", time, date);
+                    savePunch(time, date);
+                }
+            });
+        }
+    }
+
+    function renderUILogger() {
+        let container = document.getElementById('oal-punch-log');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'oal-punch-log';
+            document.body.appendChild(container);
+        }
+
+        const history = JSON.parse(GM_getValue("ahgora_history_v6", "[]"));
+        const lastPunch = history[history.length - 1] || { time: "--:--", date: "--/--/--" };
+
+        // --- 1. Sincronizar Batidas de Hoje ---
+        const mirrorPunches = JSON.parse(GM_getValue('ahgora_mirror_today', '[]'));
+        const saldoSemanaAnt = GM_getValue('ahgora_saldo_semana_anterior', 0);
+
+        // Obter as batidas do modal logger feitas "hoje" (ignora se houver lixo antigo)
+        const todayStart = new Date();
+        todayStart.setHours(0,0,0,0);
+        const todayLocalPunches = history
+            .filter(p => p.timestamp && p.timestamp >= todayStart.getTime())
+            .map(p => p.time);
+
+        // Combina e organiza tudo (Sem duplicatas)
+        const combinedPunches = Array.from(new Set([...mirrorPunches, ...todayLocalPunches])).sort();
+
+        // --- 2. Lógica de Sugestões Idêntica ao Mirror ---
+        let suggestionHtml = '';
+        const len = combinedPunches.length;
+
+        if (len === 0) {
+            suggestionHtml = `🎯 Sugestão: <b>Entrar (1º Turno)</b>`;
+        }
+        else if (len === 1) {
+            const h6 = toMin(combinedPunches[0]) + CONFIG.MAX_HORAS_TURNO;
+            suggestionHtml = `🎯 Sugestão: <b>Intervalo</b> (limite 6h: <b>${fmtHour(h6)}</b>)`;
+        }
+        else if (len === 2) {
+            const s1 = toMin(combinedPunches[1]);
+            const minRet = s1 + CONFIG.INTERVALO_MINIMO;
+            const maxRet = s1 + CONFIG.INTERVALO_MAXIMO;
+            suggestionHtml = `🎯 Sugestão: <b>Retorno</b> (min: <b>${fmtHour(minRet)}</b> | máx: <b>${fmtHour(maxRet)}</b>)`;
+        }
+        else if (len === 3) {
+            const e1 = toMin(combinedPunches[0]);
+            const s1 = toMin(combinedPunches[1]);
+            const e2 = toMin(combinedPunches[2]);
+            const t1 = s1 - e1;
+            const h8 = e2 + (CONFIG.CARGA_DIARIA - t1);
+            const ideal = h8 - saldoSemanaAnt; // Subtrai o saldo anterior para compensar a semana
+            suggestionHtml = `🎯 Sugestão: <b>Saída</b> (8h: <b>${fmtHour(h8)}</b> | ideal: <b>${fmtHour(ideal)}</b>)`;
+        }
+        else {
+            suggestionHtml = `🎯 Status: <b>Jornada Encerrada</b>`;
+        }
+
+        // --- 3. Renderizar a Interface UI ---
+        container.style = `
+            position: fixed; bottom: 30px; right: 30px;
+            background: #181825; color: #cdd6f4;
+            padding: 15px; border-radius: 12px;
+            border-top: 4px solid #1199dd;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            font-family: 'Open Sans', sans-serif; z-index: 99999;
+            min-width: 180px;
+        `;
+
+        // Utiliza a variável CONFIG.LOGGER_HISTORY_SIZE para exibir histórico
+        const historyHtml = history.slice(-CONFIG.LOGGER_HISTORY_SIZE).reverse().map(p => {
+            const dateStr = p.date ? (p.date.split(' ')[0] + ' ' + (p.date.split(' ')[1] || '')) : '';
+            return `<div style="font-size: 11px; display: flex; justify-content: space-between; margin-top: 4px;">
+                <span style="opacity: 0.6;">${dateStr}</span>
+                <span style="font-weight: bold; color: #a6e3a1;">${p.time}</span>
+            </div>`
+        }).join('');
+
+        container.innerHTML = `
+            <div style="font-size: 10px; opacity: 0.5; text-transform: uppercase; margin-bottom: 5px;">Última Confirmada (Local)</div>
+            <div style="font-size: 28px; font-weight: bold; line-height: 1; margin-bottom: 5px;">${lastPunch.time}</div>
+
+            <div style="font-size: 11px; font-weight: normal; color: #cdd6f4; margin-bottom: 5px;">
+                Hoje: <b>${combinedPunches.join(' - ') || '--:--'}</b>
+            </div>
+
+            <div style="font-size: 11px; color: #f9e2af; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px dashed #45475a;">
+                ${suggestionHtml}
+            </div>
+
+            <div style="padding-top: 5px;">
+                ${historyHtml || '<div style="font-size: 10px; opacity: 0.3;">Wait for first punch...</div>'}
+            </div>
+        `;
+    }
+
+    /* =========================================================
+       INICIALIZAÇÃO INTELIGENTE E DISPATCHER
+    ========================================================= */
+
+    const currentUrl = window.location.href;
+
+    if (currentUrl.includes('novabatidaonline')) {
+        // Modo Logger (Página de bater ponto)
+        console.log('[AHGORA LOGGER] Inicializando script de log preciso...');
+        setInterval(monitorModal, 500);
+        renderUILogger();
+    } else {
+        // Modo Painel Inteligente (Página de espelho / calendário)
+        console.log('[AHGORA PANEL] Inicializando Painel Inteligente...');
+        const initInterval = setInterval(() => {
+            const calendar = document.querySelector('.v-calendar-weekly');
+            if (calendar) {
+                clearInterval(initInterval);
+                startPanel();
+            }
+        }, 1000);
+
         pedirNotif();
-        setTimeout(() => { notif('startup', 'Ahgora', 'Notificações ativadas.', false); }, 3000);
-        setInterval(() => { location.reload(); }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
-        return;
+
+        const IS_TOP = window.top === window;
+        if (IS_TOP) {
+            pedirNotif();
+            setTimeout(() => { notif('startup', 'Ahgora', 'Notificações ativadas.', false); }, 3000);
+            setInterval(() => { location.reload(); }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
+        }
     }
 
 })();
