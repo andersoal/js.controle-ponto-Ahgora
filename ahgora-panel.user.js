@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Ahgora — Painel Inteligente Local
 // @namespace    https://github.com/jonathanfiss
-// @version      1.0.0
-// @description  Painel inteligente local para Ahgora
+// @version      1.1.0
+// @description  Painel inteligente local para Ahgora com totais no calendário
 // @author       Jonathan Fiss
 
 // @match https://mirror.app.ahgora.com.br/*
@@ -326,7 +326,7 @@
     }
 
     /* =========================================================
-       EXTRAÇÃO DOM
+       EXTRAÇÃO DOM & INJEÇÃO DE TOTAIS NO CALENDÁRIO
     ========================================================= */
 
     function extrairDados() {
@@ -399,6 +399,17 @@
                 batidas.length > 0
                     ? calcularTrabalhado(batidas)
                     : 0;
+
+            // --- NOVIDADE: INJETAR TOTAL DIÁRIO NO DOM ---
+            if (trabalhado > 0) {
+                let totalDiv = day.querySelector('.ahg-day-total');
+                if (!totalDiv) {
+                    totalDiv = document.createElement('div');
+                    totalDiv.className = 'ahg-day-total';
+                    day.appendChild(totalDiv);
+                }
+                totalDiv.textContent = fmtMin(trabalhado);
+            }
 
             const saldo =
                 isBusinessDay
@@ -768,6 +779,26 @@
             cursor:pointer;
             color:white;
         }
+        
+        #ahg-eye-fab {
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #2b2b40, #1a1a2e);
+            border: 2px solid #33334d;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            cursor: pointer;
+            color: white;
+            z-index: 99998;
+            opacity: 0.8;
+            transition: 0.2s;
+        }
 
         #ahg-panel{
             position:fixed;
@@ -923,6 +954,27 @@
         #ahg-details *::-webkit-scrollbar-track{
             background:transparent;
         }
+        
+        /* ESTILOS DOS TOTAIS NO CALENDÁRIO */
+        .v-calendar-weekly__day { position: relative !important; }
+        .ahg-day-total {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: #3b2d82;
+            color: #ffffff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            display: none;
+            z-index: 10;
+            pointer-events: none;
+        }
+        body.ahg-show-totals .ahg-day-total {
+            display: block;
+        }
         `;
 
         document.head.appendChild(style);
@@ -955,6 +1007,35 @@
 
         document.body.appendChild(fab);
 
+        // Botão de Olho (Flutuante para quando o painel estiver minimizado)
+        const eyeFab = document.createElement('div');
+        eyeFab.id = 'ahg-eye-fab';
+        eyeFab.innerHTML = '👁️';
+        eyeFab.title = 'Mostrar/Ocultar totais diários no calendário';
+        document.body.appendChild(eyeFab);
+
+        function updateEyeState() {
+            const isShowing = document.body.classList.contains('ahg-show-totals');
+            eyeFab.style.opacity = isShowing ? '1' : '0.5';
+            eyeFab.style.border = isShowing ? '2px solid #4a3faf' : '2px solid #33334d';
+        }
+
+        // Recuperar estado inicial do localStorage
+        if (localStorage.getItem('ahg-show-totals') === 'true') {
+            document.body.classList.add('ahg-show-totals');
+        }
+        updateEyeState();
+
+        eyeFab.onclick = () => {
+            const isShowing = document.body.classList.toggle('ahg-show-totals');
+            localStorage.setItem('ahg-show-totals', isShowing);
+            updateEyeState();
+            
+            // Sincronizar com o icone do painel (caso aberto)
+            const panelEye = document.getElementById('ahg-eye-toggle');
+            if (panelEye) panelEye.style.opacity = isShowing ? '1' : '0.5';
+        };
+
         const panel =
             document.createElement('div');
 
@@ -973,7 +1054,7 @@
 
         panel.addEventListener('mousedown', e => {
 
-            if (!e.target.closest('.a-tit')) {
+            if (!e.target.closest('.a-tit') || e.target.id === 'ahg-eye-toggle' || e.target.id === 'ahg-min') {
                 return;
             }
 
@@ -1028,10 +1109,14 @@
                 return;
             }
 
+            // Injeta o Toggle e Totais
+            const isShowingTotals = document.body.classList.contains('ahg-show-totals');
+
             p.innerHTML = `
             <div class="a-tit">
                 ⏱ Painel Inteligente
-                <span class="a-x" id="ahg-min">–</span>
+                <span id="ahg-eye-toggle" title="Mostrar/Ocultar Totais no Calendário" style="margin-left:auto; margin-right:12px; cursor:pointer; font-size:16px; opacity:${isShowingTotals ? '1' : '0.5'}; transition: 0.2s;">👁️</span>
+                <span class="a-x" id="ahg-min" style="margin-left:0;">–</span>
             </div>
 
             <div class="a-body">
@@ -1278,6 +1363,21 @@
             </div>
             `;
 
+            // Controla a visibilidade dos totais diretamente do painel
+            document.getElementById('ahg-eye-toggle')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const nowShowing = document.body.classList.toggle('ahg-show-totals');
+                e.target.style.opacity = nowShowing ? '1' : '0.5';
+                localStorage.setItem('ahg-show-totals', nowShowing);
+                
+                // Sincroniza com o floating icon (caso a janela seja fechada depois)
+                const eyeFab = document.getElementById('ahg-eye-fab');
+                if (eyeFab) {
+                    eyeFab.style.opacity = nowShowing ? '1' : '0.5';
+                    eyeFab.style.border = nowShowing ? '2px solid #4a3faf' : '2px solid #33334d';
+                }
+            });
+
             document.getElementById('ahg-min')
                 ?.addEventListener('click', () => {
 
@@ -1391,27 +1491,6 @@
                     semanaAtual !== null &&
                     semana !== semanaAtual
                 ) {
-
-                    /* html += `
-                         <tr style="
-                             background:#1f2937;
-                             font-weight:bold;
-                         ">
-                             <td colspan="2">
-                                 TOTAL SEMANA
-                             </td>
-                             <td>
-                                 ${fmtMin(totalSemana)}
-                             </td>
-                             <td>
-                                 ${fmtMin(saldoSemana)}
-                             </td>
-                         </tr>
-                         <tr>
-                             <td colspan="4" style="height:18px"></td>
-                         </tr>
-                     `; */
-
                     totalSemana = 0;
                     saldoSemana = 0;
                 }
