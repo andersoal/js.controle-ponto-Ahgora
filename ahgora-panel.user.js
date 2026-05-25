@@ -118,6 +118,32 @@
         return `${neg ? '-' : ''}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
     };
 
+    const roundUpQuarterHour = m => {
+
+        if (m === null || m === undefined) {
+            return null;
+        }
+
+        return Math.ceil(m / 15) * 15;
+    };
+
+    const fmtQuarterDecimal = m => {
+
+        if (m === null || m === undefined) {
+            return '--';
+        }
+
+        const decimal = roundUpQuarterHour(m) / 60;
+
+        if (Number.isInteger(decimal)) {
+            return String(decimal);
+        }
+
+        return decimal.toFixed(2)
+            .replace(/0+$/, '')
+            .replace(/\.$/, '');
+    };
+
     const fmtHour = m => {
 
         if (m === null || m === undefined) {
@@ -626,6 +652,9 @@
             let totalDiv =
                 day.querySelector('.ahg-day-total');
 
+            let roundedDiv =
+                day.querySelector('.ahg-day-total-rounded');
+
             if (trabalhado > 0) {
 
                 if (!totalDiv) {
@@ -637,9 +666,27 @@
 
                 totalDiv.textContent = renderMinutes(trabalhado);
 
-            } else if (totalDiv) {
+                if (!roundedDiv) {
 
-                totalDiv.remove();
+                    roundedDiv = document.createElement('div');
+                    roundedDiv.className = 'ahg-day-total-rounded';
+                    day.appendChild(roundedDiv);
+                }
+
+                const trabalhadoArredondado =
+                    roundUpQuarterHour(trabalhado);
+
+                roundedDiv.textContent = `${renderMinutes(trabalhadoArredondado)} (${renderText(fmtQuarterDecimal(trabalhado))})`;
+
+            } else {
+
+                if (totalDiv) {
+                    totalDiv.remove();
+                }
+
+                if (roundedDiv) {
+                    roundedDiv.remove();
+                }
             }
 
             resultado.push({
@@ -1300,6 +1347,11 @@
             filter: blur(1px);
         }
 
+        .ahg-hide-times .ahg-day-total-rounded{
+            opacity:.45;
+            filter: blur(1px);
+        }
+
         .v-calendar-weekly__day{
             position:relative !important;
         }
@@ -1320,6 +1372,25 @@
             z-index:10;
             pointer-events:none;
             white-space:nowrap;
+        }
+
+        .ahg-day-total-rounded{
+            position:absolute;
+            top:24px;
+            left:50%;
+            transform:translateX(-50%);
+            background:rgba(17,24,39,.9);
+            color:#e5ecff;
+            padding:1px 6px;
+            border-radius:10px;
+            font-size:10px;
+            font-weight:600;
+            box-shadow:0 2px 4px rgba(0,0,0,.12);
+            display:block;
+            z-index:10;
+            pointer-events:none;
+            white-space:nowrap;
+            letter-spacing:.1px;
         }
 
         .ahg-privacy-btn{
