@@ -302,7 +302,17 @@
 
     function renderText(text) {
 
-        return isPrivacyHidden() ? '••:••' : String(text);
+        return isPrivacyHidden() ? '••:••' : escapeHtml(String(text));
+    }
+
+    function escapeHtml(value) {
+
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     function formatDayMonth(date) {
@@ -2663,7 +2673,11 @@
             ?.addEventListener('click', () => {
 
                 showLoggerToast('Abrindo mirror para atualizar sincronização...');
-                window.open(CONFIG.URL_REFRESH, '_blank');
+                const opened = window.open(CONFIG.URL_REFRESH, '_blank', 'noopener,noreferrer');
+
+                if (opened) {
+                    opened.opener = null;
+                }
             });
 
         document.getElementById('ahg-delete-last-punch')
