@@ -736,11 +736,6 @@
                 ? toMin(hoje.batidas[3])
                 : null;
 
-        const retorno11h =
-            ultimaBatida !== null
-                ? ultimaBatida + (11 * 60)
-                : null;
-
         let h6 = null;
         let h8 = null;
         let h10 = null;
@@ -800,6 +795,16 @@
             h10 =
                 entrada + CONFIG.MAX_HORAS_DIA;
         }
+
+        const baseRetorno11h =
+            h10 !== null
+                ? h10
+                : ultimaBatida;
+
+        const retorno11h =
+            baseRetorno11h !== null
+                ? baseRetorno11h + (11 * 60)
+                : null;
 
         const saidaIdeal =
             h8 !== null
@@ -2422,7 +2427,9 @@
         };
 
         const sourceLabel = hasMirrorData
-            ? 'Mirror sincronizado'
+            ? (localOnlyPunches.length > 0
+                ? 'Mirror sincronizado com pendências locais'
+                : 'Mirror sincronizado')
             : 'Usando local (mirror pendente)';
 
         const workedToday = hasMirrorData && typeof sharedTruth.workedToday === 'number'
@@ -2543,7 +2550,10 @@
             ? `<button id="ahg-copy-minret" style="width:100%; border:1px solid #4a3faf; background:#1e1b4b; color:#dde; border-radius:8px; padding:8px; cursor:pointer; font-weight:700;">${guidance.copyLabel || 'Copiar'} (${renderText(guidance.copyTarget)})</button>`
             : requestMirrorSyncButton;
 
-        const secondaryActions = [requestMirrorSyncButton, deleteButton].filter(Boolean).join('');
+        const secondaryActions = [
+            guidance.copyTarget ? requestMirrorSyncButton : null,
+            deleteButton
+        ].filter(Boolean).join('');
 
         container.innerHTML = `
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; opacity:.7; text-transform:uppercase; margin-bottom:5px;">
