@@ -1,311 +1,55 @@
 # Ahgora — Painel Inteligente Local
 
-Painel inteligente para o Ahgora desenvolvido com Tampermonkey.
-
-O script utiliza apenas as informações carregadas no DOM da página, sem realizar requisições HTTP, APIs externas ou leitura de saldo pronta do sistema.
-
-Todo o cálculo é feito localmente a partir das batidas exibidas no calendário.
-
----
-
-# Funcionalidades
-
-## Painel Inteligente
-
-* Modal flutuante
-* Inicialização minimizada
-* Arrastar pela tela
-* Atualização automática
-* Atualização sincronizada na virada do minuto
-* Scroll automático quando necessário
-* Recarregamento automático da página
-
----
-
-# Cálculos Automáticos
-
-## Jornada diária
-
-* Carga horária diária configurável
-* Limite máximo por turno
-* Limite máximo diário
-* Intervalo mínimo entre turnos
-* Intervalo máximo entre turnos
-* Intervalo intrajornada de 11h
-
----
-
-# Turnos
-
-O painel separa automaticamente:
-
-* 1º turno
-* 2º turno
-
-Mostrando:
-
-* horário inicial
-* horário final
-* duração do turno
-* turno em andamento
-
-Exemplo:
-
-```text
-1º turno
-09:00 → 12:08
-03:08
-
-2º turno
-13:18 → agora
-04:53 · em andamento
-```
-
----
-
-# Status Visual Inteligente
-
-Os cards mudam automaticamente de cor:
-
-| Situação                | Cor      |
-| ----------------------- | -------- |
-| Normal                  | Azul     |
-| Próximo de 6h contínuas | Amarelo  |
-| Acima de 6h contínuas   | Vermelho |
-| Próximo de 10h diárias  | Amarelo  |
-| Acima de 10h diárias    | Vermelho |
-
----
-
-# Status Atual
-
-O painel identifica automaticamente:
-
-* Não iniciado
-* Primeiro turno
-* Intervalo
-* Segundo turno
-* Encerrado
-
----
-
-# Cálculo de Saídas
-
-O script calcula automaticamente:
-
-* Saída 6h contínuas
-* Meta diária 8h
-* Limite diário 10h
-* Saída ideal baseada no saldo semanal
-
-Os cálculos consideram:
-
-* intervalos
-* múltiplos turnos
-* saldo anterior da semana
-
----
-
-# Intervalos
-
-## Intervalo entre turnos
-
-Quando o primeiro turno é encerrado:
-
-```text
-Retorno mínimo
-Retorno máximo
-```
-
-são exibidos automaticamente.
-
----
-
-## Intervalo intrajornada (11h)
-
-Após encerrar o dia:
-
-```text
-🛌 Próximo retorno
-```
-
-é calculado automaticamente.
-
-Exemplo:
-
-```text
-Saída: 23:00
-Próximo retorno: 10:00
-```
-
----
-
-# Saldos
-
-## Diário
-
-Calculado automaticamente:
-
-* positivo
-* negativo
-
----
-
-## Semanal
-
-O saldo semanal:
-
-* NÃO utiliza saldo do sistema
-* é recalculado pelo DOM
-
-O saldo:
-
-* zera automaticamente a cada semana
-* não carrega saldo de semanas anteriores
-
----
-
-## Mensal
-
-O saldo mensal:
-
-* também é calculado localmente
-* não utiliza valores do Ahgora
-
----
-
-# Fins de Semana
-
-Sábados e domingos:
-
-* entram no cálculo
-* aparecem no relatório
-* entram no saldo
-
-somente se existirem batidas no dia.
-
----
-
-# Relatório Mensal
-
-Ao clicar em:
-
-```text
-📊 Horas realizadas
-```
-
-abre um modal detalhado contendo:
-
-* dia da semana
-* data
-* horas trabalhadas
-* saldo do dia
-
-Além disso:
-
-* agrupamento semanal
-* total semanal
-* saldo semanal
-
-são exibidos automaticamente.
-
----
-
-# Notificações
-
-O script utiliza notificações nativas do navegador.
-
-Alertas:
-
-* Próximo das 6h
-* Meta diária 8h
-* Limite diário 10h
-* Saída ideal
-* Recarregamento automático da página
-
----
-
-# Atualização Automática
-
-O painel:
-
-* recalcula automaticamente
-* sincroniza com a virada do minuto
-
-Exemplo:
-
-```text
-18:32:00
-18:33:00
-18:34:00
-```
-
----
-
-# Recarregamento Automático
-
-Para evitar expiração de sessão:
-
-* a página pode ser recarregada automaticamente
-* o contador é exibido no rodapé do painel
-
-Exemplo:
-
-```text
-Atualizado 18:32 · Reload em 12m 00s
-```
-
----
-
-# Requisitos
-
-* Tampermonkey
-* Google Chrome / Edge / Firefox
-* Ahgora carregando o calendário mensal
-
----
-
-# Importante
-
-O script:
-
-* NÃO faz requisições externas
-* NÃO utiliza APIs
-* NÃO acessa banco de dados
-* NÃO depende do saldo exibido pelo Ahgora
-* NÃO utiliza localStorage para armazenar saldos
-
-Toda a lógica é baseada apenas nas batidas carregadas na tela.
-
----
-
-# Compatibilidade
-
-Desenvolvido para:
-
-```text
-https://mirror.app.ahgora.com.br/*
-```
-
----
-
-# Tecnologias
-
-* JavaScript
-* Tampermonkey
-* DOM parsing local
-* Notifications API
-
----
-
-# Objetivo
-
-O objetivo do script é fornecer:
-
-* acompanhamento em tempo real
-* previsibilidade de saída
-* controle de jornada
-* compensação semanal
-* validação operacional
-
-diretamente dentro do Ahgora.
+## Visao geral
+
+Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgora usando somente dados do DOM.
+
+## Regras de documentacao
+
+- Regras de negocio e CLT/politica devem ser atualizadas diretamente neste README.
+
+## Guias
+- Design e UX: DESIGN.md
+- Fluxo de contribuicao: AGENTS.md
+
+## Catalogo unificado de regras (Negocio + CLT/Politica)
+
+### Matriz de enforcement
+
+- hard-block: bloqueia sugestoes nao conformes.
+- warning-only: alerta com calculo visivel.
+- mixed: comportamento combinado (bloqueio e alerta por contexto).
+- mode-dependent: depende do modo configurado.
+- informational: aviso sem alterar calculo.
+
+### Regras
+| ID | Regra | Enforcement | Flag principal | Parametros/flags padrao | Caso de teste |
+| --- | --- | --- | --- | --- | --- |
+| BR-001 | Interjornada minima 11h | hard-block | ENFORCE_INTERJORNADA_MIN | INTERJORNADA_MIN_MINUTES=660 | TC-BR001-01 |
+| BR-002 | Intrajornada minima 30m | hard-block | ENFORCE_INTRAJORNADA_MIN | INTRAJORNADA_MIN_MINUTES=30 | TC-BR002-01 |
+| BR-003 | Intrajornada maxima 3h30 | warning-only | ENFORCE_INTRAJORNADA_MAX | INTRAJORNADA_MAX_MINUTES=210 | TC-BR003-01 |
+| BR-004 | Turno unico maximo 6h | mixed | ENFORCE_MAX_CONTINUOUS_SHIFT | MAX_CONTINUOUS_SHIFT_MINUTES=360 | TC-BR004-01 |
+| BR-005 | Jornada diaria maxima 10h | hard-block | ENFORCE_MAX_DAILY_MINUTES | MAX_DAILY_MINUTES=600 | TC-BR005-01 |
+| BR-006 | Maximo 2 turnos por dia sem justificativa | hard-block | ENFORCE_MAX_TURNS_PER_DAY | MAX_TURNS_PER_DAY=2 | TC-BR006-01 |
+| BR-007 | Limite semanal de horas extras | warning-only | ENFORCE_WEEKLY_OVERTIME_CAP | ENFORCE_WEEKLY_OVERTIME_CAP=true | TC-BR007-01 |
+| BR-008 | Descanso semanal 24h apos 6 dias | warning-only | ENFORCE_WEEKLY_REST_24H | ENFORCE_WEEKLY_REST_24H=true | TC-BR008-01 |
+| BR-009 | Descanso dominical mensal | warning-only | ENFORCE_MONTHLY_SUNDAY_REST | ENFORCE_MONTHLY_SUNDAY_REST=true | TC-BR009-01 |
+| BR-010 | Sobreaviso janela maxima 24h | mode-dependent | ENABLE_ONCALL_RULES | ENABLE_ONCALL_RULES=true | TC-BR010-01 |
+| BR-011 | Sobreaviso acionamento maximo 10h | mode-dependent | ENABLE_ONCALL_RULES | ENABLE_ONCALL_RULES=true | TC-BR011-01 |
+| BR-012 | Descanso pos-acionamento 11h | hard-block | ENFORCE_POST_ONCALL_REST | ENFORCE_POST_ONCALL_REST=true | TC-BR012-01 |
+| BR-013 | Aviso de fechamento de folha | informational | SHOW_PAYROLL_CUTOFF_NOTICE | SHOW_PAYROLL_CUTOFF_NOTICE=true | TC-BR013-01 |
+| BR-014 | Aviso de folga/abono | informational | SHOW_COMP_LEAVE_NOTICE | SHOW_COMP_LEAVE_NOTICE=true | TC-BR014-01 |
+| BR-015 | Aviso de ausencias | informational | SHOW_ABSENCE_PROCESS_NOTICE | SHOW_ABSENCE_PROCESS_NOTICE=true | TC-BR015-01 |
+
+## Configuracao rapida
+- Instalar Tampermonkey.
+- Carregar ahgora-panel.user.js.
+- Acessar mirror/app Ahgora e validar carregamento do painel.
+
+## Privacidade
+- Dados processados localmente no navegador.
+- Sem APIs externas para cálculo operacional.
+
+## Compatibilidade
+- https://mirror.app.ahgora.com.br/*
+- https://app.ahgora.com.br/novabatidaonline
