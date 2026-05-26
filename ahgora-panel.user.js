@@ -52,6 +52,14 @@
         // Logger
         LOGGER_HISTORY_SIZE: 5,
 
+        // Google Calendar
+        // Aceita "0" ou "example@gmail.com" para gerar /u/{valor}/ na URL.
+        GCAL_USER_PATH: '0',
+        GCAL_TITLE_PREFIX: '🗓️ Ahgora - ',
+        GCAL_TIMEZONE: 'America/Sao_Paulo',
+        // Duração padrão (em minutos) dos eventos criados via Google Calendar.
+        GCAL_EVENT_DURATION_MIN: 1,
+
         AUTO_REFRESH_MINUTES: 15,
         URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
     };
@@ -331,6 +339,34 @@
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
+    function normalizePunchTime(value) {
+
+        const text = String(value || '').trim();
+
+        if (!text) {
+            return null;
+        }
+
+        const match = text.match(/(\d{1,2}):(\d{2})/);
+
+        if (!match) {
+            return null;
+        }
+
+        const hh = Number(match[1]);
+        const mm = Number(match[2]);
+
+        if (!Number.isFinite(hh) || !Number.isFinite(mm)) {
+            return null;
+        }
+
+        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) {
+            return null;
+        }
+
+        return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    }
+
     function getPunchCountHealth(count, { isToday = false } = {}) {
 
         if (!count) {
@@ -472,6 +508,121 @@
 
         return `${min}m ${String(sec).padStart(2, '0')}s`;
     }
+
+    function minuteToDate(baseDate, minute) {
+
+        if (minute === null || minute === undefined) {
+            return null;
+        }
+
+        const date = new Date(baseDate || new Date());
+        const n = ((Math.round(minute) % 1440) + 1440) % 1440;
+
+        date.setHours(Math.floor(n / 60), n % 60, 0, 0);
+
+        return date;
+    }
+
+    function fmtGoogleCalendarDate(date) {
+
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        const hh = String(date.getHours()).padStart(2, '0');
+        const min = String(date.getMinutes()).padStart(2, '0');
+        const ss = String(date.getSeconds()).padStart(2, '0');
+
+        return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+    }
+
+    function normalizeGoogleCalendarUserPath(value) {
+
+        let raw = String(value || '').trim();
+
+        if (!raw) {
+            return '0';
+        }
+
+        if (/^https?:\/\//i.test(raw)) {
+
+            try {
+
+                const url = new URL(raw);
+                const parts = url.pathname.split('/').filter(Boolean);
+                const i = parts.indexOf('u');
+
+                if (i >= 0 && parts[i + 1]) {
+                    raw = decodeURIComponent(parts[i + 1]);
+                }
+
+            } catch (_) {
+                // noop
+            }
+        }
+
+        raw = raw.replace(/^\/?u\//i, '').replace(/^\/+/, '');
+
+        return raw || '0';
+    }
+
+    function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date() }) {
+
+        if (startMinute === null || startMinute === undefined) {
+            return null;
+        }
+
+        const startDate = minuteToDate(baseDate, startMinute);
+
+        let endDate =
+            (endMinute === null || endMinute === undefined)
+                ? null
+                : minuteToDate(baseDate, endMinute);
+
+        if (!endDate || endDate <= startDate) {
+            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * 60 * 1000));
+        }
+
+        const userPath = normalizeGoogleCalendarUserPath(CONFIG.GCAL_USER_PATH);
+        const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
+
+        const params = new URLSearchParams();
+        params.set('action', 'TEMPLATE');
+        params.set('text', fullTitle || 'Ahgora');
+        params.set('details', details || '');
+        params.set('ctz', CONFIG.GCAL_TIMEZONE || 'America/Sao_Paulo');
+        params.set('dates', `${fmtGoogleCalendarDate(startDate)}/${fmtGoogleCalendarDate(endDate)}`);
+
+        return `https://calendar.google.com/calendar/u/${encodeURIComponent(userPath)}/r/eventedit?${params.toString()}`;
+    }
+
+    function buildOutlookCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date() }) {
+
+        if (startMinute === null || startMinute === undefined) {
+            return null;
+        }
+
+        const startDate = minuteToDate(baseDate, startMinute);
+
+        let endDate =
+            (endMinute === null || endMinute === undefined)
+                ? null
+                : minuteToDate(baseDate, endMinute);
+
+        if (!endDate || endDate <= startDate) {
+            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * 60 * 1000));
+        }
+
+        const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
+
+        const params = new URLSearchParams();
+        params.set('subject', fullTitle || 'Ahgora');
+        params.set('body', details || '');
+        params.set('startTime', startDate.toISOString());
+        params.set('endTime', endDate.toISOString());
+
+        return `https://outlook.office.com/calendar/0/composeevent?${params.toString()}`;
+    }
+
     /* =========================================================
        NOTIFICAÇÕES
     ========================================================= */
@@ -1133,6 +1284,10 @@
             firstExitMax: null,
             secondEntryMin: null,
             secondEntryMax: null,
+            firstExitMinPause30: null,
+            firstExitMinPause210: null,
+            firstExitMaxPause30: null,
+            firstExitMaxPause210: null,
             copyTarget: null,
             copyLabel: null
         };
@@ -1168,13 +1323,10 @@
         }
 
         if (lista.length === 1) {
-
-            const h6 = guidance.firstTurn6h;
-
             guidance.stage = 'interval';
             guidance.title = 'Intervalo';
-            guidance.summary = `Limite 6h: ${renderClock(h6)} · pausa entre ${CONFIG.INTERVALO_MINIMO}m e ${CONFIG.INTERVALO_MAXIMO}m`;
-            guidance.minTime = h6;
+
+            guidance.minTime = guidance.firstTurn6h;
 
             const firstStart = toMin(lista[0]);
 
@@ -1184,6 +1336,14 @@
                 guidance.firstExitMax = firstStart + CONFIG.MAX_HORAS_TURNO;
                 guidance.secondEntryMin = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
                 guidance.secondEntryMax = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
+                guidance.firstExitMinPause30 = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
+                guidance.firstExitMinPause210 = guidance.firstExitMin + CONFIG.INTERVALO_MAXIMO;
+                guidance.firstExitMaxPause30 = guidance.firstExitMax + CONFIG.INTERVALO_MINIMO;
+                guidance.firstExitMaxPause210 = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
+
+                guidance.summary = `Saída mín. 2h: ${renderClock(guidance.firstExitMin)} · máx. 6h: ${renderClock(guidance.firstExitMax)} · retorno +30m/+210m`;
+            } else {
+                guidance.summary = `Saída entre 2h e 6h · pausa entre ${CONFIG.INTERVALO_MINIMO}m e ${CONFIG.INTERVALO_MAXIMO}m`;
             }
 
             return guidance;
@@ -1277,7 +1437,7 @@
         const shared = {
             source: 'mirror',
             updatedAt: Date.now(),
-            todayKey: formatDateKey(),
+            todayKey: formatDateKey(resumo.hoje.data || new Date()),
             todayPunches: [...(resumo.hoje.batidas || [])],
             workedToday: resumo.hoje.trabalhado,
             dayBalance: resumo.hoje.saldo,
@@ -2419,6 +2579,226 @@
         }
     }
 
+    function reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, todayStartMs, todayEndMs) {
+
+        if (!Array.isArray(history) || !history.length) {
+            return {
+                history,
+                removedCount: 0
+            };
+        }
+
+        if (!Array.isArray(mirrorPunches) || !mirrorPunches.length) {
+            return {
+                history,
+                removedCount: 0
+            };
+        }
+
+        const mirrorSet = new Set(
+            mirrorPunches
+                .map(x => String(x || '').trim())
+                .filter(Boolean)
+        );
+
+        const nextHistory = history.filter(entry => {
+
+            const ts = Number(entry?.timestamp);
+            const time = String(entry?.time || '').trim();
+
+            const isTodayByTimestamp =
+                Number.isFinite(ts) &&
+                ts >= todayStartMs &&
+                ts < todayEndMs;
+
+            if (!isTodayByTimestamp) {
+                return true;
+            }
+
+            if (!time) {
+                return true;
+            }
+
+            return !mirrorSet.has(time);
+        });
+
+        return {
+            history: nextHistory,
+            removedCount: history.length - nextHistory.length
+        };
+    }
+
+    function getTodayBounds() {
+
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const todayEnd = new Date(todayStart);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+
+        return {
+            todayKey: formatDateKey(todayStart),
+            startMs: todayStart.getTime(),
+            endMs: todayEnd.getTime()
+        };
+    }
+
+    function getMirrorTodayContext(sharedTruth, todayKey) {
+
+        const sharedTodayKey = String(sharedTruth.todayKey || '');
+        const mirrorTodayKey = String(gmGetValue('ahgora_mirror_today_ref', ''));
+        const mirrorCachedPunches = parseJson(
+            gmGetValue('ahgora_mirror_today', '[]'),
+            []
+        );
+
+        const hasSharedTodayPunches =
+            Array.isArray(sharedTruth.todayPunches) &&
+            sharedTruth.todayPunches.length > 0;
+
+        const hasSharedStaleCache =
+            hasSharedTodayPunches &&
+            sharedTodayKey &&
+            sharedTodayKey !== todayKey;
+
+        const hasMirrorStaleCache =
+            Array.isArray(mirrorCachedPunches) &&
+            mirrorCachedPunches.length > 0 &&
+            mirrorTodayKey &&
+            mirrorTodayKey !== todayKey;
+
+        const rawMirrorPunches = (
+            Array.isArray(sharedTruth.todayPunches) &&
+            sharedTodayKey === todayKey
+        )
+            ? sharedTruth.todayPunches
+            : (
+                mirrorTodayKey === todayKey
+                    ? mirrorCachedPunches
+                    : []
+            );
+
+        const mirrorPunches = Array.from(new Set(
+            rawMirrorPunches
+                .map(normalizePunchTime)
+                .filter(Boolean)
+        )).sort((a, b) => toMin(a) - toMin(b));
+
+        const hasMirrorData = (
+            sharedTruth &&
+            sharedTruth.source === 'mirror' &&
+            sharedTodayKey === todayKey
+        ) || mirrorTodayKey === todayKey;
+
+        return {
+            sharedTodayKey,
+            mirrorTodayKey,
+            mirrorPunches,
+            hasMirrorData,
+            hasSharedStaleCache,
+            hasMirrorStaleCache
+        };
+    }
+
+    function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
+
+        const reconciled = reconcileTodayLocalHistoryWithMirror(
+            history,
+            mirrorPunches,
+            startMs,
+            endMs
+        );
+
+        const effectiveHistory = reconciled.history;
+
+        const todayLocalHistory = effectiveHistory
+            .filter(p =>
+                p.timestamp &&
+                p.timestamp >= startMs &&
+                p.timestamp < endMs
+            );
+
+        const todayLocalPunches = todayLocalHistory
+            .map(p => normalizePunchTime(p.time))
+            .filter(Boolean);
+
+        const mirrorSet = new Set(mirrorPunches);
+        const localOnlyPunches = todayLocalPunches
+            .filter(time => !mirrorSet.has(time));
+
+        const displayPunches = [
+            ...mirrorPunches.map(time => ({
+                time,
+                source: 'mirror'
+            })),
+            ...localOnlyPunches.map(time => ({
+                time,
+                source: 'local'
+            }))
+        ].sort((a, b) => toMin(a.time) - toMin(b.time));
+
+        const combinedPunches = displayPunches.map(p => p.time);
+        const combinedLastPunch = combinedPunches.length
+            ? combinedPunches[combinedPunches.length - 1]
+            : null;
+
+        const localPendingSet = new Set(localOnlyPunches);
+        const pendingLocalHistoryEntries = todayLocalHistory
+            .filter(entry => {
+                const normalized = normalizePunchTime(entry.time);
+                return normalized && localPendingSet.has(normalized);
+            });
+
+        const todayDate = new Date(startMs);
+        const todayDateLabel = todayDate.toLocaleDateString('pt-BR');
+
+        const todayTimelineEntries = displayPunches
+            .map(entry => ({
+                source: entry.source,
+                time: entry.time,
+                timestamp: startMs + ((toMin(entry.time) || 0) * 60000),
+                dateLabel: todayDateLabel
+            }));
+
+        const previousTimelineEntries = effectiveHistory
+            .filter(entry => {
+                const ts = Number(entry?.timestamp);
+                return Number.isFinite(ts) && (ts < startMs || ts >= endMs);
+            })
+            .map(entry => {
+                const normalized = normalizePunchTime(entry.time);
+
+                if (!normalized) {
+                    return null;
+                }
+
+                const ts = Number(entry.timestamp);
+
+                return {
+                    source: 'history',
+                    time: normalized,
+                    timestamp: ts,
+                    dateLabel: entry.date || new Date(ts).toLocaleDateString('pt-BR')
+                };
+            })
+            .filter(Boolean);
+
+        const historyTimelineEntries = [
+            ...previousTimelineEntries,
+            ...todayTimelineEntries
+        ].sort((a, b) => a.timestamp - b.timestamp);
+
+        return {
+            reconciled,
+            effectiveHistory,
+            historyTimelineEntries,
+            localOnlyPunches,
+            combinedPunches,
+            combinedLastPunch,
+            pendingLocalHistoryEntries
+        };
+    }
+
     function monitorModal() {
 
         const confirmBtn = document.querySelector('.jss83');
@@ -2449,108 +2829,111 @@
 
         applyPrivacyState();
 
-        let container = document.getElementById('oal-punch-log');
+        let container = document.getElementById('ahg-punch-log');
 
         if (!container) {
 
             container = document.createElement('div');
-            container.id = 'oal-punch-log';
+            container.id = 'ahg-punch-log';
             document.body.appendChild(container);
         }
+
+        const sharedTruth = readSharedTruth();
+
+        const { todayKey, startMs, endMs } = getTodayBounds();
+
+        const {
+            sharedTodayKey,
+            mirrorTodayKey,
+            mirrorPunches,
+            hasMirrorData,
+            hasSharedStaleCache,
+            hasMirrorStaleCache
+        } = getMirrorTodayContext(sharedTruth, todayKey);
+
+        const saldoSemanaAnt = Number(
+            sharedTruth.weekBalance ?? gmGetValue('ahgora_saldo_semana_anterior', '0')
+        );
 
         const history = parseJson(
             gmGetValue('ahgora_history_v6', '[]'),
             []
         );
 
-        const lastPunch = history[history.length - 1] || {
+        const {
+            reconciled,
+            effectiveHistory,
+            historyTimelineEntries,
+            localOnlyPunches,
+            combinedPunches,
+            combinedLastPunch,
+            pendingLocalHistoryEntries
+        } = buildLoggerPunchTimeline(
+            history,
+            mirrorPunches,
+            startMs,
+            endMs
+        );
+
+        if (reconciled.removedCount > 0) {
+            gmSetValue(
+                'ahgora_history_v6',
+                JSON.stringify(effectiveHistory)
+            );
+        }
+
+        const lastPunch = pendingLocalHistoryEntries[pendingLocalHistoryEntries.length - 1] || {
             time: '--:--',
             date: '--/--/--'
         };
 
-        const sharedTruth = readSharedTruth();
-
-        const todayKey = formatDateKey();
-        const sharedTodayKey = String(sharedTruth.todayKey || '');
-        const mirrorTodayKey = String(gmGetValue('ahgora_mirror_today_ref', ''));
-        const mirrorCachedPunches = parseJson(
-            gmGetValue('ahgora_mirror_today', '[]'),
-            []
-        );
-
-        const hasSharedTodayPunches =
-            Array.isArray(sharedTruth.todayPunches) &&
-            sharedTruth.todayPunches.length > 0;
-
-        const hasSharedStaleCache =
-            hasSharedTodayPunches &&
-            sharedTodayKey &&
-            sharedTodayKey !== todayKey;
-
-        const hasMirrorStaleCache =
-            Array.isArray(mirrorCachedPunches) &&
-            mirrorCachedPunches.length > 0 &&
-            mirrorTodayKey &&
-            mirrorTodayKey !== todayKey;
-
-        const mirrorPunches = (
-            Array.isArray(sharedTruth.todayPunches) &&
-            sharedTodayKey === todayKey
-        )
-            ? sharedTruth.todayPunches
-            : (
-                mirrorTodayKey === todayKey
-                    ? mirrorCachedPunches
-                    : []
-            );
-
-        const saldoSemanaAnt = Number(
-            sharedTruth.weekBalance ?? gmGetValue('ahgora_saldo_semana_anterior', '0')
-        );
-
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
-        const todayEnd = new Date(todayStart);
-        todayEnd.setDate(todayEnd.getDate() + 1);
-
-        const todayLocalPunches = history
-            .filter(p =>
-                p.timestamp &&
-                p.timestamp >= todayStart.getTime() &&
-                p.timestamp < todayEnd.getTime()
-            )
-            .map(p => p.time);
-
-        const hasMirrorData = mirrorPunches.length > 0;
-        const mirrorSet = new Set(mirrorPunches);
-        const localOnlyPunches = todayLocalPunches.filter(time => !mirrorSet.has(time));
-
-        const displayPunches = [
-            ...mirrorPunches.map(time => ({
-                time,
-                source: 'mirror'
-            })),
-            ...localOnlyPunches.map(time => ({
-                time,
-                source: 'local'
-            }))
-        ];
-
-        const combinedPunches = displayPunches.map(p => p.time);
-
         const guidance = buildPunchGuidance(combinedPunches, saldoSemanaAnt);
         const loggerPunchHealth = getPunchCountHealth(combinedPunches.length, { isToday: true });
 
-        const forecastRow = (label, value, tone = 'neu') => {
+        const buildQuickCalendarLinks = (title, startMinute, endMinute = null) => {
+
+            if (startMinute === null || startMinute === undefined) {
+                return null;
+            }
+
+            return {
+                gcal: buildGoogleCalendarUrl({
+                    title,
+                    details: title,
+                    startMinute,
+                    endMinute
+                }),
+                outlook: buildOutlookCalendarUrl({
+                    title,
+                    details: title,
+                    startMinute,
+                    endMinute
+                })
+            };
+        };
+
+        const forecastRow = (label, value, tone = 'neu', calendarLinks = null) => {
 
             if (!value) {
                 return '';
             }
 
+            const buttonColor = tone === 'warn'
+                ? '255,165,0'
+                : tone === 'pos'
+                    ? '61,220,132'
+                    : '121,162,255';
+
+            const iconButtons = (calendarLinks && calendarLinks.gcal && calendarLinks.outlook)
+                ? `<a href="${calendarLinks.gcal}" target="_blank" rel="noopener noreferrer" title="Google Calendar" style="border:1px solid rgba(${buttonColor},.38);background:rgba(${buttonColor},.12);color:${buttonColor === '61,220,132' ? '#c8ffe2' : buttonColor === '255,165,0' ? '#ffd08a' : '#d7e3ff'};border-radius:5px;padding:2px 5px;text-decoration:none;font-size:12px;line-height:1;">📅</a><a href="${calendarLinks.outlook}" target="_blank" rel="noopener noreferrer" title="Outlook" style="border:1px solid rgba(${buttonColor},.38);background:rgba(${buttonColor},.12);color:${buttonColor === '61,220,132' ? '#c8ffe2' : buttonColor === '255,165,0' ? '#ffd08a' : '#d7e3ff'};border-radius:5px;padding:2px 5px;text-decoration:none;font-size:12px;line-height:1;">📧</a>`
+                : '';
+
             return `<div style="display:flex;justify-content:space-between;gap:10px;align-items:center; font-size:11px;">
                 <span style="opacity:.72;">${label}</span>
-                <span style="font-weight:700;color:${tone === 'warn' ? '#ffd08a' : tone === 'pos' ? '#9ef0bf' : '#d6d6ff'};">${value}</span>
+                <span style="display:flex;align-items:center;gap:6px;">
+                    <span style="font-weight:700;color:${tone === 'warn' ? '#ffd08a' : tone === 'pos' ? '#9ef0bf' : '#d6d6ff'};">${value}</span>
+                    ${iconButtons}
+                </span>
             </div>`;
         };
 
@@ -2597,14 +2980,7 @@
             border: 1px solid rgba(255,255,255,.06);
         `;
 
-        const recentHistoryEntries = history.slice(-CONFIG.LOGGER_HISTORY_SIZE);
-        const currentTurnLabel = combinedPunches.length >= 3 ? 'Turno 2' : 'Turno 1';
-        const currentTurn4h = combinedPunches.length >= 3
-            ? (guidance.secondTurn4h !== null ? renderClock(guidance.secondTurn4h) : null)
-            : (guidance.firstTurn4h !== null ? renderClock(guidance.firstTurn4h) : null);
-        const currentTurn6h = combinedPunches.length >= 3
-            ? (guidance.secondTurn6h !== null ? renderClock(guidance.secondTurn6h) : null)
-            : (guidance.firstTurn6h !== null ? renderClock(guidance.firstTurn6h) : null);
+        const recentHistoryEntries = historyTimelineEntries.slice(-CONFIG.LOGGER_HISTORY_SIZE);
         const day8h = guidance.day8h !== null ? renderClock(guidance.day8h) : null;
         const day10h = guidance.day10h !== null ? renderClock(guidance.day10h) : null;
         const intervalReturnMin = guidance.intervalMin !== null ? renderClock(guidance.intervalMin) : null;
@@ -2613,6 +2989,12 @@
         const day8WindowMax = guidance.day8WithIntervalMax !== null ? renderClock(guidance.day8WithIntervalMax) : null;
         const day10WindowMin = guidance.day10WithIntervalMin !== null ? renderClock(guidance.day10WithIntervalMin) : null;
         const day10WindowMax = guidance.day10WithIntervalMax !== null ? renderClock(guidance.day10WithIntervalMax) : null;
+        const firstExitMin = guidance.firstExitMin !== null ? renderClock(guidance.firstExitMin) : null;
+        const firstExitMax = guidance.firstExitMax !== null ? renderClock(guidance.firstExitMax) : null;
+        const firstExitMinPause30 = guidance.firstExitMinPause30 !== null ? renderClock(guidance.firstExitMinPause30) : null;
+        const firstExitMinPause210 = guidance.firstExitMinPause210 !== null ? renderClock(guidance.firstExitMinPause210) : null;
+        const firstExitMaxPause30 = guidance.firstExitMaxPause30 !== null ? renderClock(guidance.firstExitMaxPause30) : null;
+        const firstExitMaxPause210 = guidance.firstExitMaxPause210 !== null ? renderClock(guidance.firstExitMaxPause210) : null;
 
         const recentHistoryHtml = recentHistoryEntries.length
             ? recentHistoryEntries
@@ -2620,14 +3002,22 @@
                 .reverse()
                 .map(entry => {
 
-                    const fallbackDate = entry.timestamp
-                        ? new Date(entry.timestamp).toLocaleDateString('pt-BR')
-                        : '--/--/--';
-                    const dateLabel = renderText(entry.date || fallbackDate);
+                    let sourceIcon = '🗂';
+                    let sourceLabel = 'histórico';
+
+                    if (entry.source === 'mirror') {
+                        sourceIcon = '🔄';
+                        sourceLabel = 'mirror';
+                    } else if (entry.source === 'local') {
+                        sourceIcon = '⏳';
+                        sourceLabel = 'local pendente';
+                    }
+
+                    const dateLabel = renderText(entry.dateLabel || '--/--/--');
                     const timeLabel = renderText(entry.time || '--:--');
 
                     return `<div style="font-size:11px; display:flex; justify-content:space-between; margin-top:4px;">
-                        <span style="opacity:.62;">⏳ local · ${dateLabel}</span>
+                        <span style="opacity:.62;">${sourceIcon} ${sourceLabel} · ${dateLabel}</span>
                         <span style="font-weight:700; color:#ffd166;">${timeLabel}</span>
                     </div>`;
                 })
@@ -2635,93 +3025,235 @@
             : '<div style="font-size:10px; opacity:.4;">Aguardando primeira batida...</div>';
 
         const forecastBlock = [
-            currentTurn4h ? forecastRow(`${currentTurnLabel} 4h`, currentTurn4h) : '',
-            currentTurn6h ? forecastRow(`${currentTurnLabel} 6h`, currentTurn6h, 'warn') : '',
-            day8WindowMin && day8WindowMax ? forecastRow(`8h c/ intervalo (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day8WindowMin} → ${day8WindowMax}`) : '',
-            day10WindowMin && day10WindowMax ? forecastRow(`10h c/ intervalo (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day10WindowMin} → ${day10WindowMax}`, 'warn') : '',
-            intervalReturnMin ? forecastRow('Retorno mín.', intervalReturnMin) : '',
-            intervalReturnMax ? forecastRow('Retorno máx.', intervalReturnMax, 'warn') : ''
+            guidance.stage === 'interval' && firstExitMin ? forecastRow('Saída mín. (2h)', firstExitMin, 'pos', buildQuickCalendarLinks('Saída mínima (2h)', guidance.firstExitMin)) : '',
+            guidance.stage === 'interval' && firstExitMax ? forecastRow('Saída máx. (6h)', firstExitMax, 'warn', buildQuickCalendarLinks('Saída máxima (6h)', guidance.firstExitMax)) : '',
+            guidance.stage === 'interval' && firstExitMinPause30 ? forecastRow('Retorno +30m (saída mín.)', firstExitMinPause30, 'pos', buildQuickCalendarLinks('Retorno +30m (saída mínima)', guidance.firstExitMinPause30)) : '',
+            guidance.stage === 'interval' && firstExitMinPause210 ? forecastRow('Retorno +210m (saída mín.)', firstExitMinPause210, 'warn', buildQuickCalendarLinks('Retorno +210m (saída mínima)', guidance.firstExitMinPause210)) : '',
+            guidance.stage === 'interval' && firstExitMaxPause30 ? forecastRow('Retorno +30m (saída máx.)', firstExitMaxPause30, 'pos', buildQuickCalendarLinks('Retorno +30m (saída máxima)', guidance.firstExitMaxPause30)) : '',
+            guidance.stage === 'interval' && firstExitMaxPause210 ? forecastRow('Retorno +210m (saída máx.)', firstExitMaxPause210, 'warn', buildQuickCalendarLinks('Retorno +210m (saída máxima)', guidance.firstExitMaxPause210)) : '',
+            day8WindowMin && day8WindowMax ? forecastRow(`Saída 8h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day8WindowMin} → ${day8WindowMax}`, 'neu', buildQuickCalendarLinks('Janela 8h com intervalo', guidance.day8WithIntervalMin, guidance.day8WithIntervalMax)) : '',
+            day10WindowMin && day10WindowMax ? forecastRow(`Saída 10h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day10WindowMin} → ${day10WindowMax}`, 'warn', buildQuickCalendarLinks('Janela 10h com intervalo', guidance.day10WithIntervalMin, guidance.day10WithIntervalMax)) : '',
+            intervalReturnMin ? forecastRow('Retorno mín.', intervalReturnMin, 'neu', buildQuickCalendarLinks('Retorno mínimo', guidance.intervalMin)) : '',
+            intervalReturnMax ? forecastRow('Retorno máx.', intervalReturnMax, 'warn', buildQuickCalendarLinks('Retorno máximo', guidance.intervalMax)) : ''
         ].filter(Boolean).join('');
 
         const forecastBlockHtml = forecastBlock
-            ? `<details style="margin-top:6px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(255,255,255,.03);padding:6px 8px;"><summary style="cursor:pointer;font-size:10px;opacity:.75;">ver detalhes de horários</summary><div style="display:grid;gap:4px;margin-top:6px;">${forecastBlock}</div></details>`
+            ? `<div style="display:grid;gap:4px;">${forecastBlock}</div>`
             : '';
 
         const syncBadge = hasMirrorData
             ? '<span style="padding:2px 8px;border-radius:999px;background:rgba(61,220,132,.12);color:#9ef0bf;border:1px solid rgba(61,220,132,.28);">mirror ok</span>'
             : '<span style="padding:2px 8px;border-radius:999px;background:rgba(255,165,0,.12);color:#ffd08a;border:1px solid rgba(255,165,0,.3);">sync pendente</span>';
 
+        const mirrorCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:rgba(121,162,255,.14);color:#d7e3ff;border:1px solid rgba(121,162,255,.32);">mirror: ${mirrorPunches.length}</span>`;
+        const localPendingCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.12)' : 'rgba(61,220,132,.12)'};color:${localOnlyPunches.length > 0 ? '#ffd08a' : '#9ef0bf'};border:1px solid ${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.3)' : 'rgba(61,220,132,.28)'};">pendente local: ${localOnlyPunches.length}</span>`;
+
         const historyBlock = `
-            <div style="font-size:10px; opacity:.55; margin-top:8px;">Histórico rápido</div>
+            <div style="font-size:10px; opacity:.55; margin-top:8px;">Histórico recente (mirror + local)</div>
             <div style="padding:8px 10px; border:1px solid #34344c; border-radius:8px; background:rgba(255,255,255,.03);">
                 ${recentHistoryHtml}
             </div>
         `;
 
-        const deleteButton = history.length
+        const deleteButton = pendingLocalHistoryEntries.length
             ? `<button id="ahg-delete-last-punch" style="width:100%; border:1px solid rgba(255,77,77,.45); background:rgba(255,77,77,.12); color:#ffd2d2; border-radius:8px; padding:7px; cursor:pointer;">Excluir última local</button>`
             : '';
 
-        const requestMirrorSyncButton = `<button id="ahg-request-mirror-sync" style="width:100%; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.1); color:#d7e3ff; border-radius:8px; padding:7px; cursor:pointer;">Sincronizar com mirror</button>`;
+        const requestMirrorSyncButton = `<a id="ahg-request-mirror-sync" href="javascript:void(0)" style="width:100%; display:block; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.1); color:#d7e3ff; border-radius:8px; padding:8px; cursor:pointer; text-decoration:none; text-align:center; font-weight:700; font-size:12px;">🔄 Sincronizar com mirror</a>`;
+
+        const buildActionButtons = () => {
+
+            const btnSmall = (color) => `border:1px solid rgba(${color},.38); background:rgba(${color},.12); color:${color === '61,220,132' ? '#c8ffe2' : '#ffd08a'}; border-radius:5px; padding:4px 6px; text-decoration:none; font-size:13px; transition:.15s;`;
+
+            if (guidance.stage === 'interval' && guidance.firstExitMin !== null && guidance.firstExitMax !== null) {
+
+                const url8hGcal = buildGoogleCalendarUrl({
+                    title: 'Saída 8h',
+                    details: `Saída ideal 8h: ${fmtHour(guidance.day8h)}`,
+                    startMinute: guidance.day8h,
+                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+                const url8hOutlook = buildOutlookCalendarUrl({
+                    title: 'Saída 8h',
+                    details: `Saída ideal 8h: ${fmtHour(guidance.day8h)}`,
+                    startMinute: guidance.day8h,
+                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+
+                const url10hGcal = buildGoogleCalendarUrl({
+                    title: 'Saída 10h',
+                    details: `Limite diário 10h: ${fmtHour(guidance.day10h)}`,
+                    startMinute: guidance.day10h,
+                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+                const url10hOutlook = buildOutlookCalendarUrl({
+                    title: 'Saída 10h',
+                    details: `Limite diário 10h: ${fmtHour(guidance.day10h)}`,
+                    startMinute: guidance.day10h,
+                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+
+                return [
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8h)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10h)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
+                ];
+            }
+
+            if (guidance.stage === 'return' && guidance.intervalMin !== null && guidance.intervalMax !== null) {
+
+                const urlMinGcal = buildGoogleCalendarUrl({
+                    title: 'Retorno mínimo',
+                    details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
+                    startMinute: guidance.intervalMin,
+                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+                const urlMinOutlook = buildOutlookCalendarUrl({
+                    title: 'Retorno mínimo',
+                    details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
+                    startMinute: guidance.intervalMin,
+                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+
+                const urlMaxGcal = buildGoogleCalendarUrl({
+                    title: 'Retorno máximo',
+                    details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
+                    startMinute: guidance.intervalMax,
+                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+                const urlMaxOutlook = buildOutlookCalendarUrl({
+                    title: 'Retorno máximo',
+                    details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
+                    startMinute: guidance.intervalMax,
+                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+
+                return [
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Retorno mín. +30m: <b style=\"color:#c8ffe2;\">${renderClock(guidance.intervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${urlMinGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${urlMinOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Retorno máx. +210m: <b style=\"color:#ffd08a;\">${renderClock(guidance.intervalMax)}</b></span><div style="display:flex; gap:4px;"><a href="${urlMaxGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${urlMaxOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
+                ];
+            }
+
+            if (guidance.stage === 'exit' && guidance.day8h !== null && guidance.day10h !== null) {
+
+                const url8hGcal = buildGoogleCalendarUrl({
+                    title: 'Saída 8h',
+                    details: `Saída ideal: ${fmtHour(guidance.idealTime)}`,
+                    startMinute: guidance.day8h,
+                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+                const url8hOutlook = buildOutlookCalendarUrl({
+                    title: 'Saída 8h',
+                    details: `Saída ideal: ${fmtHour(guidance.idealTime)}`,
+                    startMinute: guidance.day8h,
+                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+
+                const url10hGcal = buildGoogleCalendarUrl({
+                    title: 'Saída 10h',
+                    details: `Limite diário: ${fmtHour(guidance.day10h)}`,
+                    startMinute: guidance.day10h,
+                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+                const url10hOutlook = buildOutlookCalendarUrl({
+                    title: 'Saída 10h',
+                    details: `Limite diário: ${fmtHour(guidance.day10h)}`,
+                    startMinute: guidance.day10h,
+                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                });
+
+                return [
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8h)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10h)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
+                ];
+            }
+
+            return [];
+        };
+
+        const actionButtonsHtml = buildActionButtons().join('');
 
         const criticalNotes = [
             !hasMirrorData ? 'Mirror pendente: totais podem divergir.' : null,
             loggerPunchHealth.level !== 'ok' ? loggerPunchHealth.text : null,
             localOnlyPunches.length > 0 ? `${localOnlyPunches.length} batida(s) local(is) aguardando sync.` : null,
+            reconciled.removedCount > 0 ? `${reconciled.removedCount} batida(s) local(is) reconciliada(s) com mirror.` : null,
             hasSharedStaleCache ? `Cache local compartilhado de ${sharedTodayKey} ignorado (hoje: ${todayKey}).` : null,
             hasMirrorStaleCache ? `Cache do mirror de ${mirrorTodayKey} ignorado (hoje: ${todayKey}).` : null
         ].filter(Boolean);
 
         const notesHtml = criticalNotes.length
-            ? `<div style="font-size:10px; margin:8px 0; padding:8px 10px; border:1px solid rgba(255,208,138,.24); border-radius:8px; background:rgba(255,208,138,.06); color:#f9e2af; display:grid; gap:4px;">${criticalNotes.slice(0, 3).map(x => `<div>• ${x}</div>`).join('')}</div>`
+            ? `<div class="a-row warn" style="background:rgba(255,165,0,.12); border-left-color:orange; padding:8px 8px; border-radius:7px; margin:0;"><span style="color:#ffd08a; font-size:10px; font-weight:700;">${criticalNotes.slice(0, 2).map(x => `<div style="margin:2px 0;">• ${x}</div>`).join('')}</span></div>`
             : '';
 
-        const primaryAction = guidance.copyTarget
-            ? `<button id="ahg-copy-minret" style="width:100%; border:1px solid #4a3faf; background:#1e1b4b; color:#dde; border-radius:8px; padding:8px; cursor:pointer; font-weight:700;">${guidance.copyLabel || 'Copiar'} (${renderText(guidance.copyTarget)})</button>`
-            : requestMirrorSyncButton;
-
         const secondaryActions = [
-            guidance.copyTarget ? requestMirrorSyncButton : null,
             deleteButton
         ].filter(Boolean).join('');
 
         container.innerHTML = `
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:10px; opacity:.7; text-transform:uppercase; margin-bottom:5px;">
-                <span>${sourceLabel}</span>
-                <span style="display:flex; align-items:center; gap:8px;">${syncBadge}<span id="ahg-privacy-toggle-logger" class="ahg-privacy-btn" title="Alternar privacidade">👁</span></span>
+            <div class="a-body" style="gap:6px; padding-top:10px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:10px; margin-bottom:4px;">
+                    <span style="color:#7880aa; text-transform:uppercase; font-weight:700; letter-spacing:.5px;">${sourceLabel}</span>
+                    <span style="display:flex; align-items:center; gap:6px;">${syncBadge}<span id="ahg-privacy-toggle-logger" class="ahg-privacy-btn" title="Alternar privacidade">👁</span></span>
+                </div>
+
+                <div style="font-size:28px; font-weight:800; line-height:1; letter-spacing:.3px; color:#fff; margin:4px 0;">${renderText(combinedLastPunch || lastPunch.time)}</div>
+
+                <div style="font-size:10px; color:#7880aa; display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+                    ${mirrorCountBadge}
+                    ${localPendingCountBadge}
+                </div>
+
+                <div style="display:grid; gap:2px;">
+                    ${actionButtonsHtml ? actionButtonsHtml : requestMirrorSyncButton}
+                </div>
+
+                ${notesHtml ? `<div style="margin-top:6px;">${notesHtml}</div>` : ''}
+
+                <div id="ahg-logger-details-toggle" data-open="true" style="cursor:pointer; padding:6px 8px; border-radius:7px; background:rgba(122,108,255,.15); border:1px solid rgba(122,108,255,.2); display:flex; align-items:center; gap:6px; user-select:none; transition:.15s; margin-top:8px;">
+                    <span style="font-size:12px;">▼</span>
+                    <span style="color:#7a6cff; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.3px;">Detalhes</span>
+                </div>
+
+                <div id="ahg-logger-details-content" style="display:block; border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:6px; font-size:11px;">
+                    <div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin-bottom:4px;">Hoje</div>
+                    <div class="a-row neu" style="background:rgba(122,108,255,.08); border-left-color:#7a6cff; margin-bottom:4px;">
+                        <span class="a-lbl">Trabalhado</span>
+                        <span class="a-val neu">${workedToday === null ? '--:--' : renderMinutes(workedToday)}</span>
+                    </div>
+                    ${dayBalance !== null ? `<div class="a-row"><span class="a-lbl">Saldo: </span><span class="a-val ${dayBalance >= 0 ? 'pos' : 'neg'}">${renderMinutes(dayBalance)}</span></div>` : ''}
+
+                    <div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin:8px 0 4px;">Semana</div>
+                    <div class="a-row neu" style="background:rgba(122,108,255,.08); border-left-color:#7a6cff; margin-bottom:4px;">
+                        <span class="a-lbl">Trabalhado</span>
+                        <span class="a-val neu">${weekWorked === null ? '--:--' : renderMinutes(weekWorked)}</span>
+                    </div>
+                    ${weekBalance !== null ? `<div class="a-row"><span class="a-lbl">Saldo: </span><span class="a-val ${weekBalance >= 0 ? 'pos' : 'neg'}">${renderMinutes(weekBalance)}</span></div>` : ''}
+
+                    ${forecastBlockHtml ? `<div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin:8px 0 4px;">Próximos horários</div>${forecastBlockHtml}` : ''}
+
+                    ${mirrorSyncHint ? `<div style="font-size:10px; color:#7a6cff; margin-top:8px; opacity:.7;">${mirrorSyncHint}</div>` : ''}
+                </div>
+                ${historyBlock ? `<div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px;">${historyBlock}</div>` : ''}
+
+                ${secondaryActions ? `<div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px; display:grid; gap:4px;">${secondaryActions}</div>` : ''}
             </div>
-            <div style="font-size:30px; font-weight:800; line-height:1; letter-spacing:.3px; margin-bottom:4px;">${renderText(lastPunch.time)}</div>
-            <div style="font-size:11px; color:#b8c2e4; margin-bottom:8px;">${combinedPunches.length ? combinedPunches.map(t => renderText(t)).join(' · ') : '--:--'}</div>
-
-            <div style="font-size:12px; margin-bottom:8px; padding:10px; border:1px solid rgba(255,255,255,.08); border-radius:10px; background:rgba(255,255,255,.03);">
-                <div style="font-size:10px; opacity:.65; text-transform:uppercase; letter-spacing:.5px;">próxima ação</div>
-                <div style="font-weight:700; color:#f4f7ff; margin:4px 0 2px;">${guidance.title}</div>
-                <div style="opacity:.84;">${guidance.summary}</div>
-                <div style="margin-top:8px;">${primaryAction}</div>
-            </div>
-
-            <div style="font-size:11px; color:#cfd4ef; margin-bottom:8px; display:grid; gap:3px;">
-                <div>Dia: <b>${workedToday === null ? '--:--' : renderMinutes(workedToday)}</b>${dayBalance !== null ? ` · saldo <b>${renderMinutes(dayBalance)}</b>` : ''}</div>
-                <div>Semana: <b>${weekWorked === null ? '--:--' : renderMinutes(weekWorked)}</b>${weekBalance !== null ? ` · saldo <b>${renderMinutes(weekBalance)}</b>` : ''}</div>
-                <div style="color:${loggerPunchHealth.level === 'neg' ? '#ff9e9e' : loggerPunchHealth.level === 'warn' ? '#ffd08a' : '#9ef0bf'};">${loggerPunchHealth.icon} ${loggerPunchHealth.text}</div>
-            </div>
-
-            ${notesHtml}
-
-            <div style="font-size:10px; color:#f9e2af; margin-bottom:8px; padding:8px 10px; border:1px solid #45475a; border-radius:8px; background:rgba(249,226,175,.06);">
-                ${mirrorSyncHint}
-            </div>
-
-            <div style="display:grid; gap:6px; margin-bottom:8px;">${secondaryActions}</div>
-
-            ${forecastBlockHtml}
-            <div style="padding-top:2px;">${historyBlock}</div>
         `;
+
+        document.getElementById('ahg-logger-details-toggle')
+            ?.addEventListener('click', () => {
+                const toggle = document.getElementById('ahg-logger-details-toggle');
+                const content = document.getElementById('ahg-logger-details-content');
+                const isOpen = toggle.getAttribute('data-open') === 'true';
+                toggle.setAttribute('data-open', isOpen ? 'false' : 'true');
+                content.style.display = isOpen ? 'none' : 'block';
+                toggle.style.background = isOpen ? 'rgba(122,108,255,.08)' : 'rgba(122,108,255,.15)';
+                toggle.querySelector('span').textContent = isOpen ? '▶' : '▼';
+            });
 
         document.getElementById('ahg-request-mirror-sync')
             ?.addEventListener('click', () => {
 
-                showLoggerToast('Abrindo mirror para atualizar sincronização...');
+                showLoggerToast('Sincronizando com mirror...');
                 const opened = window.open(CONFIG.URL_REFRESH, '_blank', 'noopener,noreferrer');
 
                 if (opened) {
@@ -2731,9 +3263,6 @@
 
         document.getElementById('ahg-delete-last-punch')
             ?.addEventListener('click', () => deleteLastSavedPunch());
-
-        document.getElementById('ahg-copy-minret')
-            ?.addEventListener('click', () => copyText(guidance.copyTarget));
 
         document.getElementById('ahg-privacy-toggle-logger')
             ?.addEventListener('click', () => {
