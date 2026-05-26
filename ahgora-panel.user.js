@@ -2473,6 +2473,25 @@
         const todayKey = formatDateKey();
         const sharedTodayKey = String(sharedTruth.todayKey || '');
         const mirrorTodayKey = String(gmGetValue('ahgora_mirror_today_ref', ''));
+        const mirrorCachedPunches = parseJson(
+            gmGetValue('ahgora_mirror_today', '[]'),
+            []
+        );
+
+        const hasSharedTodayPunches =
+            Array.isArray(sharedTruth.todayPunches) &&
+            sharedTruth.todayPunches.length > 0;
+
+        const hasSharedStaleCache =
+            hasSharedTodayPunches &&
+            sharedTodayKey &&
+            sharedTodayKey !== todayKey;
+
+        const hasMirrorStaleCache =
+            Array.isArray(mirrorCachedPunches) &&
+            mirrorCachedPunches.length > 0 &&
+            mirrorTodayKey &&
+            mirrorTodayKey !== todayKey;
 
         const mirrorPunches = (
             Array.isArray(sharedTruth.todayPunches) &&
@@ -2481,10 +2500,7 @@
             ? sharedTruth.todayPunches
             : (
                 mirrorTodayKey === todayKey
-                    ? parseJson(
-                        gmGetValue('ahgora_mirror_today', '[]'),
-                        []
-                    )
+                    ? mirrorCachedPunches
                     : []
             );
 
@@ -2581,7 +2597,7 @@
             border: 1px solid rgba(255,255,255,.06);
         `;
 
-        const recentPunches = displayPunches.slice(-CONFIG.LOGGER_HISTORY_SIZE);
+        const recentHistoryEntries = history.slice(-CONFIG.LOGGER_HISTORY_SIZE);
         const currentTurnLabel = combinedPunches.length >= 3 ? 'Turno 2' : 'Turno 1';
         const currentTurn4h = combinedPunches.length >= 3
             ? (guidance.secondTurn4h !== null ? renderClock(guidance.secondTurn4h) : null)
@@ -2598,19 +2614,21 @@
         const day10WindowMin = guidance.day10WithIntervalMin !== null ? renderClock(guidance.day10WithIntervalMin) : null;
         const day10WindowMax = guidance.day10WithIntervalMax !== null ? renderClock(guidance.day10WithIntervalMax) : null;
 
-        const recentHistoryHtml = recentPunches.length
-            ? recentPunches
+        const recentHistoryHtml = recentHistoryEntries.length
+            ? recentHistoryEntries
                 .slice()
                 .reverse()
-                .map((entry, idx) => {
+                .map(entry => {
 
-                    const isLocal = entry.source === 'local';
-                    const tone = isLocal ? '#ffd166' : '#9ef0bf';
-                    const icon = isLocal ? '⏳' : '✅';
+                    const fallbackDate = entry.timestamp
+                        ? new Date(entry.timestamp).toLocaleDateString('pt-BR')
+                        : '--/--/--';
+                    const dateLabel = renderText(entry.date || fallbackDate);
+                    const timeLabel = renderText(entry.time || '--:--');
 
                     return `<div style="font-size:11px; display:flex; justify-content:space-between; margin-top:4px;">
-                        <span style="opacity:.62;">${icon} ${isLocal ? 'local' : 'mirror'}</span>
-                        <span style="font-weight:700; color:${tone};">${renderText(entry.time)}</span>
+                        <span style="opacity:.62;">⏳ local · ${dateLabel}</span>
+                        <span style="font-weight:700; color:#ffd166;">${timeLabel}</span>
                     </div>`;
                 })
                 .join('')
@@ -2651,7 +2669,9 @@
         const criticalNotes = [
             !hasMirrorData ? 'Mirror pendente: totais podem divergir.' : null,
             loggerPunchHealth.level !== 'ok' ? loggerPunchHealth.text : null,
-            localOnlyPunches.length > 0 ? `${localOnlyPunches.length} batida(s) local(is) aguardando sync.` : null
+            localOnlyPunches.length > 0 ? `${localOnlyPunches.length} batida(s) local(is) aguardando sync.` : null,
+            hasSharedStaleCache ? `Cache local compartilhado de ${sharedTodayKey} ignorado (hoje: ${todayKey}).` : null,
+            hasMirrorStaleCache ? `Cache do mirror de ${mirrorTodayKey} ignorado (hoje: ${todayKey}).` : null
         ].filter(Boolean);
 
         const notesHtml = criticalNotes.length
