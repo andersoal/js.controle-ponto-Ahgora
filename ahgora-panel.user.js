@@ -324,6 +324,13 @@
         return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
     }
 
+    function formatDateKey(date = new Date()) {
+
+        const d = new Date(date);
+
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
     function getPunchCountHealth(count, { isToday = false } = {}) {
 
         if (!count) {
@@ -748,6 +755,11 @@
         gmSetValue(
             'ahgora_mirror_today',
             JSON.stringify(hoje.batidas || [])
+        );
+
+        gmSetValue(
+            'ahgora_mirror_today_ref',
+            formatDateKey(hoje.data)
         );
 
         gmSetValue(
@@ -1265,6 +1277,7 @@
         const shared = {
             source: 'mirror',
             updatedAt: Date.now(),
+            todayKey: formatDateKey(),
             todayPunches: [...(resumo.hoje.batidas || [])],
             workedToday: resumo.hoje.trabalhado,
             dayBalance: resumo.hoje.saldo,
@@ -2457,11 +2470,22 @@
 
         const sharedTruth = readSharedTruth();
 
-        const mirrorPunches = Array.isArray(sharedTruth.todayPunches)
+        const todayKey = formatDateKey();
+        const sharedTodayKey = String(sharedTruth.todayKey || '');
+        const mirrorTodayKey = String(gmGetValue('ahgora_mirror_today_ref', ''));
+
+        const mirrorPunches = (
+            Array.isArray(sharedTruth.todayPunches) &&
+            sharedTodayKey === todayKey
+        )
             ? sharedTruth.todayPunches
-            : parseJson(
-                gmGetValue('ahgora_mirror_today', '[]'),
-                []
+            : (
+                mirrorTodayKey === todayKey
+                    ? parseJson(
+                        gmGetValue('ahgora_mirror_today', '[]'),
+                        []
+                    )
+                    : []
             );
 
         const saldoSemanaAnt = Number(
@@ -2471,8 +2495,15 @@
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
 
+        const todayEnd = new Date(todayStart);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+
         const todayLocalPunches = history
-            .filter(p => p.timestamp && p.timestamp >= todayStart.getTime())
+            .filter(p =>
+                p.timestamp &&
+                p.timestamp >= todayStart.getTime() &&
+                p.timestamp < todayEnd.getTime()
+            )
             .map(p => p.time);
 
         const hasMirrorData = mirrorPunches.length > 0;
