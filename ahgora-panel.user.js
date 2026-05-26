@@ -2637,9 +2637,7 @@
         const forecastBlock = [
             currentTurn4h ? forecastRow(`${currentTurnLabel} 4h`, currentTurn4h) : '',
             currentTurn6h ? forecastRow(`${currentTurnLabel} 6h`, currentTurn6h, 'warn') : '',
-            day8h ? forecastRow('8h do dia', day8h, 'pos') : '',
             day8WindowMin && day8WindowMax ? forecastRow(`8h c/ intervalo (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day8WindowMin} → ${day8WindowMax}`) : '',
-            day10h ? forecastRow('10h do dia', day10h, 'warn') : '',
             day10WindowMin && day10WindowMax ? forecastRow(`10h c/ intervalo (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day10WindowMin} → ${day10WindowMax}`, 'warn') : '',
             intervalReturnMin ? forecastRow('Retorno mín.', intervalReturnMin) : '',
             intervalReturnMax ? forecastRow('Retorno máx.', intervalReturnMax, 'warn') : ''
