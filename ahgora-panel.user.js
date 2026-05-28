@@ -49,6 +49,10 @@
         // Notificações
         NOTIFICAR_ANTES: 5,
 
+        // Alarmes logger (novabatidaonline)
+        LOGGER_ALARM_LEAD_MINUTES: 5,
+        LOGGER_ALARM_REPEAT: 'once',
+
         // Logger
         LOGGER_HISTORY_SIZE: 5,
 
@@ -204,6 +208,8 @@
     };
 
     const PRIVACY_HIDE_KEY = 'ahgora_privacy_hide_times';
+    const LOGGER_ALARM_CONFIG_KEY = 'ahgora_logger_alarm_v1';
+    const LOGGER_ALARM_FIRED_STATE_KEY = 'ahgora_logger_alarm_fired_v1';
 
     function isPrivacyHidden() {
 
@@ -543,6 +549,7 @@
             return '0';
         }
 
+        // Se é uma URL, extrai o valor do /u/
         if (/^https?:\/\//i.test(raw)) {
 
             try {
@@ -560,12 +567,22 @@
             }
         }
 
+        // Remove prefixo /u/ se existir
         raw = raw.replace(/^\/?u\//i, '').replace(/^\/+/, '');
 
-        return raw || '0';
+        // Extrai apenas o número (0, 1, 2, etc)
+        // O Google Calendar só aceita números no segmento /u/
+        const numberMatch = raw.match(/^(\d+)/);
+        
+        if (numberMatch) {
+            return numberMatch[1];
+        }
+
+        // Se não encontrou número, retorna padrão '0'
+        return '0';
     }
 
-    function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date() }) {
+    function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date(), userPath = null }) {
 
         if (startMinute === null || startMinute === undefined) {
             return null;
@@ -582,7 +599,7 @@
             endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * 60 * 1000));
         }
 
-        const userPath = normalizeGoogleCalendarUserPath(CONFIG.GCAL_USER_PATH);
+        const normalizedPath = normalizeGoogleCalendarUserPath(userPath || CONFIG.GCAL_USER_PATH);
         const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
 
         const params = new URLSearchParams();
@@ -592,7 +609,7 @@
         params.set('ctz', CONFIG.GCAL_TIMEZONE || 'America/Sao_Paulo');
         params.set('dates', `${fmtGoogleCalendarDate(startDate)}/${fmtGoogleCalendarDate(endDate)}`);
 
-        return `https://calendar.google.com/calendar/u/${encodeURIComponent(userPath)}/r/eventedit?${params.toString()}`;
+        return `https://calendar.google.com/calendar/u/${encodeURIComponent(normalizedPath)}/r/eventedit?${params.toString()}`;
     }
 
     function buildOutlookCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date() }) {
@@ -615,12 +632,15 @@
         const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
 
         const params = new URLSearchParams();
+        // Outlook Web usa deeplink de compose para abrir o formulário já preenchido.
+        params.set('path', '/calendar/action/compose');
+        params.set('rru', 'addevent');
         params.set('subject', fullTitle || 'Ahgora');
         params.set('body', details || '');
-        params.set('startTime', startDate.toISOString());
-        params.set('endTime', endDate.toISOString());
+        params.set('startdt', startDate.toISOString());
+        params.set('enddt', endDate.toISOString());
 
-        return `https://outlook.office.com/calendar/0/composeevent?${params.toString()}`;
+        return `https://outlook.office.com/calendar/0/deeplink/compose?${params.toString()}`;
     }
 
     /* =========================================================
@@ -1486,23 +1506,42 @@
         style.id = 'ahg-css-v5';
 
         style.textContent = `
+        /* Design System Minimalista */
+        :root {
+            --primary: #7a6cff;
+            --text-main: #dde;
+            --text-label: #7880aa;
+            --bg-card: #0f0f1e;
+            --bg-input: #16162a;
+            --border: #252545;
+            --radius: 6px;
+            --radius-lg: 12px;
+        }
+
         #ahg-fab{
             position:fixed;
             bottom:20px;
             right:20px;
             left: auto;
             z-index:99999;
-            width:48px;
-            height:48px;
+            width:44px;
+            height:44px;
             border-radius:50%;
-            background:linear-gradient(135deg,#3b2d82,#1e1b4b);
-            border:2px solid #4a3faf;
+            background:var(--primary);
+            border:none;
             display:flex;
             align-items:center;
             justify-content:center;
-            font-size:22px;
+            font-size:20px;
             cursor:pointer;
             color:white;
+            box-shadow:0 4px 12px rgba(0,0,0,.3);
+            opacity:.85;
+        }
+
+        #ahg-fab:hover{
+            opacity:1;
+            box-shadow:0 6px 16px rgba(0,0,0,.4);
         }
 
         #ahg-panel{
@@ -1511,27 +1550,23 @@
             right:20px;
             left: auto;
             z-index:99999;
-            background:#0f0f1e;
-            border:1px solid #252545;
-            border-radius:14px;
+            background:var(--bg-card);
+            border:1px solid var(--border);
+            border-radius:var(--radius-lg);
             min-width:260px;
             max-width:290px;
             font-family:'Segoe UI',sans-serif;
-            color:#dde;
-            box-shadow:0 8px 40px rgba(0,0,0,.7);
+            color:var(--text-main);
+            box-shadow:0 4px 16px rgba(0,0,0,.5);
             max-height: calc(100vh - 40px);
             overflow: hidden;
             display:flex;
             flex-direction:column;
         }
 
-        .ahg-hide-times .ahg-day-total{
-            opacity:.45;
-            filter: blur(1px);
-        }
-
+        .ahg-hide-times .ahg-day-total,
         .ahg-hide-times .ahg-day-total-rounded{
-            opacity:.45;
+            opacity:.3;
             filter: blur(1px);
         }
 
@@ -1544,13 +1579,13 @@
             top:4px;
             left:50%;
             transform:translateX(-50%);
-            background:rgba(59,45,130,.85);
+            background:var(--primary);
             color:#fff;
-            padding:2px 8px;
-            border-radius:12px;
-            font-size:11px;
+            padding:2px 6px;
+            border-radius:var(--radius);
+            font-size:10px;
             font-weight:700;
-            box-shadow:0 2px 4px rgba(0,0,0,.15);
+            box-shadow:0 2px 4px rgba(0,0,0,.2);
             display:block;
             z-index:10;
             pointer-events:none;
@@ -1559,21 +1594,20 @@
 
         .ahg-day-total-rounded{
             position:absolute;
-            top:24px;
+            top:20px;
             left:50%;
             transform:translateX(-50%);
-            background:rgba(17,24,39,.9);
+            background:rgba(17,24,39,.95);
             color:#e5ecff;
-            padding:1px 6px;
-            border-radius:10px;
-            font-size:10px;
+            padding:1px 5px;
+            border-radius:var(--radius);
+            font-size:9px;
             font-weight:600;
-            box-shadow:0 2px 4px rgba(0,0,0,.12);
+            box-shadow:0 2px 4px rgba(0,0,0,.15);
             display:block;
             z-index:10;
             pointer-events:none;
             white-space:nowrap;
-            letter-spacing:.1px;
         }
 
         .ahg-privacy-btn{
@@ -1583,92 +1617,98 @@
             justify-content:center;
             width:28px;
             height:28px;
-            border-radius:999px;
-            border:1px solid rgba(122,108,255,.35);
-            background:rgba(122,108,255,.12);
-            color:#eef;
+            border-radius:50%;
+            border:1px solid var(--border);
+            background:transparent;
+            color:var(--text-main);
             cursor:pointer;
-            opacity:.72;
-            font-size:15px;
-            font-weight:700;
+            opacity:.6;
+            font-size:16px;
             user-select:none;
             line-height:1;
             flex:0 0 auto;
-            box-shadow:0 0 0 1px rgba(255,255,255,.03) inset;
+            transition:.15s;
         }
 
         .ahg-privacy-btn:hover{
             opacity:1;
+            background:rgba(122,108,255,.08);
         }
 
         .ahg-privacy-btn.is-active,
         .ahg-eye-fab.is-active{
-            border-color:#7a6cff;
-            box-shadow:0 0 0 2px rgba(122,108,255,.15), 0 8px 22px rgba(0,0,0,.35);
+            opacity:1;
+            border-color:var(--primary);
+            background:rgba(122,108,255,.12);
         }
 
         .ahg-eye-fab{
             position:fixed;
             right:20px;
-            width:44px;
-            height:44px;
+            width:40px;
+            height:40px;
             border-radius:50%;
             z-index:99998;
-            border:2px solid #4a3faf;
-            background:linear-gradient(135deg,#2b265f,#1e1b4b);
-            color:#fff;
+            border:1px solid var(--border);
+            background:var(--bg-card);
+            color:var(--text-main);
             display:flex;
             align-items:center;
             justify-content:center;
             cursor:pointer;
-            font-size:18px;
-            box-shadow:0 8px 22px rgba(0,0,0,.35);
+            font-size:16px;
+            box-shadow:0 4px 12px rgba(0,0,0,.3);
             user-select:none;
+            opacity:.7;
+            transition:.15s;
         }
 
         .ahg-eye-fab:hover{
-            transform:translateY(-1px);
+            opacity:1;
+            box-shadow:0 6px 16px rgba(0,0,0,.4);
         }
 
         #ahg-eye-fab-mirror{
-            bottom:80px;
+            bottom:68px;
         }
 
         #ahg-eye-fab-logger{
-            bottom:24px;
-        }
-
-        .ahg-privacy-mask{
-            letter-spacing:.5px;
+            bottom:20px;
         }
 
         .a-tit{
-            background:linear-gradient(135deg,#3b2d82,#1e1b4b);
-            color:#b9a9ff;
+            background:transparent;
+            color:var(--text-label);
             font-weight:700;
             font-size:11px;
-            letter-spacing:1.4px;
+            letter-spacing:.5px;
             text-transform:uppercase;
-            padding:10px 14px 8px;
-            border-radius:14px 14px 0 0;
+            padding:10px 12px 8px;
+            border-radius:var(--radius-lg) var(--radius-lg) 0 0;
             display:flex;
             align-items:center;
             gap:6px;
             cursor:grab;
+            border-bottom:1px solid var(--border);
         }
 
         .a-x{
             margin-left:auto;
             cursor:pointer;
             opacity:.6;
-            font-size:18px;
+            font-size:16px;
+            transition:.15s;
+        }
+
+        .a-x:hover{
+            opacity:1;
         }
 
         .a-body{
-            padding:10px 12px 12px;
+            padding:10px 12px;
             display:flex;
             flex-direction:column;
-            gap:5px;
+            gap:4px;
             overflow-y:auto;
             overflow-x:hidden;
             flex:1;
@@ -1678,76 +1718,85 @@
             display:flex;
             justify-content:space-between;
             align-items:center;
-            padding:5px 8px;
-            border-radius:7px;
-            background:rgba(255,255,255,.04);
-            border-left:3px solid transparent;
+            padding:6px 8px;
+            border-radius:var(--radius);
+            background:transparent;
+            border-left:2px solid var(--border);
+            transition:.1s;
         }
 
         .a-row.ok{
-            background:rgba(61,220,132,.1);
             border-color:#3ddc84;
+            background:rgba(61,220,132,.06);
         }
 
         .a-row.warn{
-            background:rgba(255,165,0,.12);
             border-color:orange;
+            background:rgba(255,165,0,.06);
         }
 
         .a-row.danger{
-            background:rgba(255,60,60,.14);
             border-color:#ff4444;
+            background:rgba(255,60,60,.06);
         }
 
         .a-row.infos{
-            background:rgba(100,100,255,.1);
-            border-color:#7878ff;
+            border-color:var(--primary);
+            background:rgba(122,108,255,.05);
+        }
+
+        .a-row.neu{
+            border-color:var(--primary);
+            background:rgba(122,108,255,.04);
         }
 
         .a-lbl{
-            color:#7880aa;
-            font-size:11.5px;
+            color:var(--text-label);
+            font-size:10px;
+            font-weight:600;
         }
 
         .a-val{
             font-weight:700;
-            font-size:14px;
+            font-size:12px;
             text-align:right;
         }
 
         .a-val.pos{color:#3ddc84;}
         .a-val.neg{color:#ff6b6b;}
-        .a-val.warn{color:orange;}
-        .a-val.neu{color:#b9a9ff;}
+        .a-val.warn{color:#ffa500;}
+        .a-val.neu{color:var(--primary);}
 
         .a-val small{
-            font-size:11px;
-            font-weight:800;
-            color:#555880;
+            font-size:10px;
+            font-weight:600;
+            color:var(--text-label);
             display:block;
         }
 
         .a-div{
             border:none;
-            border-top:1px solid rgba(255,255,255,.07);
-            margin:3px 0;
+            border-top:1px solid var(--border);
+            margin:4px 0;
         }
 
         .a-sec{
-            font-size:10px;
-            letter-spacing:1px;
+            font-size:9px;
+            letter-spacing:.5px;
             text-transform:uppercase;
-            color:#444466;
-            padding:3px 0 1px;
+            color:var(--text-label);
+            padding:6px 0 2px;
             font-weight:700;
+            opacity:.7;
         }
 
         .a-foot{
-            font-size:10px;
-            font-weight:800;
-            color:#333355;
+            font-size:9px;
+            font-weight:600;
+            color:var(--text-label);
             text-align:right;
-            padding:2px 14px 8px;
+            padding:6px 12px;
+            opacity:.6;
         }
 
         .a-row.clickable{
@@ -1756,25 +1805,130 @@
         }
 
         .a-row.clickable:hover{
-            transform:translateX(2px);
-            background:rgba(255,255,255,.08);
+            background:rgba(255,255,255,.05);
         }
 
         .a-body::-webkit-scrollbar,
         #ahg-details *::-webkit-scrollbar{
-            width:8px;
-            height:8px;
+            width:6px;
         }
 
         .a-body::-webkit-scrollbar-thumb,
         #ahg-details *::-webkit-scrollbar-thumb{
-            background:#444466;
-            border-radius:10px;
+            background:var(--primary);
+            border-radius:3px;
+            opacity:.3;
         }
 
         .a-body::-webkit-scrollbar-track,
         #ahg-details *::-webkit-scrollbar-track{
             background:transparent;
+        }
+
+        /* Formulários e Botões */
+        .form-label{
+            font-size:10px;
+            opacity:.78;
+            font-weight:600;
+        }
+
+        .form-input,
+        .form-select{
+            font-size:10px;
+            background:var(--bg-input);
+            color:var(--text-main);
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+            padding:4px 6px;
+            font-family:inherit;
+            transition:.1s;
+        }
+
+        .form-input:focus,
+        .form-select:focus{
+            outline:none;
+            border-color:var(--primary);
+            box-shadow:0 0 0 2px rgba(122,108,255,.1);
+        }
+
+        .btn{
+            border:1px solid var(--primary);
+            background:rgba(122,108,255,.12);
+            color:var(--text-main);
+            border-radius:var(--radius);
+            padding:6px 10px;
+            cursor:pointer;
+            font-size:10px;
+            font-weight:700;
+            transition:.15s;
+            white-space:nowrap;
+        }
+
+        .btn:hover{
+            background:rgba(122,108,255,.18);
+        }
+
+        .btn-danger{
+            border-color:rgba(255,77,77,.45);
+            background:rgba(255,77,77,.12);
+            color:#ffd2d2;
+        }
+
+        .btn-danger:hover{
+            background:rgba(255,77,77,.18);
+        }
+
+        .btn-primary{
+            border-color:var(--primary);
+            background:rgba(122,108,255,.12);
+            color:var(--text-main);
+        }
+
+        .btn-primary:hover{
+            background:rgba(122,108,255,.18);
+        }
+
+        .btn-success{
+            border-color:rgba(61,220,132,.45);
+            background:rgba(61,220,132,.12);
+            color:#c8ffe2;
+        }
+
+        .btn-success:hover{
+            background:rgba(61,220,132,.18);
+        }
+
+        .btn-icon{
+            font-size:12px;
+            padding:2px 5px;
+            border:1px solid var(--primary);
+            background:rgba(122,108,255,.12);
+            color:var(--text-main);
+            border-radius:3px;
+            text-decoration:none;
+            line-height:1;
+            transition:.1s;
+        }
+
+        .btn-icon:hover{
+            background:rgba(122,108,255,.18);
+        }
+
+        .toggle-btn{
+            border:1px solid var(--primary);
+            background:rgba(122,108,255,.12);
+            color:var(--text-main);
+            border-radius:var(--radius);
+            padding:4px 7px;
+            cursor:pointer;
+            font-size:10px;
+            font-weight:700;
+            white-space:nowrap;
+            transition:.15s;
+        }
+
+        .toggle-btn:hover{
+            background:rgba(122,108,255,.18);
         }
         `;
 
@@ -2448,6 +2602,11 @@
        LOGGER - NOVABATIDAONLINE
     ========================================================= */
 
+    let _loggerAlarmLastCheckAt = 0;
+    let _loggerAlarmFiredCache = null;
+    let _loggerAlarmSoundWarned = false;
+    let _loggerAlarmSettingsExpanded = false;
+
     function parseJson(text, fallback) {
 
         try {
@@ -2486,6 +2645,357 @@
         setTimeout(() => {
             if (toast) toast.style.display = 'none';
         }, 2200);
+    }
+
+    function getLoggerAlarmDefaults() {
+
+        return {
+            enabled: false,
+            mode: '10h',
+            leadMinutes: CONFIG.LOGGER_ALARM_LEAD_MINUTES,
+            channels: {
+                sound: true,
+                desktop: true
+            },
+            soundRepeat: CONFIG.LOGGER_ALARM_REPEAT,
+            gcalUserPath: CONFIG.GCAL_USER_PATH
+        };
+    }
+
+    function normalizeLoggerAlarmConfig(raw) {
+
+        const defaults = getLoggerAlarmDefaults();
+        const src = raw && typeof raw === 'object' ? raw : {};
+
+        const mode = ['10h', 'interval', 'complete'].includes(src.mode)
+            ? src.mode
+            : defaults.mode;
+
+        const leadCandidates = [1, 3, 5, 10, 15];
+        const leadMinutes = leadCandidates.includes(Number(src.leadMinutes))
+            ? Number(src.leadMinutes)
+            : defaults.leadMinutes;
+
+        const soundRepeat = ['once', 'triple', 'loop'].includes(src.soundRepeat)
+            ? src.soundRepeat
+            : defaults.soundRepeat;
+
+        const channelsRaw = src.channels && typeof src.channels === 'object'
+            ? src.channels
+            : {};
+
+        const gcalUserPath = normalizeGoogleCalendarUserPath(src.gcalUserPath || defaults.gcalUserPath);
+
+        return {
+            enabled: Boolean(src.enabled),
+            mode,
+            leadMinutes,
+            channels: {
+                sound: channelsRaw.sound !== false,
+                desktop: channelsRaw.desktop !== false
+            },
+            soundRepeat,
+            gcalUserPath
+        };
+    }
+
+    function readLoggerAlarmConfig() {
+
+        const raw = parseJson(
+            gmGetValue(LOGGER_ALARM_CONFIG_KEY, '{}'),
+            {}
+        );
+
+        return normalizeLoggerAlarmConfig(raw);
+    }
+
+    function writeLoggerAlarmConfig(nextConfig) {
+
+        const normalized = normalizeLoggerAlarmConfig(nextConfig);
+
+        gmSetValue(
+            LOGGER_ALARM_CONFIG_KEY,
+            JSON.stringify(normalized)
+        );
+
+        return normalized;
+    }
+
+    function patchLoggerAlarmConfig(patch) {
+
+        const current = readLoggerAlarmConfig();
+        const merged = {
+            ...current,
+            ...patch,
+            channels: {
+                ...current.channels,
+                ...(patch.channels || {})
+            }
+        };
+
+        return writeLoggerAlarmConfig(merged);
+    }
+
+    function getLoggerAlarmModeLabel(mode) {
+
+        if (mode === 'interval') {
+            return 'Intervalo';
+        }
+
+        if (mode === 'complete') {
+            return 'Completo';
+        }
+
+        return '10h';
+    }
+
+    function getLoggerAlarmFiredState(todayKey) {
+
+        if (_loggerAlarmFiredCache && _loggerAlarmFiredCache.dayKey === todayKey) {
+            return _loggerAlarmFiredCache;
+        }
+
+        const raw = parseJson(
+            gmGetValue(LOGGER_ALARM_FIRED_STATE_KEY, '{}'),
+            {}
+        );
+
+        const state = {
+            dayKey: todayKey,
+            fired: []
+        };
+
+        if (
+            raw &&
+            typeof raw === 'object' &&
+            raw.dayKey === todayKey &&
+            Array.isArray(raw.fired)
+        ) {
+            state.fired = raw.fired.filter(Boolean);
+        }
+
+        _loggerAlarmFiredCache = state;
+        return state;
+    }
+
+    function hasLoggerAlarmFired(todayKey, token) {
+
+        const state = getLoggerAlarmFiredState(todayKey);
+        return state.fired.includes(token);
+    }
+
+    function markLoggerAlarmFired(todayKey, token) {
+
+        const state = getLoggerAlarmFiredState(todayKey);
+
+        if (state.fired.includes(token)) {
+            return;
+        }
+
+        state.fired.push(token);
+
+        gmSetValue(
+            LOGGER_ALARM_FIRED_STATE_KEY,
+            JSON.stringify(state)
+        );
+    }
+
+    function playLoggerAlarmSound(repeatMode) {
+
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+
+        if (!AudioCtx) {
+            return;
+        }
+
+        let context;
+
+        try {
+            context = new AudioCtx();
+        } catch (_) {
+            return;
+        }
+
+        const totalBeeps = repeatMode === 'loop'
+            ? 8
+            : repeatMode === 'triple'
+                ? 3
+                : 1;
+
+        for (let i = 0; i < totalBeeps; i += 1) {
+
+            const startAt = context.currentTime + (i * 0.42);
+            const osc = context.createOscillator();
+            const gain = context.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = i % 2 === 0 ? 880 : 740;
+            gain.gain.value = 0.0001;
+
+            osc.connect(gain);
+            gain.connect(context.destination);
+
+            gain.gain.setValueAtTime(0.0001, startAt);
+            gain.gain.exponentialRampToValueAtTime(0.05, startAt + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.28);
+
+            osc.start(startAt);
+            osc.stop(startAt + 0.3);
+        }
+
+        const closeAfter = (totalBeeps * 450) + 700;
+
+        setTimeout(() => {
+            if (context && typeof context.close === 'function') {
+                context.close().catch(() => { });
+            }
+        }, closeAfter);
+    }
+
+    function buildLoggerAlarmTargets(guidance, mode) {
+
+        const targets = [];
+        const seen = new Set();
+
+        const add = (id, label, minute, urgent = false) => {
+
+            if (minute === null || minute === undefined || !Number.isFinite(minute)) {
+                return;
+            }
+
+            const normalizedMinute = Math.round(minute);
+            const dedupeKey = `${id}:${normalizedMinute}`;
+
+            if (seen.has(dedupeKey)) {
+                return;
+            }
+
+            seen.add(dedupeKey);
+            targets.push({
+                id,
+                label,
+                minute: normalizedMinute,
+                urgent
+            });
+        };
+
+        if (mode === '10h' || mode === 'complete') {
+            add('day10', 'Saída 10h', guidance.day10h, true);
+            add('day10-int-min', `Saída 10h +${CONFIG.INTERVALO_MINIMO}m`, guidance.day10WithIntervalMin, true);
+            add('day10-int-max', `Saída 10h +${CONFIG.INTERVALO_MAXIMO}m`, guidance.day10WithIntervalMax, true);
+        }
+
+        if (mode === 'interval' || mode === 'complete') {
+            add('first-exit-min', 'Saída mínima do intervalo', guidance.firstExitMin);
+            add('first-exit-max', 'Saída máxima do intervalo', guidance.firstExitMax, true);
+            add('return-min', 'Retorno mínimo', guidance.intervalMin);
+            add('return-max', 'Retorno máximo', guidance.intervalMax, true);
+        }
+
+        if (mode === 'complete') {
+            add('day8', 'Saída 8h', guidance.day8h);
+            add('day8-int-min', `Saída 8h +${CONFIG.INTERVALO_MINIMO}m`, guidance.day8WithIntervalMin);
+            add('day8-int-max', `Saída 8h +${CONFIG.INTERVALO_MAXIMO}m`, guidance.day8WithIntervalMax);
+            add('return30-min-exit', 'Retorno +30m (saída mínima)', guidance.firstExitMinPause30);
+            add('return210-min-exit', 'Retorno +210m (saída mínima)', guidance.firstExitMinPause210, true);
+            add('return30-max-exit', 'Retorno +30m (saída máxima)', guidance.firstExitMaxPause30);
+            add('return210-max-exit', 'Retorno +210m (saída máxima)', guidance.firstExitMaxPause210, true);
+        }
+
+        return targets;
+    }
+
+    function evaluateLoggerAlarms() {
+
+        const nowTs = Date.now();
+
+        if ((nowTs - _loggerAlarmLastCheckAt) < 10000) {
+            return;
+        }
+
+        _loggerAlarmLastCheckAt = nowTs;
+
+        const alarmConfig = readLoggerAlarmConfig();
+
+        if (!alarmConfig.enabled) {
+            return;
+        }
+
+        const sharedTruth = readSharedTruth();
+        const { todayKey, startMs, endMs } = getTodayBounds();
+
+        const {
+            mirrorPunches
+        } = getMirrorTodayContext(sharedTruth, todayKey);
+
+        const saldoSemanaAnt = Number(
+            sharedTruth.weekBalance ?? gmGetValue('ahgora_saldo_semana_anterior', '0')
+        );
+
+        const history = parseJson(
+            gmGetValue('ahgora_history_v6', '[]'),
+            []
+        );
+
+        const {
+            combinedPunches
+        } = buildLoggerPunchTimeline(
+            history,
+            mirrorPunches,
+            startMs,
+            endMs
+        );
+
+        const guidance = buildPunchGuidance(combinedPunches, saldoSemanaAnt);
+        const targets = buildLoggerAlarmTargets(guidance, alarmConfig.mode);
+
+        if (!targets.length) {
+            return;
+        }
+
+        const lead = alarmConfig.leadMinutes;
+        const now = nowMin();
+
+        targets.forEach(target => {
+
+            const token = `${todayKey}:${target.id}:${target.minute}:${lead}`;
+
+            if (hasLoggerAlarmFired(todayKey, token)) {
+                return;
+            }
+
+            const diff = target.minute - now;
+            const minWindow = Math.max(0, lead - 1);
+            const maxWindow = lead + 1;
+
+            if (diff < minWindow || diff > maxWindow) {
+                return;
+            }
+
+            markLoggerAlarmFired(todayKey, token);
+
+            if (alarmConfig.channels.desktop) {
+                notif(
+                    `logger-alarm-${token}`,
+                    `⏰ ${target.label}`,
+                    `Previsto para ${fmtHour(target.minute)}. Faltam ~${Math.max(diff, 0)} min.`,
+                    target.urgent
+                );
+            }
+
+            if (alarmConfig.channels.sound) {
+                try {
+                    playLoggerAlarmSound(alarmConfig.soundRepeat);
+                } catch (_) {
+                    if (!_loggerAlarmSoundWarned) {
+                        _loggerAlarmSoundWarned = true;
+                        showLoggerToast('Som bloqueado pelo navegador. Interaja com a página e tente novamente.');
+                    }
+                }
+            }
+
+            showLoggerToast(`Alarme: ${target.label} às ${fmtHour(target.minute)}.`);
+        });
     }
 
     function copyText(text) {
@@ -2889,8 +3399,9 @@
 
         const guidance = buildPunchGuidance(combinedPunches, saldoSemanaAnt);
         const loggerPunchHealth = getPunchCountHealth(combinedPunches.length, { isToday: true });
+        const alarmConfig = readLoggerAlarmConfig();
 
-        const buildQuickCalendarLinks = (title, startMinute, endMinute = null) => {
+        const buildQuickCalendarLinks = (title, startMinute, endMinute = null, userPath = null) => {
 
             if (startMinute === null || startMinute === undefined) {
                 return null;
@@ -2901,7 +3412,8 @@
                     title,
                     details: title,
                     startMinute,
-                    endMinute
+                    endMinute,
+                    userPath
                 }),
                 outlook: buildOutlookCalendarUrl({
                     title,
@@ -2910,6 +3422,40 @@
                     endMinute
                 })
             };
+        };
+
+        const timeWithCalendarEmojis = (time, gcalUrl, outlookUrl, tone = 'neu') => {
+
+            if (!time) {
+                return '';
+            }
+
+            const color = tone === 'warn'
+                ? '#ffd08a'
+                : tone === 'pos'
+                    ? '#9ef0bf'
+                    : '#d6d6ff';
+
+            const links = (gcalUrl && outlookUrl)
+                ? `<span style="display:inline-flex;align-items:center;gap:4px;"><a href="${gcalUrl}" target="_blank" rel="noopener noreferrer" title="Google Calendar" style="text-decoration:none;line-height:1;">📅</a><a href="${outlookUrl}" target="_blank" rel="noopener noreferrer" title="Outlook" style="text-decoration:none;line-height:1;">📧</a></span>`
+                : '';
+
+            return `<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;"><span style="font-weight:700;color:${color};">${time}</span>${links}</span>`;
+        };
+
+        const forecastRowRange = (label, time1, gcalUrl1, outlookUrl1, time2, gcalUrl2, outlookUrl2, tone = 'neu') => {
+
+            if (!time1 || !time2) {
+                return '';
+            }
+
+            const val1 = timeWithCalendarEmojis(time1, gcalUrl1, outlookUrl1, tone);
+            const val2 = timeWithCalendarEmojis(time2, gcalUrl2, outlookUrl2, tone);
+
+            return `<div style="display:grid;grid-template-columns:minmax(120px,1fr) auto;gap:10px;align-items:center;font-size:11px;">
+                <span style="opacity:.72;">${label}</span>
+                <span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;white-space:nowrap;">${val1}<span style="opacity:.7;">→</span>${val2}</span>
+            </div>`;
         };
 
         const forecastRow = (label, value, tone = 'neu', calendarLinks = null) => {
@@ -3025,16 +3571,36 @@
             : '<div style="font-size:10px; opacity:.4;">Aguardando primeira batida...</div>';
 
         const forecastBlock = [
-            guidance.stage === 'interval' && firstExitMin ? forecastRow('Saída mín. (2h)', firstExitMin, 'pos', buildQuickCalendarLinks('Saída mínima (2h)', guidance.firstExitMin)) : '',
-            guidance.stage === 'interval' && firstExitMax ? forecastRow('Saída máx. (6h)', firstExitMax, 'warn', buildQuickCalendarLinks('Saída máxima (6h)', guidance.firstExitMax)) : '',
-            guidance.stage === 'interval' && firstExitMinPause30 ? forecastRow('Retorno +30m (saída mín.)', firstExitMinPause30, 'pos', buildQuickCalendarLinks('Retorno +30m (saída mínima)', guidance.firstExitMinPause30)) : '',
-            guidance.stage === 'interval' && firstExitMinPause210 ? forecastRow('Retorno +210m (saída mín.)', firstExitMinPause210, 'warn', buildQuickCalendarLinks('Retorno +210m (saída mínima)', guidance.firstExitMinPause210)) : '',
-            guidance.stage === 'interval' && firstExitMaxPause30 ? forecastRow('Retorno +30m (saída máx.)', firstExitMaxPause30, 'pos', buildQuickCalendarLinks('Retorno +30m (saída máxima)', guidance.firstExitMaxPause30)) : '',
-            guidance.stage === 'interval' && firstExitMaxPause210 ? forecastRow('Retorno +210m (saída máx.)', firstExitMaxPause210, 'warn', buildQuickCalendarLinks('Retorno +210m (saída máxima)', guidance.firstExitMaxPause210)) : '',
-            day8WindowMin && day8WindowMax ? forecastRow(`Saída 8h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day8WindowMin} → ${day8WindowMax}`, 'neu', buildQuickCalendarLinks('Janela 8h com intervalo', guidance.day8WithIntervalMin, guidance.day8WithIntervalMax)) : '',
-            day10WindowMin && day10WindowMax ? forecastRow(`Saída 10h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, `${day10WindowMin} → ${day10WindowMax}`, 'warn', buildQuickCalendarLinks('Janela 10h com intervalo', guidance.day10WithIntervalMin, guidance.day10WithIntervalMax)) : '',
-            intervalReturnMin ? forecastRow('Retorno mín.', intervalReturnMin, 'neu', buildQuickCalendarLinks('Retorno mínimo', guidance.intervalMin)) : '',
-            intervalReturnMax ? forecastRow('Retorno máx.', intervalReturnMax, 'warn', buildQuickCalendarLinks('Retorno máximo', guidance.intervalMax)) : ''
+            guidance.stage === 'interval' && firstExitMin ? forecastRow('Saída mín. (2h)', firstExitMin, 'pos', buildQuickCalendarLinks('Saída mínima (2h)', guidance.firstExitMin, null, alarmConfig.gcalUserPath)) : '',
+            guidance.stage === 'interval' && firstExitMax ? forecastRow('Saída máx. (6h)', firstExitMax, 'warn', buildQuickCalendarLinks('Saída máxima (6h)', guidance.firstExitMax, null, alarmConfig.gcalUserPath)) : '',
+            guidance.stage === 'interval' && (firstExitMinPause30 && firstExitMinPause210)
+                ? forecastRowRange(
+                    `Retorno 2h+ (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`,
+                    firstExitMinPause30,
+                    buildGoogleCalendarUrl({ title: 'Retorno +30m (saída mínima)', startMinute: guidance.firstExitMinPause30, userPath: alarmConfig.gcalUserPath }),
+                    buildOutlookCalendarUrl({ title: 'Retorno +30m (saída mínima)', startMinute: guidance.firstExitMinPause30 }),
+                    firstExitMinPause210,
+                    buildGoogleCalendarUrl({ title: 'Retorno +210m (saída mínima)', startMinute: guidance.firstExitMinPause210, userPath: alarmConfig.gcalUserPath }),
+                    buildOutlookCalendarUrl({ title: 'Retorno +210m (saída mínima)', startMinute: guidance.firstExitMinPause210 }),
+                    'pos'
+                )
+                : '',
+            guidance.stage === 'interval' && (firstExitMaxPause30 && firstExitMaxPause210)
+                ? forecastRowRange(
+                    `Retorno 6h+ (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`,
+                    firstExitMaxPause30,
+                    buildGoogleCalendarUrl({ title: 'Retorno +30m (saída máxima)', startMinute: guidance.firstExitMaxPause30, userPath: alarmConfig.gcalUserPath }),
+                    buildOutlookCalendarUrl({ title: 'Retorno +30m (saída máxima)', startMinute: guidance.firstExitMaxPause30 }),
+                    firstExitMaxPause210,
+                    buildGoogleCalendarUrl({ title: 'Retorno +210m (saída máxima)', startMinute: guidance.firstExitMaxPause210, userPath: alarmConfig.gcalUserPath }),
+                    buildOutlookCalendarUrl({ title: 'Retorno +210m (saída máxima)', startMinute: guidance.firstExitMaxPause210 }),
+                    'warn'
+                )
+                : '',
+            day8WindowMin && day8WindowMax ? forecastRowRange(`Saída 8h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, day8WindowMin, buildGoogleCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMin, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMin }), day8WindowMax, buildGoogleCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMax, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMax }), 'neu') : '',
+            day10WindowMin && day10WindowMax ? forecastRowRange(`Saída 10h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, day10WindowMin, buildGoogleCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMin, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMin }), day10WindowMax, buildGoogleCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMax, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMax }), 'warn') : '',
+            intervalReturnMin ? forecastRow('Retorno mín.', intervalReturnMin, 'neu', buildQuickCalendarLinks('Retorno mínimo', guidance.intervalMin, null, alarmConfig.gcalUserPath)) : '',
+            intervalReturnMax ? forecastRow('Retorno máx.', intervalReturnMax, 'warn', buildQuickCalendarLinks('Retorno máximo', guidance.intervalMax, null, alarmConfig.gcalUserPath)) : ''
         ].filter(Boolean).join('');
 
         const forecastBlockHtml = forecastBlock
@@ -3047,6 +3613,31 @@
 
         const mirrorCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:rgba(121,162,255,.14);color:#d7e3ff;border:1px solid rgba(121,162,255,.32);">mirror: ${mirrorPunches.length}</span>`;
         const localPendingCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.12)' : 'rgba(61,220,132,.12)'};color:${localOnlyPunches.length > 0 ? '#ffd08a' : '#9ef0bf'};border:1px solid ${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.3)' : 'rgba(61,220,132,.28)'};">pendente local: ${localOnlyPunches.length}</span>`;
+        const alarmToggleIcon = alarmConfig.enabled ? '🔔' : '🔕';
+        const alarmToggleTitle = alarmConfig.enabled
+            ? `Alarmes ativos (${getLoggerAlarmModeLabel(alarmConfig.mode)})`
+            : 'Alarmes desativados - clique para ligar';
+        const alarmModeOptions = [
+            { value: '10h', label: '10h apenas' },
+            { value: 'interval', label: 'Intervalo' },
+            { value: 'complete', label: 'Completo' }
+        ].map(item => `<option value="${item.value}" ${item.value === alarmConfig.mode ? 'selected' : ''}>${item.label}</option>`).join('');
+        const alarmLeadOptions = [1, 3, 5, 10, 15]
+            .map(min => `<option value="${min}" ${min === alarmConfig.leadMinutes ? 'selected' : ''}>${min} min</option>`)
+            .join('');
+        const alarmRepeatOptions = [
+            { value: 'once', label: '1x (padrão)' },
+            { value: 'triple', label: '3x' },
+            { value: 'loop', label: 'Contínuo curto' }
+        ].map(item => `<option value="${item.value}" ${item.value === alarmConfig.soundRepeat ? 'selected' : ''}>${item.label}</option>`).join('');
+        const alarmRepeatLabel = alarmConfig.soundRepeat === 'triple'
+            ? 'som 3x'
+            : alarmConfig.soundRepeat === 'loop'
+                ? 'som contínuo'
+                : 'som 1x';
+        const alarmChannelsSummary = `${alarmConfig.channels.sound ? alarmRepeatLabel : 'som off'} · ${alarmConfig.channels.desktop ? 'desktop on' : 'desktop off'}`;
+        const alarmSummary = `${alarmConfig.enabled ? 'Ligado' : 'Desligado'} · ${getLoggerAlarmModeLabel(alarmConfig.mode)} · ${alarmConfig.leadMinutes} min antes · ${alarmChannelsSummary}`;
+        const alarmSettingsToggleLabel = _loggerAlarmSettingsExpanded ? 'Ocultar' : 'Configurar';
 
         const historyBlock = `
             <div style="font-size:10px; opacity:.55; margin-top:8px;">Histórico recente (mirror + local)</div>
@@ -3059,7 +3650,7 @@
             ? `<button id="ahg-delete-last-punch" style="width:100%; border:1px solid rgba(255,77,77,.45); background:rgba(255,77,77,.12); color:#ffd2d2; border-radius:8px; padding:7px; cursor:pointer;">Excluir última local</button>`
             : '';
 
-        const requestMirrorSyncButton = `<a id="ahg-request-mirror-sync" href="javascript:void(0)" style="width:100%; display:block; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.1); color:#d7e3ff; border-radius:8px; padding:8px; cursor:pointer; text-decoration:none; text-align:center; font-weight:700; font-size:12px;">🔄 Sincronizar com mirror</a>`;
+        const requestMirrorSyncButton = `<a id="ahg-request-mirror-sync" href="javascript:void(0)" style="display:block; border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.03); color:#cfd7ff; border-radius:7px; padding:6px 8px; cursor:pointer; text-decoration:none; text-align:center; font-weight:600; font-size:11px; letter-spacing:.2px;">↻ Sincronizar mirror</a>`;
 
         const buildActionButtons = () => {
 
@@ -3068,34 +3659,36 @@
             if (guidance.stage === 'interval' && guidance.firstExitMin !== null && guidance.firstExitMax !== null) {
 
                 const url8hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 8h',
-                    details: `Saída ideal 8h: ${fmtHour(guidance.day8h)}`,
-                    startMinute: guidance.day8h,
-                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 8h + intervalo',
+                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
+                    startMinute: guidance.day8WithIntervalMin,
+                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
+                    userPath: alarmConfig.gcalUserPath
                 });
                 const url8hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 8h',
-                    details: `Saída ideal 8h: ${fmtHour(guidance.day8h)}`,
-                    startMinute: guidance.day8h,
-                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 8h + intervalo',
+                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
+                    startMinute: guidance.day8WithIntervalMin,
+                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
                 });
 
                 const url10hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 10h',
-                    details: `Limite diário 10h: ${fmtHour(guidance.day10h)}`,
-                    startMinute: guidance.day10h,
-                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 10h + intervalo',
+                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
+                    startMinute: guidance.day10WithIntervalMin,
+                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
+                    userPath: alarmConfig.gcalUserPath
                 });
                 const url10hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 10h',
-                    details: `Limite diário 10h: ${fmtHour(guidance.day10h)}`,
-                    startMinute: guidance.day10h,
-                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 10h + intervalo',
+                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
+                    startMinute: guidance.day10WithIntervalMin,
+                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
                 });
 
                 return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8h)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10h)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
                 ];
             }
 
@@ -3105,7 +3698,8 @@
                     title: 'Retorno mínimo',
                     details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
                     startMinute: guidance.intervalMin,
-                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
+                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
+                    userPath: alarmConfig.gcalUserPath
                 });
                 const urlMinOutlook = buildOutlookCalendarUrl({
                     title: 'Retorno mínimo',
@@ -3118,7 +3712,8 @@
                     title: 'Retorno máximo',
                     details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
                     startMinute: guidance.intervalMax,
-                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN
+                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN,
+                    userPath: alarmConfig.gcalUserPath
                 });
                 const urlMaxOutlook = buildOutlookCalendarUrl({
                     title: 'Retorno máximo',
@@ -3133,37 +3728,39 @@
                 ];
             }
 
-            if (guidance.stage === 'exit' && guidance.day8h !== null && guidance.day10h !== null) {
+            if (guidance.stage === 'exit' && guidance.day8WithIntervalMin !== null && guidance.day10WithIntervalMin !== null) {
 
                 const url8hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 8h',
-                    details: `Saída ideal: ${fmtHour(guidance.idealTime)}`,
-                    startMinute: guidance.day8h,
-                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 8h + intervalo',
+                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
+                    startMinute: guidance.day8WithIntervalMin,
+                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
+                    userPath: alarmConfig.gcalUserPath
                 });
                 const url8hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 8h',
-                    details: `Saída ideal: ${fmtHour(guidance.idealTime)}`,
-                    startMinute: guidance.day8h,
-                    endMinute: guidance.day8h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 8h + intervalo',
+                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
+                    startMinute: guidance.day8WithIntervalMin,
+                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
                 });
 
                 const url10hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 10h',
-                    details: `Limite diário: ${fmtHour(guidance.day10h)}`,
-                    startMinute: guidance.day10h,
-                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 10h + intervalo',
+                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
+                    startMinute: guidance.day10WithIntervalMin,
+                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
+                    userPath: alarmConfig.gcalUserPath
                 });
                 const url10hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 10h',
-                    details: `Limite diário: ${fmtHour(guidance.day10h)}`,
-                    startMinute: guidance.day10h,
-                    endMinute: guidance.day10h + CONFIG.GCAL_EVENT_DURATION_MIN
+                    title: 'Saída 10h + intervalo',
+                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
+                    startMinute: guidance.day10WithIntervalMin,
+                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
                 });
 
                 return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8h)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10h)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
+                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
                 ];
             }
 
@@ -3193,7 +3790,7 @@
             <div class="a-body" style="gap:6px; padding-top:10px;">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:10px; margin-bottom:4px;">
                     <span style="color:#7880aa; text-transform:uppercase; font-weight:700; letter-spacing:.5px;">${sourceLabel}</span>
-                    <span style="display:flex; align-items:center; gap:6px;">${syncBadge}<span id="ahg-privacy-toggle-logger" class="ahg-privacy-btn" title="Alternar privacidade">👁</span></span>
+                    <span style="display:flex; align-items:center; gap:6px;">${syncBadge}<span id="ahg-alarm-toggle-logger" class="ahg-privacy-btn" title="${alarmToggleTitle}" aria-pressed="${alarmConfig.enabled ? 'true' : 'false'}">${alarmToggleIcon}</span><span id="ahg-privacy-toggle-logger" class="ahg-privacy-btn" title="Alternar privacidade">👁</span></span>
                 </div>
 
                 <div style="font-size:28px; font-weight:800; line-height:1; letter-spacing:.3px; color:#fff; margin:4px 0;">${renderText(combinedLastPunch || lastPunch.time)}</div>
@@ -3204,7 +3801,7 @@
                 </div>
 
                 <div style="display:grid; gap:2px;">
-                    ${actionButtonsHtml ? actionButtonsHtml : requestMirrorSyncButton}
+                    ${actionButtonsHtml}
                 </div>
 
                 ${notesHtml ? `<div style="margin-top:6px;">${notesHtml}</div>` : ''}
@@ -3229,6 +3826,41 @@
                     </div>
                     ${weekBalance !== null ? `<div class="a-row"><span class="a-lbl">Saldo: </span><span class="a-val ${weekBalance >= 0 ? 'pos' : 'neg'}">${renderMinutes(weekBalance)}</span></div>` : ''}
 
+                    <div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin:8px 0 4px;">Alarmes</div>
+                    <div style="padding:8px 10px; border:1px solid #34344c; border-radius:8px; background:rgba(255,255,255,.03); display:grid; gap:6px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                            <div style="font-size:10px; color:#9fa7d6; line-height:1.35;">${alarmSummary}</div>
+                            <button id="ahg-alarm-settings-toggle" class="toggle-btn">${alarmSettingsToggleLabel}</button>
+                        </div>
+                        ${_loggerAlarmSettingsExpanded ? `<div style="display:grid; gap:4px; border-top:1px solid rgba(255,255,255,.07); padding-top:6px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                                <label for="ahg-alarm-mode" class="form-label">Modo</label>
+                                <select id="ahg-alarm-mode" class="form-select">${alarmModeOptions}</select>
+                            </div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                                <label for="ahg-alarm-lead" class="form-label">Antecedência</label>
+                                <select id="ahg-alarm-lead" class="form-select">${alarmLeadOptions}</select>
+                            </div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                                <label for="ahg-alarm-repeat" class="form-label">Som</label>
+                                <select id="ahg-alarm-repeat" class="form-select">${alarmRepeatOptions}</select>
+                            </div>
+                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input id="ahg-alarm-sound" type="checkbox" ${alarmConfig.channels.sound ? 'checked' : ''}>
+                                <span>Tocar som no navegador</span>
+                            </label>
+                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input id="ahg-alarm-desktop" type="checkbox" ${alarmConfig.channels.desktop ? 'checked' : ''}>
+                                <span>Notificação desktop</span>
+                            </label>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                                <label for="ahg-alarm-gcal" style="font-size:10px; opacity:.78;">Google Calendar</label>
+                                <input id="ahg-alarm-gcal" type="text" placeholder="0 ou 1" value="${escapeHtml(alarmConfig.gcalUserPath)}" style="font-size:10px; background:#16162a; color:#dde; border:1px solid rgba(255,255,255,.2); border-radius:6px; padding:3px 6px; flex:1; max-width:120px;">
+                            </div>
+                            <button id="ahg-alarm-test" style="margin-top:2px; width:100%; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.12); color:#d7e3ff; border-radius:6px; padding:5px 6px; cursor:pointer; font-size:10px; font-weight:700;">Testar alarme</button>
+                        </div>` : ''}
+                    </div>
+
                     ${forecastBlockHtml ? `<div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin:8px 0 4px;">Próximos horários</div>${forecastBlockHtml}` : ''}
 
                     ${mirrorSyncHint ? `<div style="font-size:10px; color:#7a6cff; margin-top:8px; opacity:.7;">${mirrorSyncHint}</div>` : ''}
@@ -3236,6 +3868,10 @@
                 ${historyBlock ? `<div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px;">${historyBlock}</div>` : ''}
 
                 ${secondaryActions ? `<div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px; display:grid; gap:4px;">${secondaryActions}</div>` : ''}
+
+                <div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px;">
+                    ${requestMirrorSyncButton}
+                </div>
             </div>
         `;
 
@@ -3264,6 +3900,136 @@
         document.getElementById('ahg-delete-last-punch')
             ?.addEventListener('click', () => deleteLastSavedPunch());
 
+        document.getElementById('ahg-alarm-settings-toggle')
+            ?.addEventListener('click', () => {
+
+                _loggerAlarmSettingsExpanded = !_loggerAlarmSettingsExpanded;
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-toggle-logger')
+            ?.addEventListener('click', () => {
+
+                const nextConfig = patchLoggerAlarmConfig({
+                    enabled: !alarmConfig.enabled
+                });
+
+                showLoggerToast(`Alarmes ${nextConfig.enabled ? 'ligados' : 'desligados'}.`);
+
+                if (nextConfig.enabled) {
+                    if (nextConfig.channels.desktop) {
+                        pedirNotif();
+                    }
+
+                    evaluateLoggerAlarms();
+                }
+
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-mode')
+            ?.addEventListener('change', ev => {
+
+                const mode = String(ev.target?.value || '10h');
+                patchLoggerAlarmConfig({ mode });
+                showLoggerToast(`Modo de alarme: ${getLoggerAlarmModeLabel(mode)}.`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-lead')
+            ?.addEventListener('change', ev => {
+
+                const leadMinutes = Number(ev.target?.value || CONFIG.LOGGER_ALARM_LEAD_MINUTES);
+                patchLoggerAlarmConfig({ leadMinutes });
+                showLoggerToast(`Antecedência: ${leadMinutes} min.`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-repeat')
+            ?.addEventListener('change', ev => {
+
+                const soundRepeat = String(ev.target?.value || CONFIG.LOGGER_ALARM_REPEAT);
+                patchLoggerAlarmConfig({ soundRepeat });
+                showLoggerToast('Configuração de som atualizada.');
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-sound')
+            ?.addEventListener('change', ev => {
+
+                patchLoggerAlarmConfig({
+                    channels: {
+                        sound: Boolean(ev.target?.checked)
+                    }
+                });
+
+                showLoggerToast(`Som ${ev.target?.checked ? 'ligado' : 'desligado'}.`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-desktop')
+            ?.addEventListener('change', ev => {
+
+                const desktop = Boolean(ev.target?.checked);
+
+                patchLoggerAlarmConfig({
+                    channels: {
+                        desktop
+                    }
+                });
+
+                if (desktop) {
+                    pedirNotif();
+                }
+
+                showLoggerToast(`Notificação desktop ${desktop ? 'ligada' : 'desligada'}.`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-gcal')
+            ?.addEventListener('change', ev => {
+
+                const inputValue = String(ev.target?.value || '0').trim();
+                const gcalUserPath = normalizeGoogleCalendarUserPath(inputValue);
+                patchLoggerAlarmConfig({ gcalUserPath });
+                
+                // Avisa se o valor foi normalizado
+                if (inputValue !== gcalUserPath && inputValue !== '') {
+                    showLoggerToast(`Google Calendar: suporta apenas números (0, 1, 2, ...). Usando: ${gcalUserPath}`);
+                } else {
+                    showLoggerToast(`Google Calendar: conta ${gcalUserPath}`);
+                }
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-alarm-test')
+            ?.addEventListener('click', () => {
+
+                const currentConfig = readLoggerAlarmConfig();
+                const modeLabel = getLoggerAlarmModeLabel(currentConfig.mode);
+
+                if (currentConfig.channels.desktop) {
+                    pedirNotif();
+                    notif(
+                        `logger-test-${Date.now()}`,
+                        '🧪 Teste de alarme',
+                        `Modo ${modeLabel} · antecedência ${currentConfig.leadMinutes} min.`,
+                        false
+                    );
+                }
+
+                if (currentConfig.channels.sound) {
+                    try {
+                        playLoggerAlarmSound(currentConfig.soundRepeat);
+                    } catch (_) {
+                        showLoggerToast('Não foi possível tocar o som de teste agora.');
+                        return;
+                    }
+                }
+
+                showLoggerToast('Teste de alarme executado.');
+            });
+
         document.getElementById('ahg-privacy-toggle-logger')
             ?.addEventListener('click', () => {
 
@@ -3279,10 +4045,19 @@
 
         applyPrivacyState();
 
+        const alarmConfig = readLoggerAlarmConfig();
+
+        if (alarmConfig.enabled && alarmConfig.channels.desktop) {
+            pedirNotif();
+        }
+
         createPrivacyFab('ahg-eye-fab-logger', '24px', () => renderUILogger());
 
         renderUILogger();
-        setInterval(monitorModal, 500);
+        setInterval(() => {
+            monitorModal();
+            evaluateLoggerAlarms();
+        }, 500);
     }
 
     /* =========================================================
