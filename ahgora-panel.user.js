@@ -373,6 +373,23 @@
         return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
     }
 
+    function shiftPunchTime(time, deltaMinutes) {
+
+        const normalized = normalizePunchTime(time);
+
+        if (!normalized) {
+            return null;
+        }
+
+        const minute = toMin(normalized);
+
+        if (!Number.isFinite(minute)) {
+            return null;
+        }
+
+        return fmtHour(minute + deltaMinutes);
+    }
+
     function getPunchCountHealth(count, { isToday = false } = {}) {
 
         if (!count) {
@@ -3016,27 +3033,39 @@
         showLoggerToast('Área de transferência indisponível.');
     }
 
-    function savePunch(time, date) {
+    function savePunch(time, date, timestamp = Date.now()) {
+
+        const normalizedTime = normalizePunchTime(time);
+
+        if (!normalizedTime) {
+            return false;
+        }
+
+        const normalizedTimestamp = Number.isFinite(Number(timestamp))
+            ? Number(timestamp)
+            : Date.now();
+
+        const fallbackDate = new Date(normalizedTimestamp).toLocaleDateString('pt-BR');
+        const normalizedDate = String(date || fallbackDate).trim() || fallbackDate;
 
         const history = parseJson(
             gmGetValue('ahgora_history_v6', '[]'),
             []
         );
 
-        const last = history[history.length - 1];
+        const hasDuplicate = history.some(entry =>
+            normalizePunchTime(entry?.time) === normalizedTime &&
+            String(entry?.date || '').trim() === normalizedDate
+        );
 
-        if (
-            last &&
-            last.time === time &&
-            last.date === date
-        ) {
-            return;
+        if (hasDuplicate) {
+            return false;
         }
 
         history.push({
-            time,
-            date,
-            timestamp: Date.now()
+            time: normalizedTime,
+            date: normalizedDate,
+            timestamp: normalizedTimestamp
         });
 
         if (history.length > 100) {
@@ -3049,6 +3078,8 @@
         );
 
         renderUILogger();
+
+        return true;
     }
 
     function deleteLastSavedPunch() {
@@ -3087,6 +3118,124 @@
         if (document.getElementById('ahg-panel')) {
             render();
         }
+    }
+
+    function updateTodayLocalPunch(oldTime, newTime, startMs, endMs) {
+
+        const from = normalizePunchTime(oldTime);
+        const to = normalizePunchTime(newTime);
+
+        if (!from || !to) {
+            return {
+                ok: false,
+                message: 'Horário inválido para ajuste.'
+            };
+        }
+
+        const history = parseJson(
+            gmGetValue('ahgora_history_v6', '[]'),
+            []
+        );
+
+        const isToday = entry => {
+            const ts = Number(entry?.timestamp);
+            return Number.isFinite(ts) && ts >= startMs && ts < endMs;
+        };
+
+        const targetIndex = history.findIndex(entry =>
+            isToday(entry) && normalizePunchTime(entry?.time) === from
+        );
+
+        if (targetIndex < 0) {
+            return {
+                ok: false,
+                message: `Batida ${from} não encontrada no histórico local de hoje.`
+            };
+        }
+
+        const hasConflict = history.some((entry, idx) =>
+            idx !== targetIndex &&
+            isToday(entry) &&
+            normalizePunchTime(entry?.time) === to
+        );
+
+        if (hasConflict) {
+            return {
+                ok: false,
+                message: `Já existe batida local ${to} hoje.`
+            };
+        }
+
+        history[targetIndex].time = to;
+        history[targetIndex].timestamp = startMs + (toMin(to) * 60000);
+        history[targetIndex].date = new Date(startMs).toLocaleDateString('pt-BR');
+
+        gmSetValue(
+            'ahgora_history_v6',
+            JSON.stringify(history)
+        );
+
+        renderUILogger();
+
+        if (document.getElementById('ahg-panel')) {
+            render();
+        }
+
+        return {
+            ok: true,
+            message: `Batida local ajustada: ${from} → ${to}.`
+        };
+    }
+
+    function removeTodayLocalPunch(time, startMs, endMs) {
+
+        const target = normalizePunchTime(time);
+
+        if (!target) {
+            return {
+                ok: false,
+                message: 'Selecione um horário válido para remover.'
+            };
+        }
+
+        const history = parseJson(
+            gmGetValue('ahgora_history_v6', '[]'),
+            []
+        );
+
+        const isToday = entry => {
+            const ts = Number(entry?.timestamp);
+            return Number.isFinite(ts) && ts >= startMs && ts < endMs;
+        };
+
+        const targetIndex = history.findIndex(entry =>
+            isToday(entry) && normalizePunchTime(entry?.time) === target
+        );
+
+        if (targetIndex < 0) {
+            return {
+                ok: false,
+                message: `Batida ${target} não encontrada no histórico local de hoje.`
+            };
+        }
+
+        history.splice(targetIndex, 1);
+
+        gmSetValue(
+            'ahgora_history_v6',
+            JSON.stringify(history)
+        );
+
+        renderUILogger();
+
+        if (document.getElementById('ahg-panel')) {
+            render();
+        }
+
+        return {
+            ok: true,
+            message: `Batida local ${target} removida.`
+        };
     }
 
     function reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, todayStartMs, todayEndMs) {
@@ -3489,9 +3638,35 @@
                 : 'Mirror sincronizado')
             : 'Usando local (mirror pendente)';
 
-        const workedToday = hasMirrorData && typeof sharedTruth.workedToday === 'number'
-            ? sharedTruth.workedToday
-            : (combinedPunches.length ? calcularTrabalhado(combinedPunches) : null);
+        const workedToday = combinedPunches.length
+            ? calcularTrabalhado(combinedPunches)
+            : (hasMirrorData && typeof sharedTruth.workedToday === 'number'
+                ? sharedTruth.workedToday
+                : null);
+
+        const jornadaDiaDiff = workedToday === null
+            ? null
+            : CONFIG.CARGA_DIARIA - workedToday;
+
+        const jornadaDiaStatus = jornadaDiaDiff === null
+            ? { label: '--:--', tone: 'neu', detail: 'Sem dados para prever jornada.' }
+            : jornadaDiaDiff > 0
+                ? {
+                    label: `Faltam ${renderMinutes(jornadaDiaDiff)}`,
+                    tone: 'warn',
+                    detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)} · trabalhado: ${renderMinutes(workedToday)}`
+                }
+                : jornadaDiaDiff < 0
+                    ? {
+                        label: `Excedente ${renderMinutes(Math.abs(jornadaDiaDiff))}`,
+                        tone: 'pos',
+                        detail: `Meta diária superada · trabalhado: ${renderMinutes(workedToday)}`
+                    }
+                    : {
+                        label: 'Meta diária concluída',
+                        tone: 'pos',
+                        detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)}`
+                    };
 
         const dayBalance = workedToday === null
             ? null
@@ -3561,10 +3736,21 @@
 
                     const dateLabel = renderText(entry.dateLabel || '--/--/--');
                     const timeLabel = renderText(entry.time || '--:--');
+                    const rawTime = normalizePunchTime(entry.time);
+                    const isEditableLocal = entry.source === 'local' && Boolean(rawTime);
+                    const editButton = isEditableLocal
+                        ? `<button class="ahg-history-edit" data-time="${escapeHtml(rawTime)}" title="Editar batida local" style="border:1px solid rgba(122,108,255,.35); background:rgba(122,108,255,.12); color:#d7e3ff; border-radius:5px; padding:1px 5px; font-size:11px; cursor:pointer; line-height:1;">✏</button>`
+                        : '';
+                    const minusFiveButton = isEditableLocal
+                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="-5" title="-5 min" style="border:1px solid rgba(255,165,0,.35); background:rgba(255,165,0,.12); color:#ffd08a; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">-5</button>`
+                        : '';
+                    const plusFiveButton = isEditableLocal
+                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="5" title="+5 min" style="border:1px solid rgba(61,220,132,.35); background:rgba(61,220,132,.12); color:#c8ffe2; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">+5</button>`
+                        : '';
 
                     return `<div style="font-size:11px; display:flex; justify-content:space-between; margin-top:4px;">
-                        <span style="opacity:.62;">${sourceIcon} ${sourceLabel} · ${dateLabel}</span>
-                        <span style="font-weight:700; color:#ffd166;">${timeLabel}</span>
+                        <span style="display:flex; align-items:center; gap:4px; opacity:.62;"><span>${dateLabel} · ${sourceIcon} ${sourceLabel}</span>${editButton}${minusFiveButton}${plusFiveButton}</span>
+                        <span style="font-weight:700; color:#ffd166; text-align:right; min-width:46px;">${timeLabel}</span>
                     </div>`;
                 })
                 .join('')
@@ -3640,15 +3826,14 @@
         const alarmSettingsToggleLabel = _loggerAlarmSettingsExpanded ? 'Ocultar' : 'Configurar';
 
         const historyBlock = `
-            <div style="font-size:10px; opacity:.55; margin-top:8px;">Histórico recente (mirror + local)</div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px;">
+                <div style="font-size:10px; opacity:.55;">Histórico recente (mirror + local)</div>
+                <button id="ahg-history-add" title="Adicionar batida local" style="border:1px solid rgba(61,220,132,.4); background:rgba(61,220,132,.14); color:#c8ffe2; border-radius:6px; padding:1px 7px; font-size:13px; cursor:pointer; line-height:1;">+</button>
+            </div>
             <div style="padding:8px 10px; border:1px solid #34344c; border-radius:8px; background:rgba(255,255,255,.03);">
                 ${recentHistoryHtml}
             </div>
         `;
-
-        const deleteButton = pendingLocalHistoryEntries.length
-            ? `<button id="ahg-delete-last-punch" style="width:100%; border:1px solid rgba(255,77,77,.45); background:rgba(255,77,77,.12); color:#ffd2d2; border-radius:8px; padding:7px; cursor:pointer;">Excluir última local</button>`
-            : '';
 
         const requestMirrorSyncButton = `<a id="ahg-request-mirror-sync" href="javascript:void(0)" style="display:block; border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.03); color:#cfd7ff; border-radius:7px; padding:6px 8px; cursor:pointer; text-decoration:none; text-align:center; font-weight:600; font-size:11px; letter-spacing:.2px;">↻ Sincronizar mirror</a>`;
 
@@ -3782,10 +3967,6 @@
             ? `<div class="a-row warn" style="background:rgba(255,165,0,.12); border-left-color:orange; padding:8px 8px; border-radius:7px; margin:0;"><span style="color:#ffd08a; font-size:10px; font-weight:700;">${criticalNotes.slice(0, 2).map(x => `<div style="margin:2px 0;">• ${x}</div>`).join('')}</span></div>`
             : '';
 
-        const secondaryActions = [
-            deleteButton
-        ].filter(Boolean).join('');
-
         container.innerHTML = `
             <div class="a-body" style="gap:6px; padding-top:10px;">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:10px; margin-bottom:4px;">
@@ -3813,6 +3994,11 @@
 
                 <div id="ahg-logger-details-content" style="display:block; border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:6px; font-size:11px;">
                     <div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin-bottom:4px;">Hoje</div>
+                    <div class="a-row ${jornadaDiaStatus.tone === 'warn' ? 'warn' : jornadaDiaStatus.tone === 'pos' ? 'ok' : 'neu'}" style="margin-bottom:4px;">
+                        <span class="a-lbl">Previsão da jornada</span>
+                        <span class="a-val ${jornadaDiaStatus.tone === 'warn' ? 'warn' : jornadaDiaStatus.tone === 'pos' ? 'pos' : 'neu'}">${jornadaDiaStatus.label}</span>
+                    </div>
+                    <div style="font-size:10px; color:#9fa7d6; opacity:.82; margin:0 2px 6px;">${jornadaDiaStatus.detail}</div>
                     <div class="a-row neu" style="background:rgba(122,108,255,.08); border-left-color:#7a6cff; margin-bottom:4px;">
                         <span class="a-lbl">Trabalhado</span>
                         <span class="a-val neu">${workedToday === null ? '--:--' : renderMinutes(workedToday)}</span>
@@ -3867,8 +4053,6 @@
                 </div>
                 ${historyBlock ? `<div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px;">${historyBlock}</div>` : ''}
 
-                ${secondaryActions ? `<div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px; display:grid; gap:4px;">${secondaryActions}</div>` : ''}
-
                 <div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px;">
                     ${requestMirrorSyncButton}
                 </div>
@@ -3897,8 +4081,102 @@
                 }
             });
 
-        document.getElementById('ahg-delete-last-punch')
-            ?.addEventListener('click', () => deleteLastSavedPunch());
+        const tryAddHistoryPunch = () => {
+
+            const suggested = normalizePunchTime(combinedLastPunch) || '';
+            const typed = window.prompt('Nova batida local (HH:MM):', suggested);
+
+            if (typed === null) {
+                return;
+            }
+
+            const time = normalizePunchTime(typed);
+
+            if (!time) {
+                showLoggerToast('Informe um horário válido (HH:MM).');
+                return;
+            }
+
+            const minute = toMin(time);
+
+            if (!Number.isFinite(minute)) {
+                showLoggerToast('Horário inválido para inclusão local.');
+                return;
+            }
+
+            const manualTimestamp = startMs + (minute * 60000);
+            const todayDateLabel = new Date(startMs).toLocaleDateString('pt-BR');
+            const inserted = savePunch(time, todayDateLabel, manualTimestamp);
+
+            if (!inserted) {
+                showLoggerToast(`Batida ${time} já existe no histórico local de hoje.`);
+                return;
+            }
+
+            showLoggerToast(`Batida local ${time} incluída.`);
+
+            if (document.getElementById('ahg-panel')) {
+                render();
+            }
+        };
+
+        document.getElementById('ahg-history-add')
+            ?.addEventListener('click', () => tryAddHistoryPunch());
+
+        document.querySelectorAll('.ahg-history-edit')
+            .forEach(btn => {
+
+                btn.addEventListener('click', () => {
+
+                    const current = normalizePunchTime(String(btn.getAttribute('data-time') || ''));
+
+                    if (!current) {
+                        showLoggerToast('Batida local inválida para edição.');
+                        return;
+                    }
+
+                    const typed = window.prompt('Editar batida local (HH:MM):', current);
+
+                    if (typed === null) {
+                        return;
+                    }
+
+                    const next = normalizePunchTime(typed);
+
+                    if (!next) {
+                        showLoggerToast('Informe um horário válido (HH:MM).');
+                        return;
+                    }
+
+                    const result = updateTodayLocalPunch(current, next, startMs, endMs);
+                    showLoggerToast(result.message);
+                });
+            });
+
+        document.querySelectorAll('.ahg-history-shift')
+            .forEach(btn => {
+
+                btn.addEventListener('click', () => {
+
+                    const current = normalizePunchTime(String(btn.getAttribute('data-time') || ''));
+                    const delta = Number(btn.getAttribute('data-delta') || '0');
+
+                    if (!current || !Number.isFinite(delta) || delta === 0) {
+                        showLoggerToast('Não foi possível ajustar esta batida local.');
+                        return;
+                    }
+
+                    const shifted = shiftPunchTime(current, delta);
+
+                    if (!shifted) {
+                        showLoggerToast('Horário inválido para ajuste rápido.');
+                        return;
+                    }
+
+                    const result = updateTodayLocalPunch(current, shifted, startMs, endMs);
+                    showLoggerToast(result.message);
+                });
+            });
 
         document.getElementById('ahg-alarm-settings-toggle')
             ?.addEventListener('click', () => {
