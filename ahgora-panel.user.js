@@ -210,6 +210,7 @@
     const PRIVACY_HIDE_KEY = 'ahgora_privacy_hide_times';
     const LOGGER_ALARM_CONFIG_KEY = 'ahgora_logger_alarm_v1';
     const LOGGER_ALARM_FIRED_STATE_KEY = 'ahgora_logger_alarm_fired_v1';
+    const LOGGER_GCAL_AUTOPEN_STATE_KEY = 'ahgora_logger_gcal_autopen_v1';
 
     function isPrivacyHidden() {
 
@@ -445,6 +446,166 @@
             short: `${count} batidas`,
             text: `${count} batidas: fora do padrão esperado`
         };
+    }
+
+    function getIntrajornadaMaxViolations(batidas) {
+
+        const punches = Array.isArray(batidas) ? batidas : [];
+        const violations = [];
+
+        for (let i = 1; i + 1 < punches.length; i += 2) {
+
+            const saida = toMin(punches[i]);
+            const retorno = toMin(punches[i + 1]);
+
+            if (!Number.isFinite(saida) || !Number.isFinite(retorno)) {
+                continue;
+            }
+
+            const duration = retorno - saida;
+
+            if (!Number.isFinite(duration) || duration <= 0) {
+                continue;
+            }
+
+            if (duration > CONFIG.INTERVALO_MAXIMO) {
+                violations.push({
+                    start: punches[i],
+                    end: punches[i + 1],
+                    duration,
+                    excess: duration - CONFIG.INTERVALO_MAXIMO
+                });
+            }
+        }
+
+        return violations;
+    }
+
+    function getMaxShiftViolations(batidas) {
+
+        const punches = Array.isArray(batidas) ? batidas : [];
+        const violations = [];
+
+        for (let i = 0; i + 1 < punches.length; i += 2) {
+
+            const entrada = toMin(punches[i]);
+            const saida = toMin(punches[i + 1]);
+
+            if (!Number.isFinite(entrada) || !Number.isFinite(saida)) {
+                continue;
+            }
+
+            const duration = saida - entrada;
+
+            if (!Number.isFinite(duration) || duration <= 0) {
+                continue;
+            }
+
+            if (duration > CONFIG.MAX_HORAS_TURNO) {
+                violations.push({
+                    start: punches[i],
+                    end: punches[i + 1],
+                    duration,
+                    excess: duration - CONFIG.MAX_HORAS_TURNO
+                });
+            }
+        }
+
+        return violations;
+    }
+
+    function buildViolationDaysSummary(resumo) {
+
+        const byDate = new Map();
+
+        const ensureDay = (date) => {
+
+            const key = formatDateKey(date);
+
+            if (!byDate.has(key)) {
+                byDate.set(key, {
+                    key,
+                    date,
+                    notes: []
+                });
+            }
+
+            return byDate.get(key);
+        };
+
+        (resumo.intrajornadaMaxViolationDays || []).forEach(day => {
+
+            const entry = ensureDay(day.date);
+            const first = day.intervals?.[0];
+
+            if (!first) {
+                return;
+            }
+
+            entry.notes.push(`intervalo ${first.start}→${first.end} (${fmtMin(first.duration)})`);
+        });
+
+        (resumo.maxShiftViolationDays || []).forEach(day => {
+
+            const entry = ensureDay(day.date);
+            const first = day.shifts?.[0];
+
+            if (!first) {
+                return;
+            }
+
+            entry.notes.push(`turno ${first.start}→${first.end} (${fmtMin(first.duration)})`);
+        });
+
+        (resumo.maxDailyViolationDays || []).forEach(day => {
+
+            const entry = ensureDay(day.date);
+
+            entry.notes.push(`dia ${fmtMin(day.worked)}`);
+        });
+
+        return [...byDate.values()]
+            .sort((a, b) => a.date - b.date)
+            .map(x => `${formatDayMonth(x.date)}: ${x.notes.join(' · ')}`);
+    }
+
+    function getDayRuleViolations(day) {
+
+        if (!day || !Array.isArray(day.batidas)) {
+            return [];
+        }
+
+        const violations = [];
+        const intrajornada = getIntrajornadaMaxViolations(day.batidas);
+        const maxShift = getMaxShiftViolations(day.batidas);
+
+        if (intrajornada.length > 0) {
+            const first = intrajornada[0];
+            violations.push({
+                code: 'INT',
+                label: `Intervalo > ${fmtMin(CONFIG.INTERVALO_MAXIMO)}`,
+                detail: `${first.start}→${first.end} (${fmtMin(first.duration)})`
+            });
+        }
+
+        if (maxShift.length > 0) {
+            const first = maxShift[0];
+            violations.push({
+                code: 'TUR',
+                label: `Turno > ${fmtMin(CONFIG.MAX_HORAS_TURNO)}`,
+                detail: `${first.start}→${first.end} (${fmtMin(first.duration)})`
+            });
+        }
+
+        if (Number.isFinite(day.trabalhado) && day.trabalhado > CONFIG.MAX_HORAS_DIA) {
+            violations.push({
+                code: 'DIA',
+                label: `Dia > ${fmtMin(CONFIG.MAX_HORAS_DIA)}`,
+                detail: fmtMin(day.trabalhado)
+            });
+        }
+
+        return violations;
     }
 
     function sameWeek(a, b) {
@@ -860,6 +1021,11 @@
             let roundedDiv =
                 day.querySelector('.ahg-day-total-rounded');
 
+            let violationDiv =
+                day.querySelector('.ahg-day-violations');
+
+            const violations = getDayRuleViolations({ batidas, trabalhado });
+
             if (trabalhado > 0) {
 
                 if (!totalDiv) {
@@ -883,6 +1049,24 @@
 
                 roundedDiv.textContent = `${renderMinutes(trabalhadoArredondado)} (${renderText(fmtQuarterDecimal(trabalhado))})`;
 
+                if (violations.length > 0) {
+
+                    if (!violationDiv) {
+
+                        violationDiv = document.createElement('div');
+                        violationDiv.className = 'ahg-day-violations';
+                        day.appendChild(violationDiv);
+                    }
+
+                    const hasCritical = violations.some(x => x.code === 'TUR' || x.code === 'DIA');
+                    violationDiv.className = `ahg-day-violations ${hasCritical ? 'is-critical' : 'is-warning'}`;
+                    violationDiv.textContent = `⚠ ${violations.map(x => x.code).join('/')}`;
+                    violationDiv.title = violations.map(x => `${x.label}: ${x.detail}`).join(' | ');
+
+                } else if (violationDiv) {
+                    violationDiv.remove();
+                }
+
             } else {
 
                 if (totalDiv) {
@@ -891,6 +1075,10 @@
 
                 if (roundedDiv) {
                     roundedDiv.remove();
+                }
+
+                if (violationDiv) {
+                    violationDiv.remove();
                 }
             }
 
@@ -902,7 +1090,8 @@
                 isBusinessDay,
                 batidas,
                 trabalhado,
-                saldo
+                saldo,
+                violations
             });
         });
 
@@ -1238,6 +1427,30 @@
             }))
             .filter(x => x.health.level !== 'ok');
 
+        const intrajornadaMaxViolationDays = dias
+            .filter(x => !x.isFuture && x.batidas.length >= 3)
+            .map(x => ({
+                date: x.data,
+                intervals: getIntrajornadaMaxViolations(x.batidas)
+            }))
+            .filter(x => x.intervals.length > 0);
+
+        const maxShiftViolationDays = dias
+            .filter(x => !x.isFuture && x.batidas.length >= 2)
+            .map(x => ({
+                date: x.data,
+                shifts: getMaxShiftViolations(x.batidas)
+            }))
+            .filter(x => x.shifts.length > 0);
+
+        const maxDailyViolationDays = dias
+            .filter(x => !x.isFuture && x.batidas.length > 0 && x.trabalhado > CONFIG.MAX_HORAS_DIA)
+            .map(x => ({
+                date: x.data,
+                worked: x.trabalhado,
+                excess: x.trabalhado - CONFIG.MAX_HORAS_DIA
+            }));
+
         const trabalhado = hoje.trabalhado;
 
         persistSharedTruth({
@@ -1263,7 +1476,10 @@
             trabalhado,
             alerta,
             hojePunchHealth,
-            punchAnomalyDays
+            punchAnomalyDays,
+            intrajornadaMaxViolationDays,
+            maxShiftViolationDays,
+            maxDailyViolationDays
         });
 
         return {
@@ -1289,7 +1505,10 @@
             trabalhado,
             alerta,
             hojePunchHealth,
-            punchAnomalyDays
+            punchAnomalyDays,
+            intrajornadaMaxViolationDays,
+            maxShiftViolationDays,
+            maxDailyViolationDays
         };
     }
 
@@ -1493,7 +1712,10 @@
             idealExit: resumo.saidaIdeal,
             lastPunch: resumo.hoje.batidas?.[resumo.hoje.batidas.length - 1] || null,
             hojePunchHealth: resumo.hojePunchHealth || null,
-            punchAnomalyDays: resumo.punchAnomalyDays || []
+            punchAnomalyDays: resumo.punchAnomalyDays || [],
+            intrajornadaMaxViolationDays: resumo.intrajornadaMaxViolationDays || [],
+            maxShiftViolationDays: resumo.maxShiftViolationDays || [],
+            maxDailyViolationDays: resumo.maxDailyViolationDays || []
         };
 
         gmSetValue(SHARED_TRUTH_KEY, JSON.stringify(shared));
@@ -1625,6 +1847,45 @@
             z-index:10;
             pointer-events:none;
             white-space:nowrap;
+        }
+
+        .ahg-day-violations{
+            position:absolute;
+            top:auto;
+            bottom:20px;
+            right:4px;
+            left:auto;
+            transform:none;
+            background:rgba(255,207,102,.22);
+            color:#6a4200;
+            border:1px solid rgba(255,176,32,.9);
+            padding:1px 5px;
+            border-radius:var(--radius);
+            font-size:9px;
+            font-weight:700;
+            letter-spacing:.15px;
+            text-shadow:none;
+            box-shadow:0 2px 5px rgba(0,0,0,.28);
+            display:block;
+            z-index:13;
+            pointer-events:auto;
+            white-space:nowrap;
+            cursor:help;
+            max-width:calc(100% - 8px);
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+
+        .ahg-day-violations.is-critical{
+            background:rgba(255,90,95,.22);
+            color:#b40018;
+            border-color:rgba(255,106,112,.95);
+        }
+
+        .ahg-day-violations.is-warning{
+            background:rgba(255,207,102,.22);
+            color:#6a4200;
+            border-color:rgba(255,176,32,.9);
         }
 
         .ahg-privacy-btn{
@@ -2062,6 +2323,10 @@
                     .map(x => `${formatDayMonth(x.date)} (${x.count})`)
                     .join(' · ')
                 : 'Sem inconsistências recentes';
+            const violationDaysSummary = buildViolationDaysSummary(r);
+            const nonComplianceLabel = violationDaysSummary.length
+                ? violationDaysSummary.slice(0, 4).join(' | ')
+                : `Sem violações (intervalo <= ${fmtMin(CONFIG.INTERVALO_MAXIMO)}, turno <= ${fmtMin(CONFIG.MAX_HORAS_TURNO)}, dia <= ${fmtMin(CONFIG.MAX_HORAS_DIA)})`;
 
             const p =
                 document.getElementById('ahg-panel');
@@ -2110,6 +2375,16 @@
 
                     <span class="a-val neu">
                         <small>${anomalyDaysLabel}</small>
+                    </span>
+                </div>
+
+                <div class="a-row infos">
+                    <span class="a-lbl">
+                        Não conformidades
+                    </span>
+
+                    <span class="a-val warn">
+                        <small>${nonComplianceLabel}</small>
                     </span>
                 </div>
 
@@ -2675,7 +2950,12 @@
                 desktop: true
             },
             soundRepeat: CONFIG.LOGGER_ALARM_REPEAT,
-            gcalUserPath: CONFIG.GCAL_USER_PATH
+            gcalUserPath: CONFIG.GCAL_USER_PATH,
+            quickGcalEnabled: true,
+            quickCalendarProvider: 'both',
+            quickGcalOffsetMinutes: 10,
+            quickGcalAutoOpenEnabled: false,
+            quickGcalAutoOpenStage: 'off'
         };
     }
 
@@ -2702,6 +2982,16 @@
             : {};
 
         const gcalUserPath = normalizeGoogleCalendarUserPath(src.gcalUserPath || defaults.gcalUserPath);
+        const quickGcalOffsetCandidates = [5, 10, 15];
+        const quickGcalOffsetMinutes = quickGcalOffsetCandidates.includes(Number(src.quickGcalOffsetMinutes))
+            ? Number(src.quickGcalOffsetMinutes)
+            : defaults.quickGcalOffsetMinutes;
+        const quickGcalAutoOpenStage = ['off', 'interval', 'return', 'exit', 'any'].includes(String(src.quickGcalAutoOpenStage || 'off'))
+            ? String(src.quickGcalAutoOpenStage)
+            : defaults.quickGcalAutoOpenStage;
+        const quickCalendarProvider = ['google', 'outlook', 'both'].includes(String(src.quickCalendarProvider || 'both'))
+            ? String(src.quickCalendarProvider)
+            : defaults.quickCalendarProvider;
 
         return {
             enabled: Boolean(src.enabled),
@@ -2712,7 +3002,12 @@
                 desktop: channelsRaw.desktop !== false
             },
             soundRepeat,
-            gcalUserPath
+            gcalUserPath,
+            quickGcalEnabled: src.quickGcalEnabled !== false,
+            quickCalendarProvider,
+            quickGcalOffsetMinutes,
+            quickGcalAutoOpenEnabled: Boolean(src.quickGcalAutoOpenEnabled),
+            quickGcalAutoOpenStage
         };
     }
 
@@ -2764,6 +3059,81 @@
         }
 
         return '10h';
+    }
+
+    function getGuidanceStageLabel(stage) {
+
+        if (stage === 'interval') {
+            return 'Intervalo (saída do 1º turno)';
+        }
+
+        if (stage === 'return') {
+            return 'Retorno do intervalo';
+        }
+
+        if (stage === 'exit') {
+            return 'Saída do dia';
+        }
+
+        if (stage === 'entry') {
+            return 'Entrada';
+        }
+
+        if (stage === 'done') {
+            return 'Jornada encerrada';
+        }
+
+        return 'Fase atual';
+    }
+
+    function getQuickCalendarProviderLabel(provider) {
+
+        if (provider === 'google') {
+            return 'Google Calendar';
+        }
+
+        if (provider === 'outlook') {
+            return 'Outlook';
+        }
+
+        return 'Google + Outlook';
+    }
+
+    function readLoggerGcalAutoOpenState() {
+
+        const raw = parseJson(
+            gmGetValue(LOGGER_GCAL_AUTOPEN_STATE_KEY, '[]'),
+            []
+        );
+
+        if (!Array.isArray(raw)) {
+            return [];
+        }
+
+        return raw
+            .filter(entry => entry && typeof entry === 'object' && typeof entry.token === 'string')
+            .slice(-120);
+    }
+
+    function hasLoggerGcalAutoOpenToken(token) {
+
+        const state = readLoggerGcalAutoOpenState();
+        return state.some(entry => entry.token === token);
+    }
+
+    function markLoggerGcalAutoOpenToken(token, status) {
+
+        const state = readLoggerGcalAutoOpenState();
+        state.push({
+            token,
+            status: status === 'accepted' ? 'accepted' : 'dismissed',
+            at: Date.now()
+        });
+
+        gmSetValue(
+            LOGGER_GCAL_AUTOPEN_STATE_KEY,
+            JSON.stringify(state.slice(-120))
+        );
     }
 
     function getLoggerAlarmFiredState(todayKey) {
@@ -3573,6 +3943,94 @@
             };
         };
 
+        const buildAutoGcalMaxMinusLink = () => {
+
+            const leadMinutes = alarmConfig.quickGcalOffsetMinutes;
+            let maxMinute = null;
+            let maxLabel = 'horário máximo';
+
+            if (guidance.stage === 'return' && Number.isFinite(guidance.intervalMax)) {
+                maxMinute = guidance.intervalMax;
+                maxLabel = 'retorno máximo';
+            } else if (guidance.stage === 'interval' && Number.isFinite(guidance.firstExitMax)) {
+                maxMinute = guidance.firstExitMax;
+                maxLabel = 'saída máxima do 1º turno';
+            } else if (guidance.stage === 'exit' && Number.isFinite(guidance.day10WithIntervalMin)) {
+                maxMinute = guidance.day10WithIntervalMin;
+                maxLabel = 'saída de 10h';
+            } else if (Number.isFinite(guidance.day10WithIntervalMax)) {
+                maxMinute = guidance.day10WithIntervalMax;
+                maxLabel = 'saída de 10h + intervalo máximo';
+            } else if (Number.isFinite(guidance.day10h)) {
+                maxMinute = guidance.day10h;
+                maxLabel = 'saída de 10h';
+            }
+
+            if (!Number.isFinite(maxMinute)) {
+                return null;
+            }
+
+            const startMinute = maxMinute - leadMinutes;
+            const title = `Alerta: ${maxLabel} -${leadMinutes}m`;
+            const details = `Início: ${fmtHour(startMinute)} · limite: ${fmtHour(maxMinute)}.`;
+
+            const gcal = buildGoogleCalendarUrl({
+                title,
+                details,
+                startMinute,
+                endMinute: maxMinute,
+                userPath: alarmConfig.gcalUserPath
+            });
+
+            const outlook = buildOutlookCalendarUrl({
+                title,
+                details,
+                startMinute,
+                endMinute: maxMinute
+            });
+
+            if (!gcal && !outlook) {
+                return null;
+            }
+
+            return {
+                gcal,
+                outlook,
+                leadMinutes,
+                startMinute,
+                maxMinute,
+                maxLabel,
+                stage: guidance.stage
+            };
+        };
+
+        const canAutoOpenQuickGcal = autoLink => {
+
+            if (!autoLink || !autoLink.gcal) {
+                return false;
+            }
+
+            if (!alarmConfig.quickGcalAutoOpenEnabled) {
+                return false;
+            }
+
+            if (alarmConfig.quickCalendarProvider === 'outlook') {
+                return false;
+            }
+
+            const desiredStage = alarmConfig.quickGcalAutoOpenStage;
+
+            if (!desiredStage || desiredStage === 'off') {
+                return false;
+            }
+
+            if (desiredStage === 'any') {
+                return ['interval', 'return', 'exit'].includes(autoLink.stage);
+            }
+
+            return autoLink.stage === desiredStage;
+        };
+
         const timeWithCalendarEmojis = (time, gcalUrl, outlookUrl, tone = 'neu') => {
 
             if (!time) {
@@ -3821,8 +4279,28 @@
             : alarmConfig.soundRepeat === 'loop'
                 ? 'som contínuo'
                 : 'som 1x';
+        const quickGcalOffsetOptions = [5, 10, 15]
+            .map(min => `<option value="${min}" ${min === alarmConfig.quickGcalOffsetMinutes ? 'selected' : ''}>-${min} min</option>`)
+            .join('');
+        const quickGcalAutoOpenStageOptions = [
+            { value: 'off', label: 'Desligado' },
+            { value: 'interval', label: 'Intervalo' },
+            { value: 'return', label: 'Retorno' },
+            { value: 'exit', label: 'Saída' },
+            { value: 'any', label: 'Qualquer fase útil' }
+        ]
+            .map(item => `<option value="${item.value}" ${item.value === alarmConfig.quickGcalAutoOpenStage ? 'selected' : ''}>${item.label}</option>`)
+            .join('');
+        const quickCalendarProviderOptions = [
+            { value: 'google', label: 'Somente Google Calendar' },
+            { value: 'outlook', label: 'Somente Outlook' },
+            { value: 'both', label: 'Google + Outlook' }
+        ]
+            .map(item => `<option value="${item.value}" ${item.value === alarmConfig.quickCalendarProvider ? 'selected' : ''}>${item.label}</option>`)
+            .join('');
         const alarmChannelsSummary = `${alarmConfig.channels.sound ? alarmRepeatLabel : 'som off'} · ${alarmConfig.channels.desktop ? 'desktop on' : 'desktop off'}`;
-        const alarmSummary = `${alarmConfig.enabled ? 'Ligado' : 'Desligado'} · ${getLoggerAlarmModeLabel(alarmConfig.mode)} · ${alarmConfig.leadMinutes} min antes · ${alarmChannelsSummary}`;
+        const quickGcalSummary = `botão ${alarmConfig.quickGcalEnabled ? 'on' : 'off'} · ${getQuickCalendarProviderLabel(alarmConfig.quickCalendarProvider)} · -${alarmConfig.quickGcalOffsetMinutes}m · auto ${alarmConfig.quickGcalAutoOpenEnabled ? 'on' : 'off'}`;
+        const alarmSummary = `${alarmConfig.enabled ? 'Ligado' : 'Desligado'} · ${getLoggerAlarmModeLabel(alarmConfig.mode)} · ${alarmConfig.leadMinutes} min antes · ${alarmChannelsSummary} · ${quickGcalSummary}`;
         const alarmSettingsToggleLabel = _loggerAlarmSettingsExpanded ? 'Ocultar' : 'Configurar';
 
         const historyBlock = `
@@ -3953,6 +4431,13 @@
         };
 
         const actionButtonsHtml = buildActionButtons().join('');
+        const autoGcalMaxMinusLink = buildAutoGcalMaxMinusLink();
+        const quickProvider = alarmConfig.quickCalendarProvider;
+        const showQuickGoogle = quickProvider === 'both' || quickProvider === 'google';
+        const showQuickOutlook = quickProvider === 'both' || quickProvider === 'outlook';
+        const autoQuickCalendarButtonsHtml = (alarmConfig.quickGcalEnabled && autoGcalMaxMinusLink)
+            ? `<div style="display:grid;grid-template-columns:${showQuickGoogle && showQuickOutlook ? '1fr 1fr' : '1fr'};gap:6px;margin-top:6px;">${showQuickGoogle && autoGcalMaxMinusLink.gcal ? `<a id="ahg-gcal-max-minus" href="${autoGcalMaxMinusLink.gcal}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(61,220,132,.45); background:rgba(61,220,132,.14); color:#c8ffe2; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">⚡ Google -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}${showQuickOutlook && autoGcalMaxMinusLink.outlook ? `<a id="ahg-outlook-max-minus" href="${autoGcalMaxMinusLink.outlook}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.14); color:#d7e3ff; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">📧 Outlook -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}</div><div style="font-size:10px; color:#9fa7d6; opacity:.82; margin-top:4px; text-align:center;">Início: ${renderClock(autoGcalMaxMinusLink.startMinute)} · limite: ${renderClock(autoGcalMaxMinusLink.maxMinute)} · ${autoGcalMaxMinusLink.maxLabel}</div>`
+            : '';
 
         const criticalNotes = [
             !hasMirrorData ? 'Mirror pendente: totais podem divergir.' : null,
@@ -3984,6 +4469,8 @@
                 <div style="display:grid; gap:2px;">
                     ${actionButtonsHtml}
                 </div>
+
+                ${autoQuickCalendarButtonsHtml}
 
                 ${notesHtml ? `<div style="margin-top:6px;">${notesHtml}</div>` : ''}
 
@@ -4043,6 +4530,27 @@
                                 <label for="ahg-alarm-gcal" style="font-size:10px; opacity:.78;">Google Calendar</label>
                                 <input id="ahg-alarm-gcal" type="text" placeholder="0 ou 1" value="${escapeHtml(alarmConfig.gcalUserPath)}" style="font-size:10px; background:#16162a; color:#dde; border:1px solid rgba(255,255,255,.2); border-radius:6px; padding:3px 6px; flex:1; max-width:120px;">
                             </div>
+                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input id="ahg-gcal-quick-enabled" type="checkbox" ${alarmConfig.quickGcalEnabled ? 'checked' : ''}>
+                                <span>Mostrar botão rápido Google Calendar</span>
+                            </label>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                                <label for="ahg-calendar-provider" class="form-label">Botão rápido</label>
+                                <select id="ahg-calendar-provider" class="form-select">${quickCalendarProviderOptions}</select>
+                            </div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                                <label for="ahg-gcal-offset" class="form-label">Offset do botão</label>
+                                <select id="ahg-gcal-offset" class="form-select">${quickGcalOffsetOptions}</select>
+                            </div>
+                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input id="ahg-gcal-auto-open" type="checkbox" ${alarmConfig.quickGcalAutoOpenEnabled ? 'checked' : ''}>
+                                <span>Abrir automaticamente (com confirmação)</span>
+                            </label>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+                                <label for="ahg-gcal-auto-stage" class="form-label">Fase para autoabrir</label>
+                                <select id="ahg-gcal-auto-stage" class="form-select" ${alarmConfig.quickGcalAutoOpenEnabled ? '' : 'disabled'}>${quickGcalAutoOpenStageOptions}</select>
+                            </div>
+                            <div style="font-size:10px; color:#9fa7d6; opacity:.78;">Quando a fase escolhida for detectada, o script pede confirmação e abre o evento uma única vez por detecção.</div>
                             <button id="ahg-alarm-test" style="margin-top:2px; width:100%; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.12); color:#d7e3ff; border-radius:6px; padding:5px 6px; cursor:pointer; font-size:10px; font-weight:700;">Testar alarme</button>
                         </div>` : ''}
                     </div>
@@ -4080,6 +4588,45 @@
                     opened.opener = null;
                 }
             });
+
+        document.getElementById('ahg-gcal-max-minus')
+            ?.addEventListener('click', () => {
+
+                showLoggerToast(`Abrindo Google Calendar com evento em máximo -${autoGcalMaxMinusLink?.leadMinutes || alarmConfig.quickGcalOffsetMinutes}m.`);
+            });
+
+        document.getElementById('ahg-outlook-max-minus')
+            ?.addEventListener('click', () => {
+
+                showLoggerToast(`Abrindo Outlook com evento em máximo -${autoGcalMaxMinusLink?.leadMinutes || alarmConfig.quickGcalOffsetMinutes}m.`);
+            });
+
+        if (canAutoOpenQuickGcal(autoGcalMaxMinusLink)) {
+
+            const autoToken = `${todayKey}:${autoGcalMaxMinusLink.stage}:${alarmConfig.quickGcalAutoOpenStage}:${autoGcalMaxMinusLink.maxMinute}:${autoGcalMaxMinusLink.leadMinutes}`;
+
+            if (!hasLoggerGcalAutoOpenToken(autoToken)) {
+
+                const stageLabel = getGuidanceStageLabel(autoGcalMaxMinusLink.stage);
+                const shouldOpen = window.confirm(
+                    `Fase detectada: ${stageLabel}.\n\nAbrir evento no Google Calendar para ${renderClock(autoGcalMaxMinusLink.startMinute)} (máximo -${autoGcalMaxMinusLink.leadMinutes}m)?`
+                );
+
+                if (shouldOpen) {
+                    const opened = window.open(autoGcalMaxMinusLink.gcal, '_blank', 'noopener,noreferrer');
+
+                    if (opened) {
+                        opened.opener = null;
+                    }
+
+                    markLoggerGcalAutoOpenToken(autoToken, 'accepted');
+                    showLoggerToast(`Evento aberto automaticamente para ${renderClock(autoGcalMaxMinusLink.startMinute)}.`);
+                } else {
+                    markLoggerGcalAutoOpenToken(autoToken, 'dismissed');
+                    showLoggerToast('Autoabertura cancelada nesta detecção.');
+                }
+            }
+        }
 
         const tryAddHistoryPunch = () => {
 
@@ -4277,6 +4824,53 @@
                 } else {
                     showLoggerToast(`Google Calendar: conta ${gcalUserPath}`);
                 }
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-gcal-quick-enabled')
+            ?.addEventListener('change', ev => {
+
+                patchLoggerAlarmConfig({
+                    quickGcalEnabled: Boolean(ev.target?.checked)
+                });
+
+                showLoggerToast(`Botão rápido Google Calendar ${ev.target?.checked ? 'ligado' : 'desligado'}.`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-calendar-provider')
+            ?.addEventListener('change', ev => {
+
+                const provider = String(ev.target?.value || 'both');
+                patchLoggerAlarmConfig({ quickCalendarProvider: provider });
+                showLoggerToast(`Botão rápido: ${getQuickCalendarProviderLabel(provider)}.`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-gcal-offset')
+            ?.addEventListener('change', ev => {
+
+                const offset = Number(ev.target?.value || 10);
+                patchLoggerAlarmConfig({ quickGcalOffsetMinutes: offset });
+                showLoggerToast(`Offset do Google Calendar: -${offset} min.`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-gcal-auto-open')
+            ?.addEventListener('change', ev => {
+
+                const enabled = Boolean(ev.target?.checked);
+                patchLoggerAlarmConfig({ quickGcalAutoOpenEnabled: enabled });
+                showLoggerToast(`Autoabertura ${enabled ? 'ligada' : 'desligada'} (com confirmação).`);
+                renderUILogger();
+            });
+
+        document.getElementById('ahg-gcal-auto-stage')
+            ?.addEventListener('change', ev => {
+
+                const stage = String(ev.target?.value || 'off');
+                patchLoggerAlarmConfig({ quickGcalAutoOpenStage: stage });
+                showLoggerToast(`Fase de autoabertura: ${stage === 'any' ? 'qualquer fase útil' : getGuidanceStageLabel(stage)}.`);
                 renderUILogger();
             });
 

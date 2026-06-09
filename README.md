@@ -46,6 +46,16 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 - Carregar ahgora-panel.user.js.
 - Acessar mirror/app Ahgora e validar carregamento do painel.
 
+## Calendario rapido (Google e Outlook)
+- No painel do logger, os botoes rapidos criam evento com inicio em `horario maximo - offset` e fim no horario maximo calculado para a fase atual.
+- Em `Detalhes > Alarmes > Configurar`, voce pode:
+	- ligar/desligar os botoes rapidos de calendario;
+	- escolher o provedor do botao rapido (`Somente Google Calendar`, `Somente Outlook` ou `Google + Outlook`);
+	- ajustar o offset do evento rapido (`-5`, `-10` ou `-15` minutos);
+	- ligar autoabertura por fase (`Intervalo`, `Retorno`, `Saida` ou `Qualquer fase util`) com confirmacao.
+- A autoabertura pede confirmacao e executa apenas uma vez por deteccao da fase/horario, evitando popups repetidos.
+- A autoabertura automatica funciona para Google Calendar quando o provedor selecionado inclui Google.
+
 ## Privacidade
 - Dados processados localmente no navegador.
 - Sem APIs externas para cálculo operacional.
