@@ -1005,9 +1005,13 @@
                 )
                 || possuiBatidas;
 
+            const dateKey = formatDateKey(data);
+            const localOverrides = !isFuture ? getLocalDayPunchOverrides(dateKey) : null;
+            const displayBatidas = localOverrides || batidas;
+
             const trabalhado =
-                batidas.length > 0
-                    ? calcularTrabalhado(batidas)
+                displayBatidas.length > 0
+                    ? calcularTrabalhado(displayBatidas)
                     : 0;
 
             const saldo =
@@ -1024,7 +1028,7 @@
             let violationDiv =
                 day.querySelector('.ahg-day-violations');
 
-            const violations = getDayRuleViolations({ batidas, trabalhado });
+            const violations = getDayRuleViolations({ batidas: displayBatidas, trabalhado });
 
             if (trabalhado > 0) {
 
@@ -1082,8 +1086,41 @@
                 }
             }
 
+            // Pencil edit button — shown on hover for all non-future business days
+            if (!isFuture && isBusinessDay) {
+
+                let editBtn = day.querySelector('.ahg-day-edit-btn');
+
+                if (!editBtn) {
+                    editBtn = document.createElement('button');
+                    editBtn.className = 'ahg-day-edit-btn';
+                    day.appendChild(editBtn);
+                }
+
+                editBtn.textContent = '✏';
+                editBtn.title = localOverrides
+                    ? `Batidas ajustadas (${displayBatidas.length}) — clique para editar`
+                    : `Editar batidas (${batidas.length} no mirror)`;
+                editBtn.classList.toggle('has-overrides', Boolean(localOverrides));
+
+                editBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    openPunchEditor({
+                        dateKey,
+                        dateLabel: formatDayMonth(data),
+                        mirrorPunches: [...batidas]
+                    }, e.target);
+                };
+
+            } else {
+
+                const editBtn = day.querySelector('.ahg-day-edit-btn');
+                if (editBtn) editBtn.remove();
+            }
+
             resultado.push({
                 data,
+                dateKey,
                 isToday,
                 isFuture,
                 isHoliday,
@@ -2208,6 +2245,142 @@
         .toggle-btn:hover{
             background:rgba(122,108,255,.18);
         }
+
+        /* ── Day punch-edit button ── */
+        .ahg-day-edit-btn{
+            position:absolute;
+            top:35px;
+            left:50%;
+            transform:translateX(-50%);
+            background:transparent;
+            border:1px solid transparent;
+            color:var(--primary);
+            font-size:9px;
+            cursor:pointer;
+            z-index:12;
+            opacity:0;
+            padding:1px 4px;
+            line-height:1;
+            border-radius:3px;
+            transition:opacity .15s;
+            pointer-events:auto;
+            white-space:nowrap;
+        }
+        .v-calendar-weekly__day:hover .ahg-day-edit-btn{
+            opacity:.5;
+        }
+        .ahg-day-edit-btn:hover{
+            opacity:1!important;
+            background:rgba(122,108,255,.15);
+            border-color:rgba(122,108,255,.4);
+        }
+        .ahg-day-edit-btn.has-overrides{
+            opacity:.85;
+            color:#ffd08a;
+            border-color:rgba(255,165,0,.35);
+            background:rgba(255,165,0,.08);
+        }
+
+        /* ── Punch Editor Panel ── */
+        #ahg-punch-editor{
+            position:fixed;
+            z-index:999997;
+            background:var(--bg-card);
+            border:1px solid var(--border);
+            border-radius:var(--radius-lg);
+            min-width:230px;
+            max-width:270px;
+            font-family:'Segoe UI',sans-serif;
+            color:var(--text-main);
+            box-shadow:0 8px 24px rgba(0,0,0,.6);
+        }
+        #ahg-punch-editor.is-pinned{
+            border-color:var(--primary);
+            box-shadow:0 8px 24px rgba(0,0,0,.6),0 0 0 2px rgba(122,108,255,.2);
+        }
+        .ahg-pe-hdr{
+            color:var(--text-label);
+            font-weight:700;
+            font-size:11px;
+            letter-spacing:.5px;
+            text-transform:uppercase;
+            padding:8px 10px;
+            border-radius:var(--radius-lg) var(--radius-lg) 0 0;
+            display:flex;
+            align-items:center;
+            gap:5px;
+            cursor:grab;
+            border-bottom:1px solid var(--border);
+            user-select:none;
+        }
+        .ahg-pe-body{
+            padding:8px 10px;
+            display:flex;
+            flex-direction:column;
+            gap:4px;
+        }
+        .ahg-pe-punch{
+            display:flex;
+            align-items:center;
+            gap:4px;
+            font-size:12px;
+            padding:2px 0;
+        }
+        .ahg-pe-punch-time{
+            font-weight:700;
+            min-width:36px;
+        }
+        .ahg-pe-punch-src{
+            font-size:9px;
+            opacity:.45;
+            flex:1;
+        }
+        .ahg-pe-totals{
+            display:grid;
+            grid-template-columns:1fr 1fr;
+            gap:4px;
+            padding:6px 0 0;
+            border-top:1px solid var(--border);
+            margin-top:2px;
+        }
+        .ahg-pe-total-item{
+            text-align:center;
+            padding:4px;
+            border-radius:var(--radius);
+            background:rgba(255,255,255,.03);
+        }
+        .ahg-pe-total-lbl{
+            font-size:9px;
+            color:var(--text-label);
+            text-transform:uppercase;
+            letter-spacing:.3px;
+        }
+        .ahg-pe-total-val{
+            font-size:13px;
+            font-weight:700;
+            margin-top:1px;
+        }
+        .ahg-pe-add-row{
+            display:flex;
+            gap:4px;
+            margin-top:2px;
+        }
+        .ahg-pe-add-row input{
+            flex:1;
+            font-size:12px;
+            background:var(--bg-input);
+            color:var(--text-main);
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+            padding:4px 6px;
+            font-family:inherit;
+            min-width:0;
+        }
+        .ahg-pe-add-row input:focus{
+            outline:none;
+            border-color:var(--primary);
+            box-shadow:0 0 0 2px rgba(122,108,255,.1);
+        }
         `;
 
         document.head.appendChild(style);
@@ -2891,6 +3064,337 @@
     }
 
     /* =========================================================
+       PUNCH EDITOR — CALENDAR DAY
+    ========================================================= */
+
+    function getPunchHint(working, idx) {
+
+        if (idx === 0) return null;
+
+        const t = toMin(working[idx]);
+        if (t === null) return null;
+
+        if (idx === 1 && working[0]) {
+
+            const e = toMin(working[0]);
+            if (e === null) return null;
+            const min = e + CONFIG.MIN_TURNO_COM_INTERVALO;
+            const max = e + CONFIG.MAX_HORAS_TURNO;
+
+            if (t < min) return { level: 'error', text: `Turno < 2h — mínimo ${fmtHour(min)}` };
+            if (t > max) return { level: 'warn',  text: `Turno > 6h — máximo ${fmtHour(max)}` };
+            return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
+        }
+
+        if (idx === 2 && working[1]) {
+
+            const s1 = toMin(working[1]);
+            if (s1 === null) return null;
+            const min = s1 + CONFIG.INTERVALO_MINIMO;
+            const max = s1 + CONFIG.INTERVALO_MAXIMO;
+
+            if (t < min) return { level: 'error', text: `Intervalo < 30min — retornar após ${fmtHour(min)}` };
+            if (t > max) return { level: 'warn',  text: `Intervalo > 3h30 — máximo ${fmtHour(max)}` };
+            return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
+        }
+
+        if (idx === 3 && working.length >= 3) {
+
+            const e1 = toMin(working[0]);
+            const s1 = toMin(working[1]);
+            const e2 = toMin(working[2]);
+            if (e1 === null || s1 === null || e2 === null) return null;
+
+            const worked1 = s1 - e1;
+            const h8  = e2 + (CONFIG.CARGA_DIARIA  - worked1);
+            const h10 = e2 + (CONFIG.MAX_HORAS_DIA - worked1);
+
+            if (t < h8)  return { level: 'warn',  text: `Abaixo de 8h — ideal ${fmtHour(h8)}` };
+            if (t > h10) return { level: 'error', text: `Acima de 10h — máximo ${fmtHour(h10)}` };
+            return { level: 'ok', hint: `8h: ${fmtHour(h8)} · 10h: ${fmtHour(h10)}` };
+        }
+
+        return null;
+    }
+
+    function openPunchEditor(dayInfo, targetEl) {
+
+        const wasPinned = _peState ? _peState.pinned : false;
+
+        _peEditingIdx = null;
+
+        _peState = {
+            dateKey: dayInfo.dateKey,
+            dateLabel: dayInfo.dateLabel,
+            mirrorPunches: dayInfo.mirrorPunches || [],
+            working: (() => {
+                const ov = getLocalDayPunchOverrides(dayInfo.dateKey);
+                return ov ? [...ov] : [...(dayInfo.mirrorPunches || [])];
+            })(),
+            pinned: wasPinned
+        };
+
+        let panel = document.getElementById('ahg-punch-editor');
+
+        if (!panel) {
+
+            panel = document.createElement('div');
+            panel.id = 'ahg-punch-editor';
+            document.body.appendChild(panel);
+
+            // Initial position (centered top)
+            panel.style.top = '80px';
+            panel.style.left = '50%';
+            panel.style.transform = 'translateX(-50%)';
+
+            if (!_peDragListenersAdded) {
+
+                _peDragListenersAdded = true;
+
+                document.addEventListener('mousemove', e => {
+
+                    if (!_peDrag.active) return;
+
+                    const p = document.getElementById('ahg-punch-editor');
+
+                    if (!p) { _peDrag.active = false; return; }
+
+                    p.style.left = `${e.clientX - _peDrag.ox}px`;
+                    p.style.top = `${e.clientY - _peDrag.oy}px`;
+                });
+
+                document.addEventListener('mouseup', () => {
+                    _peDrag.active = false;
+                });
+            }
+
+            panel.addEventListener('mousedown', e => {
+
+                if (!e.target.closest('.ahg-pe-hdr')) return;
+
+                _peDrag.active = true;
+                panel.style.transform = '';
+
+                const r = panel.getBoundingClientRect();
+                _peDrag.ox = e.clientX - r.left;
+                _peDrag.oy = e.clientY - r.top;
+            });
+        }
+
+        // When not pinned, position panel near the clicked day cell
+        if (!wasPinned && targetEl) {
+
+            panel.style.transform = '';
+
+            const dayEl = targetEl.closest('.v-calendar-weekly__day') || targetEl;
+            const r = dayEl.getBoundingClientRect();
+            const panelW = 270;
+            const leftCandidate = r.right + 10;
+            const left = leftCandidate + panelW + 10 > window.innerWidth
+                ? Math.max(r.left - panelW - 10, 10)
+                : leftCandidate;
+
+            panel.style.left = `${left}px`;
+            panel.style.top = `${Math.max(r.top, 10)}px`;
+        }
+
+        renderPunchEditor();
+    }
+
+    function renderPunchEditor() {
+
+        const panel = document.getElementById('ahg-punch-editor');
+
+        if (!panel || !_peState) return;
+
+        const { dateKey, dateLabel, mirrorPunches, working, pinned } = _peState;
+        const hasOverrides = Boolean(getLocalDayPunchOverrides(dateKey));
+        const mirrorSet = new Set(mirrorPunches);
+        const trabalhado = working.length >= 2 ? calcularTrabalhado(working) : 0;
+        const saldo = trabalhado - CONFIG.CARGA_DIARIA;
+        const violations = getDayRuleViolations({ batidas: working, trabalhado });
+
+        const punchRows = working.length
+            ? working.map((t, i) => {
+
+                const isMirror = mirrorSet.has(t);
+                const isEditing = _peEditingIdx === i && !isMirror;
+                const hint = getPunchHint(working, i);
+
+                const hintColor = hint
+                    ? (hint.level === 'error' ? '#ff8888' : hint.level === 'warn' ? '#ffd08a' : '#9ef0bf')
+                    : '';
+                const hintHtml = hint
+                    ? `<div style="font-size:9px;padding:0 2px 4px 6px;color:${hintColor};${hint.level === 'ok' ? 'opacity:.55;' : ''}">${hint.level === 'ok' ? '✓' : '⚠'} ${hint.text || hint.hint}</div>`
+                    : '';
+                const rowBorder = hint && hint.level === 'error'
+                    ? 'border-left:2px solid #ff8888;padding-left:4px;'
+                    : hint && hint.level === 'warn'
+                        ? 'border-left:2px solid #ffd08a;padding-left:4px;'
+                        : '';
+
+                if (isEditing) {
+                    return `<div class="ahg-pe-punch" style="${rowBorder}">
+                        <input class="ahg-pe-inline-input" data-idx="${i}" value="${escapeHtml(t)}" maxlength="5" placeholder="HH:MM" style="width:54px;font-size:12px;font-weight:700;background:var(--bg-input);color:var(--text-main);border:1px solid var(--primary);border-radius:var(--radius);padding:2px 5px;font-family:inherit;">
+                        <button class="btn-icon btn-success ahg-pe-confirm" data-idx="${i}" title="Confirmar (Enter)" style="padding:1px 5px;font-size:12px;line-height:1;">✓</button>
+                        <button class="btn-icon ahg-pe-cancel" data-idx="${i}" title="Cancelar (Esc)" style="padding:1px 5px;font-size:12px;line-height:1;">✗</button>
+                    </div>${hintHtml}`;
+                }
+
+                const timeSpan = isMirror
+                    ? `<span class="ahg-pe-punch-time">${escapeHtml(t)}</span>`
+                    : `<span class="ahg-pe-punch-time ahg-pe-edit-time" data-idx="${i}" title="Clique para editar" style="cursor:pointer;text-decoration:underline dotted rgba(122,108,255,.5);">${escapeHtml(t)}</span>`;
+
+                return `<div class="ahg-pe-punch" style="${rowBorder}">
+                    ${timeSpan}
+                    <span class="ahg-pe-punch-src">${isMirror ? '🔒' : '📍'} ${isMirror ? 'mirror' : 'local'}</span>
+                    ${!isMirror ? `<button class="btn-icon ahg-pe-edit-inline" data-idx="${i}" title="Editar" style="padding:1px 4px;font-size:10px;line-height:1;opacity:.65;border-color:rgba(122,108,255,.3);">✏</button>` : ''}
+                    <button class="btn-icon btn-danger ahg-pe-remove" data-idx="${i}" title="Remover" style="padding:1px 6px;font-size:13px;line-height:1;">×</button>
+                </div>${hintHtml}`;
+            }).join('')
+            : '<div style="font-size:10px;opacity:.45;padding:4px 0;">Nenhuma batida</div>';
+
+        const violationsHtml = violations.length
+            ? `<div style="font-size:9px;color:#ffd08a;margin-top:2px;">${violations.map(v => `⚠ ${v.label}`).join(' · ')}</div>`
+            : '';
+
+        panel.className = pinned ? 'is-pinned' : '';
+
+        panel.innerHTML = `
+            <div class="ahg-pe-hdr">
+                ✏ ${escapeHtml(dateLabel)}
+                <span style="flex:1"></span>
+                <button id="ahg-pe-pin" class="btn-icon${pinned ? ' btn-success' : ''}" title="${pinned ? 'Desprender' : 'Fixar posição'}">📌</button>
+                <button id="ahg-pe-close" class="btn-icon btn-danger" title="Fechar" style="margin-left:2px;">×</button>
+            </div>
+            <div class="ahg-pe-body">
+                <div style="font-size:9px;color:var(--text-label);margin-bottom:2px;">
+                    ${mirrorPunches.length} no mirror${hasOverrides ? ' · ✏ ajustado localmente' : ''}
+                </div>
+                ${punchRows}
+                <div class="ahg-pe-add-row">
+                    <input id="ahg-pe-add-input" type="text" placeholder="HH:MM" maxlength="5">
+                    <button id="ahg-pe-add-btn" class="btn btn-success" style="padding:4px 10px;font-size:14px;line-height:1;">+</button>
+                </div>
+                <div class="ahg-pe-totals">
+                    <div class="ahg-pe-total-item">
+                        <div class="ahg-pe-total-lbl">Trabalhado</div>
+                        <div class="ahg-pe-total-val" style="color:${saldo >= 0 ? '#3ddc84' : '#ff6b6b'};">${fmtMin(trabalhado)}</div>
+                    </div>
+                    <div class="ahg-pe-total-item">
+                        <div class="ahg-pe-total-lbl">Saldo</div>
+                        <div class="ahg-pe-total-val" style="color:${saldo >= 0 ? '#3ddc84' : '#ff6b6b'};">${fmtMin(saldo)}</div>
+                    </div>
+                </div>
+                ${violationsHtml}
+                <div style="display:flex;gap:4px;margin-top:6px;">
+                    <button id="ahg-pe-save" class="btn btn-primary" style="flex:1;font-size:10px;">💾 Salvar</button>
+                    ${hasOverrides ? `<button id="ahg-pe-reset" class="btn btn-danger" title="Resetar para dados do mirror" style="font-size:10px;">↺ Reset</button>` : ''}
+                </div>
+            </div>
+        `;
+
+        document.getElementById('ahg-pe-close')?.addEventListener('click', () => {
+            panel.remove();
+            _peState = null;
+        });
+
+        document.getElementById('ahg-pe-pin')?.addEventListener('click', () => {
+            _peState.pinned = !_peState.pinned;
+            renderPunchEditor();
+        });
+
+        document.getElementById('ahg-pe-add-btn')?.addEventListener('click', () => {
+
+            const inp = document.getElementById('ahg-pe-add-input');
+            const time = normalizePunchTime(inp?.value || '');
+
+            if (!time) { showLoggerToast('Horário inválido (HH:MM).'); return; }
+
+            if (_peState.working.includes(time)) {
+                showLoggerToast(`Batida ${time} já existe.`);
+                return;
+            }
+
+            _peState.working = [..._peState.working, time]
+                .sort((a, b) => toMin(a) - toMin(b));
+
+            renderPunchEditor();
+
+            document.getElementById('ahg-pe-add-input')?.focus();
+        });
+
+        document.getElementById('ahg-pe-add-input')?.addEventListener('keydown', e => {
+            if (e.key === 'Enter') document.getElementById('ahg-pe-add-btn')?.click();
+        });
+
+        document.getElementById('ahg-pe-save')?.addEventListener('click', () => {
+            setLocalDayPunchOverrides(_peState.dateKey, _peState.working);
+            showLoggerToast(`Batidas de ${_peState.dateLabel} salvas.`);
+            render();
+            renderPunchEditor();
+        });
+
+        document.getElementById('ahg-pe-reset')?.addEventListener('click', () => {
+            clearLocalDayPunchOverrides(_peState.dateKey);
+            _peState.working = [..._peState.mirrorPunches];
+            showLoggerToast(`${_peState.dateLabel}: resetado para dados do mirror.`);
+            render();
+            renderPunchEditor();
+        });
+
+        const startInlineEdit = (idx) => {
+            _peEditingIdx = idx;
+            renderPunchEditor();
+            setTimeout(() => {
+                const inp = panel.querySelector(`.ahg-pe-inline-input[data-idx="${idx}"]`);
+                if (inp) { inp.focus(); inp.select(); }
+            }, 0);
+        };
+
+        const confirmInlineEdit = (idx) => {
+            const inp = panel.querySelector(`.ahg-pe-inline-input[data-idx="${idx}"]`);
+            const newTime = normalizePunchTime(inp?.value || '');
+            if (!newTime) { showLoggerToast('Horário inválido (HH:MM).'); return; }
+            const others = _peState.working.filter((_, i) => i !== idx);
+            if (others.includes(newTime)) { showLoggerToast(`Batida ${newTime} já existe.`); return; }
+            _peState.working[idx] = newTime;
+            _peState.working = [..._peState.working].sort((a, b) => toMin(a) - toMin(b));
+            _peEditingIdx = null;
+            renderPunchEditor();
+        };
+
+        panel.querySelectorAll('.ahg-pe-edit-time, .ahg-pe-edit-inline').forEach(el => {
+            el.addEventListener('click', () => startInlineEdit(Number(el.dataset.idx)));
+        });
+
+        panel.querySelectorAll('.ahg-pe-confirm').forEach(btn => {
+            btn.addEventListener('click', () => confirmInlineEdit(Number(btn.dataset.idx)));
+        });
+
+        panel.querySelectorAll('.ahg-pe-cancel').forEach(btn => {
+            btn.addEventListener('click', () => { _peEditingIdx = null; renderPunchEditor(); });
+        });
+
+        panel.querySelectorAll('.ahg-pe-inline-input').forEach(inp => {
+            inp.addEventListener('keydown', e => {
+                const idx = Number(inp.dataset.idx);
+                if (e.key === 'Enter')  { e.preventDefault(); confirmInlineEdit(idx); }
+                if (e.key === 'Escape') { _peEditingIdx = null; renderPunchEditor(); }
+            });
+        });
+
+        panel.querySelectorAll('.ahg-pe-remove').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = Number(btn.dataset.idx);
+                if (_peEditingIdx === idx) _peEditingIdx = null;
+                _peState.working = _peState.working.filter((_, i) => i !== idx);
+                renderPunchEditor();
+            });
+        });
+    }
+
+    /* =========================================================
        LOGGER - NOVABATIDAONLINE
     ========================================================= */
 
@@ -2906,6 +3410,53 @@
         } catch (_) {
             return fallback;
         }
+    }
+
+    /* ─── Local per-day punch overrides ─── */
+
+    const LOCAL_DAY_PUNCHES_KEY = 'ahgora_local_day_punches_v1';
+
+    let _peState = null;
+    let _peDrag = { active: false, ox: 0, oy: 0 };
+    let _peDragListenersAdded = false;
+    let _peEditingIdx = null;
+
+    function getLocalDayPunchOverrides(dateKey) {
+
+        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
+        const raw = store[dateKey];
+
+        if (!Array.isArray(raw)) {
+            return null;
+        }
+
+        const valid = raw.map(normalizePunchTime).filter(Boolean);
+
+        return valid.length ? valid : null;
+    }
+
+    function setLocalDayPunchOverrides(dateKey, punches) {
+
+        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
+        const valid = (punches || [])
+            .map(normalizePunchTime)
+            .filter(Boolean)
+            .sort((a, b) => toMin(a) - toMin(b));
+
+        if (valid.length === 0) {
+            delete store[dateKey];
+        } else {
+            store[dateKey] = valid;
+        }
+
+        gmSetValue(LOCAL_DAY_PUNCHES_KEY, JSON.stringify(store));
+    }
+
+    function clearLocalDayPunchOverrides(dateKey) {
+
+        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
+        delete store[dateKey];
+        gmSetValue(LOCAL_DAY_PUNCHES_KEY, JSON.stringify(store));
     }
 
     function showLoggerToast(message) {
