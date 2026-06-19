@@ -1,0 +1,19 @@
+{
+  "servers": {
+    "tampermonkey": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "tampermonkey-mcp@latest"
+      ]
+    },
+    "chrome-dev-tools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest"
+      ]
+    }
+  },
+	"inputs": []
+}
