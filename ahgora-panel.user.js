@@ -40,10 +40,19 @@
         UPDATE_INTERVAL: 1 * 1000,
 
         // Notificações
-        NOTIFICAR_ANTES: 5,
+        NOTIFICAR_MINUTOS: [
+            10,
+            5,
+            4,
+            3,
+            2,
+            1
+        ],
 
         AUTO_REFRESH_MINUTES: 15,
         URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
+        BATIDA_URL: 'https://app.ahgora.com.br/novabatidaonline/'
+
     };
 
     let NEXT_REFRESH = Date.now() + (CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
@@ -215,7 +224,7 @@
        NOTIFICAÇÕES
     ========================================================= */
 
-    const _fired = new Set();
+    const _fired = new Map();
 
     async function pedirNotif() {
 
@@ -230,13 +239,29 @@
         }
     }
 
-    function notif(id, title, body, urgente = false) {
+    function notif(
+        id,
+        title,
+        body,
+        urgente = false,
+        ttlMs = 60 * 1000
+    ) {
+        const agora = Date.now();
 
-        if (_fired.has(id)) {
+        const ultima =
+            _fired.get(id);
+
+        if (
+            ultima &&
+            (agora - ultima) < ttlMs
+        ) {
             return;
         }
 
-        _fired.add(id);
+        _fired.set(
+            id,
+            agora
+        );
 
         if (
             !('Notification' in window) ||
@@ -247,11 +272,36 @@
 
         try {
 
-            new Notification(title, {
-                body,
-                requireInteraction: urgente,
-                tag: id
-            });
+            const url = getBatidaUrl();
+
+            const n =
+                new Notification(
+                    title,
+                    {
+                        body:
+                            url
+                                ? `${body}\nClique para registrar o ponto.`
+                                : body,
+                        requireInteraction:
+                            urgente,
+                        tag:
+                            `${id}-${agora}`
+                    }
+                );
+
+            if (url) {
+
+                n.onclick = () => {
+
+                    window.open(
+                        url,
+                        '_blank',
+                        'noopener'
+                    );
+
+                    n.close();
+                };
+            }
 
         } catch (e) {
 
@@ -263,31 +313,55 @@
 
         const now = nowMin();
 
-        const A = CONFIG.NOTIFICAR_ANTES;
+        const chk = (
+            h,
+            id,
+            tit,
+            msg,
+            urgente
+        ) => {
 
-        const chk = (h, id, tit, msg, urgente) => {
-
-            if (h === null) return;
-
-            const f = h - now;
-
-            if (f >= A - 1 && f <= A + 2) {
-
-                notif(
-                    `${id}-av`,
-                    `⏰ ${tit}`,
-                    `${msg}\nFaltam ~${A}min`,
-                    urgente
-                );
+            if (h === null) {
+                return;
             }
 
-            if (f >= -1 && f <= 1) {
+            const faltam =
+                h - now;
+
+            CONFIG.NOTIFICAR_MINUTOS
+                .forEach(min => {
+
+                    if (faltam !== min) {
+                        return;
+                    }
+
+                    const chave =
+                        `${id}-${min}-${new Date()
+                            .toISOString()
+                            .slice(0, 16)}`;
+
+                    notif(
+                        chave,
+                        `⏰ ${tit}`,
+                        `${msg}\nFaltam ${min} minuto${min > 1 ? 's' : ''}.`,
+                        urgente,
+                        0
+                    );
+                });
+
+            if (faltam === 0) {
+
+                const chave =
+                    `${id}-atingido-${new Date()
+                        .toISOString()
+                        .slice(0, 16)}`;
 
                 notif(
-                    `${id}-ok`,
+                    chave,
                     `✅ ${tit}`,
                     msg,
-                    urgente
+                    urgente,
+                    0
                 );
             }
         };
@@ -406,6 +480,7 @@
                     : 0;
 
             resultado.push({
+                elemento: day,
                 data,
                 isToday,
                 isFuture,
@@ -923,6 +998,26 @@
         #ahg-details *::-webkit-scrollbar-track{
             background:transparent;
         }
+
+        .v-calendar-weekly__day {
+    position: relative;
+}
+
+.ahg-total-dia {
+    position: absolute;
+    bottom: 2px;
+    right: 4px;
+
+    font-size: 14px;
+    font-weight: 700;
+
+    color: #78788f;
+
+    padding: 1px 4px;
+    border-radius: 6px;
+
+    pointer-events: none;
+}
         `;
 
         document.head.appendChild(style);
@@ -1291,6 +1386,8 @@
                 abrirDetalhes(r);
             });
 
+            renderTotaisCalendario(r);
+
         } catch (e) {
 
             console.error(
@@ -1526,6 +1623,67 @@
         };
     }
 
+    function getDefaultDevice() {
+
+        const device =
+            localStorage.getItem(
+                '@batidaOnline/companyCodeDefault'
+            );
+
+        return device?.trim() || null;
+    }
+
+    function getBatidaUrl() {
+
+        const defaultDevice =
+            getDefaultDevice();
+
+        if (!defaultDevice) {
+
+            console.warn(
+                '[AHGORA PANEL] defaultDevice não encontrado'
+            );
+
+            return null;
+        }
+
+        const url =
+            `${CONFIG.BATIDA_URL}?defaultDevice=${encodeURIComponent(defaultDevice)}`;
+
+        return url;
+    }
+
+    function renderTotaisCalendario(r) {
+
+        r.dias.forEach(dia => {
+
+            dia.elemento
+                ?.querySelector('.ahg-total-dia')
+                ?.remove();
+
+            const mostrar =
+                !dia.isToday &&
+                !dia.isFuture &&
+                dia.batidas.length > 0 &&
+                dia.batidas.length % 2 === 0;
+
+            if (!mostrar) {
+                return;
+            }
+
+            const total =
+                document.createElement('div');
+
+            total.className =
+                'ahg-total-dia';
+
+            total.textContent =
+                fmtMin(dia.trabalhado);
+
+            dia.elemento.appendChild(total);
+        });
+    }
+
     /* =========================================================
        INIT
     ========================================================= */
@@ -1565,7 +1723,73 @@
 
     }, 1000);
 
+    window.ahgTestNotif = function () {
+
+        notif(
+            `teste-${Date.now()}`,
+            '🧪 Teste Ahgora',
+            'Esta é uma notificação de teste.',
+            false,
+            0
+        );
+
+    };
+
+    window.ahgTestBatida = function () {
+
+        const url =
+            getBatidaUrl();
+
+        console.log(
+            '[AHGORA PANEL] TEST URL:',
+            url
+        );
+
+        notif(
+            `batida-${Date.now()}`,
+            '🧪 Teste de Batida',
+            'Clique para abrir a tela de registro de ponto.',
+            true,
+            0
+        );
+    };
+
+    window.ahgTestContagem = function (titulo) {
+
+        [10, 5, 4, 3, 2, 1].forEach(min => {
+
+            setTimeout(() => {
+
+                notif(
+                    `${titulo}-${min}-${Date.now()}`,
+                    `⏰ ${titulo}`,
+                    `Faltam ${min} minutos`,
+                    min <= 3,
+                    0
+                );
+
+            }, (10 - min) * 1000);
+
+        });
+
+    };
+
     pedirNotif();
+
+    const defaultDevice = getDefaultDevice();
+
+    if (defaultDevice) {
+
+        localStorage.setItem(
+            'ahgDefaultDevice',
+            defaultDevice
+        );
+
+        console.log(
+            '[AHGORA PANEL] defaultDevice:',
+            defaultDevice
+        );
+    }
 
     const IS_TOP = window.top === window;
     if (IS_TOP) {
@@ -1575,17 +1799,6 @@
         );
 
         pedirNotif();
-
-        setTimeout(() => {
-
-            notif(
-                'startup',
-                'Ahgora',
-                'Notificações ativadas.',
-                false
-            );
-
-        }, 3000);
 
         setInterval(() => {
 
