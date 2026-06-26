@@ -40,14 +40,12 @@
         UPDATE_INTERVAL: 1 * 1000,
 
         // Notificações
-        NOTIFICAR_MINUTOS: [
-            10,
-            5,
-            4,
-            3,
-            2,
-            1
-        ],
+        NOTIFICACOES: {
+            h6: [10, 5, 4, 3, 2, 1],
+            h8: [10, 5, 4, 3, 2, 1],
+            h10: [10, 5, 4, 3, 2, 1],
+            ideal: [5, 1]
+        },
 
         AUTO_REFRESH_MINUTES: 15,
         URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
@@ -328,26 +326,28 @@
             const faltam =
                 h - now;
 
-            CONFIG.NOTIFICAR_MINUTOS
-                .forEach(min => {
+            const minutos =
+                CONFIG.NOTIFICACOES[id] ?? [];
 
-                    if (faltam !== min) {
-                        return;
-                    }
+            minutos.forEach(min => {
 
-                    const chave =
-                        `${id}-${min}-${new Date()
-                            .toISOString()
-                            .slice(0, 16)}`;
+                if (faltam !== min) {
+                    return;
+                }
 
-                    notif(
-                        chave,
-                        `⏰ ${tit}`,
-                        `${msg}\nFaltam ${min} minuto${min > 1 ? 's' : ''}.`,
-                        urgente,
-                        0
-                    );
-                });
+                const chave =
+                    `${id}-${min}-${new Date()
+                        .toISOString()
+                        .slice(0, 16)}`;
+
+                notif(
+                    chave,
+                    `⏰ ${tit}`,
+                    `${msg}\nFaltam ${min} minuto${min > 1 ? 's' : ''}.`,
+                    urgente,
+                    0
+                );
+            });
 
             if (faltam === 0) {
 
@@ -368,7 +368,7 @@
 
         chk(
             resumo.h6,
-            '6h',
+            'h6',
             '6h atingidas',
             'Você completou o mínimo de 6h.',
             true
@@ -376,7 +376,7 @@
 
         chk(
             resumo.h8,
-            '8h',
+            'h8',
             'Meta diária',
             'Você completou as 8h.',
             false
@@ -384,7 +384,7 @@
 
         chk(
             resumo.h10,
-            '10h',
+            'h10',
             'Limite diário',
             '⚠ Limite diário atingido.',
             true
@@ -783,8 +783,6 @@
                 '⚠️ Limite diário excedido';
         }
 
-        const trabalhado = dias.trabalhado
-
         return {
             hoje,
             saldoSemana,
@@ -804,7 +802,6 @@
             status,
             retornoMinimo,
             retornoMaximo,
-            trabalhado,
             alerta
         };
     }
@@ -1754,42 +1751,62 @@
         );
     };
 
-    window.ahgTestContagem = function (titulo) {
+    window.ahgTestAlertas = function (
+        tipo = 'h8'
+    ) {
 
-        [10, 5, 4, 3, 2, 1].forEach(min => {
+        const minutos =
+            CONFIG.NOTIFICACOES[tipo] ?? [];
+
+        if (!minutos) {
+            return;
+        }
+
+        minutos.forEach((min, idx) => {
 
             setTimeout(() => {
 
                 notif(
-                    `${titulo}-${min}-${Date.now()}`,
-                    `⏰ ${titulo}`,
-                    `Faltam ${min} minutos`,
+                    `teste-${tipo}-${min}-${Date.now()}`,
+                    `🧪 Teste ${tipo}`,
+                    `Faltam ${min} minuto${min > 1 ? 's' : ''}.`,
                     min <= 3,
                     0
                 );
 
-            }, (10 - min) * 1000);
+            }, idx * 2000);
 
         });
 
+        setTimeout(() => {
+
+            notif(
+                `teste-${tipo}-atingido-${Date.now()}`,
+                `✅ Teste ${tipo}`,
+                'Limite atingido.',
+                true,
+                0
+            );
+
+        }, minutos.length * 2000);
+    };
+
+    window.ahgTestTudo = function () {
+
+        Object.keys(
+            CONFIG.NOTIFICACOES ?? []
+        ).forEach((tipo, idx) => {
+
+            setTimeout(() => {
+
+                ahgTestAlertas(tipo);
+
+            }, idx * 15000);
+
+        });
     };
 
     pedirNotif();
-
-    const defaultDevice = getDefaultDevice();
-
-    if (defaultDevice) {
-
-        localStorage.setItem(
-            'ahgDefaultDevice',
-            defaultDevice
-        );
-
-        console.log(
-            '[AHGORA PANEL] defaultDevice:',
-            defaultDevice
-        );
-    }
 
     const IS_TOP = window.top === window;
     if (IS_TOP) {
