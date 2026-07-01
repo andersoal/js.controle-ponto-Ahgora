@@ -2131,6 +2131,40 @@
        ESTRUTURA
     ========================================================= */
 
+    // Torna um painel arrastável pelo elemento que casa com handleSelector.
+    function makePanelDraggable(panel, handleSelector) {
+
+        let dragging = false;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        panel.addEventListener('mousedown', e => {
+
+            if (!e.target.closest(handleSelector)) {
+                return;
+            }
+
+            dragging = true;
+
+            const rect = panel.getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+        });
+
+        document.addEventListener('mousemove', e => {
+
+            if (!dragging) return;
+
+            panel.style.left = `${e.clientX - offsetX}px`;
+            panel.style.top = `${e.clientY - offsetY}px`;
+            panel.style.bottom = 'auto';
+        });
+
+        document.addEventListener('mouseup', () => {
+            dragging = false;
+        });
+    }
+
     function criarEstrutura() {
 
         if (document.getElementById('ahg-panel')) {
@@ -2139,75 +2173,58 @@
 
         createPrivacyFab('ahg-eye-fab-mirror', '80px', () => render());
 
-        const fab =
-            document.createElement('div');
-
+        const fab = document.createElement('div');
         fab.id = 'ahg-fab';
-
         fab.innerHTML = '⏱';
-
         fab.onclick = () => {
-
-            document.getElementById('ahg-panel')
-                .style.display = '';
-
+            document.getElementById('ahg-panel').style.display = '';
             fab.style.display = 'none';
         };
 
         document.body.appendChild(fab);
 
-        const panel =
-            document.createElement('div');
-
+        const panel = document.createElement('div');
         panel.id = 'ahg-panel';
-
         panel.style.display = 'none';
-
-        panel.innerHTML =
-            `<div class="a-tit">⏱ Carregando...</div>`;
+        panel.innerHTML = `<div class="a-tit">⏱ Carregando...</div>`;
 
         document.body.appendChild(panel);
 
-        let drag = false;
-        let ox = 0;
-        let oy = 0;
-
-        panel.addEventListener('mousedown', e => {
-
-            if (!e.target.closest('.a-tit')) {
-                return;
-            }
-
-            drag = true;
-
-            const r =
-                panel.getBoundingClientRect();
-
-            ox = e.clientX - r.left;
-            oy = e.clientY - r.top;
-        });
-
-        document.addEventListener('mousemove', e => {
-
-            if (!drag) return;
-
-            panel.style.left =
-                `${e.clientX - ox}px`;
-
-            panel.style.top =
-                `${e.clientY - oy}px`;
-
-            panel.style.bottom = 'auto';
-        });
-
-        document.addEventListener('mouseup', () => {
-            drag = false;
-        });
+        makePanelDraggable(panel, '.a-tit');
     }
 
     /* =========================================================
        RENDER
     ========================================================= */
+
+    // Rótulos derivados exibidos nas linhas de status do painel do mirror.
+    function buildPanelLabels(r) {
+
+        const mirrorGuidance = buildPunchGuidance(r.hoje.batidas || [], r.saldoSemana);
+
+        const windowLabel = (min, max) => (min !== null && max !== null)
+            ? `${renderClock(min)} → ${renderClock(max)}`
+            : '--:--';
+
+        const anomalyDaysLabel = r.punchAnomalyDays.length
+            ? r.punchAnomalyDays
+                .slice(0, 4)
+                .map(x => `${formatDayMonth(x.date)} (${x.count})`)
+                .join(' · ')
+            : 'Sem inconsistências recentes';
+
+        const violationDaysSummary = buildViolationDaysSummary(r);
+        const nonComplianceLabel = violationDaysSummary.length
+            ? violationDaysSummary.slice(0, 4).join(' | ')
+            : `Sem violações (intervalo <= ${fmtMin(CONFIG.INTERVALO_MAXIMO)}, turno <= ${fmtMin(CONFIG.MAX_HORAS_TURNO)}, dia <= ${fmtMin(CONFIG.MAX_HORAS_DIA)})`;
+
+        return {
+            day8WindowLabel: windowLabel(mirrorGuidance.day8WithIntervalMin, mirrorGuidance.day8WithIntervalMax),
+            day10WindowLabel: windowLabel(mirrorGuidance.day10WithIntervalMin, mirrorGuidance.day10WithIntervalMax),
+            anomalyDaysLabel,
+            nonComplianceLabel
+        };
+    }
 
     function render() {
 
@@ -2215,41 +2232,34 @@
 
             applyPrivacyState();
 
-            const r =
-                calcularResumo();
+            const resumo = calcularResumo();
 
-            if (!r) {
+            if (!resumo) {
                 return;
             }
 
-            checarNotifs(r);
+            checarNotifs(resumo);
 
-            const mirrorGuidance = buildPunchGuidance(r.hoje.batidas || [], r.saldoSemana);
-            const day8WindowLabel = mirrorGuidance.day8WithIntervalMin !== null && mirrorGuidance.day8WithIntervalMax !== null
-                ? `${renderClock(mirrorGuidance.day8WithIntervalMin)} → ${renderClock(mirrorGuidance.day8WithIntervalMax)}`
-                : '--:--';
-            const day10WindowLabel = mirrorGuidance.day10WithIntervalMin !== null && mirrorGuidance.day10WithIntervalMax !== null
-                ? `${renderClock(mirrorGuidance.day10WithIntervalMin)} → ${renderClock(mirrorGuidance.day10WithIntervalMax)}`
-                : '--:--';
-            const anomalyDaysLabel = r.punchAnomalyDays.length
-                ? r.punchAnomalyDays
-                    .slice(0, 4)
-                    .map(x => `${formatDayMonth(x.date)} (${x.count})`)
-                    .join(' · ')
-                : 'Sem inconsistências recentes';
-            const violationDaysSummary = buildViolationDaysSummary(r);
-            const nonComplianceLabel = violationDaysSummary.length
-                ? violationDaysSummary.slice(0, 4).join(' | ')
-                : `Sem violações (intervalo <= ${fmtMin(CONFIG.INTERVALO_MAXIMO)}, turno <= ${fmtMin(CONFIG.MAX_HORAS_TURNO)}, dia <= ${fmtMin(CONFIG.MAX_HORAS_DIA)})`;
+            const panel = document.getElementById('ahg-panel');
 
-            const p =
-                document.getElementById('ahg-panel');
-
-            if (!p) {
+            if (!panel) {
                 return;
             }
 
-            p.innerHTML = `
+            panel.innerHTML = buildPanelHtml(resumo);
+            bindPanelEvents(panel, resumo);
+
+        } catch (e) {
+            console.error('[AHGORA PANEL]', e);
+        }
+    }
+
+    // Template do painel principal (r = resumo calculado do dia/semana/mês).
+    function buildPanelHtml(r) {
+
+        const { day8WindowLabel, day10WindowLabel, anomalyDaysLabel, nonComplianceLabel } = buildPanelLabels(r);
+
+        return `
             <div class="a-tit">
                 ⏱ Painel Inteligente
                 <span class="ahg-privacy-btn" id="ahg-privacy-toggle" title="Alternar privacidade">👁</span>
@@ -2549,91 +2559,31 @@
             )}
             </div>
             `;
-
-            document.getElementById('ahg-min')
-                ?.addEventListener('click', () => {
-
-                    p.style.display = 'none';
-
-                    document
-                        .getElementById('ahg-fab')
-                        .style.display = 'flex';
-                });
-            document.getElementById('ahg-privacy-toggle')
-                ?.addEventListener('click', () => {
-
-                    togglePrivacyHidden();
-                    render();
-                });
-            document.getElementById('ahg-open-details')?.addEventListener('click', () => {
-                abrirDetalhes(r);
-            });
-
-        } catch (e) {
-
-            console.error(
-                '[AHGORA PANEL]',
-                e
-            );
-        }
     }
 
-    function abrirDetalhes(r) {
+    function bindPanelEvents(panel, resumo) {
 
-        const antigo =
-            document.getElementById('ahg-details');
+        document.getElementById('ahg-min')
+            ?.addEventListener('click', () => {
 
-        if (antigo) {
-            antigo.remove();
-        }
+                panel.style.display = 'none';
+                document.getElementById('ahg-fab').style.display = 'flex';
+            });
 
-        const modal =
-            document.createElement('div');
+        document.getElementById('ahg-privacy-toggle')
+            ?.addEventListener('click', () => {
 
-        modal.id = 'ahg-details';
+                togglePrivacyHidden();
+                render();
+            });
 
-        modal.style = `
-        position:fixed;
-        inset:0;
-        background:rgba(0,0,0,.7);
-        z-index:999999;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-    `;
+        document.getElementById('ahg-open-details')
+            ?.addEventListener('click', () => abrirDetalhes(resumo));
+    }
 
-        const box =
-            document.createElement('div');
+    const WEEKDAY_LABELS_PT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
-        box.style = `
-            width:min(900px,95vw);
-            max-height:90vh;
-
-            overflow-y:auto;
-            overflow-x:auto;
-
-            background:#111827;
-
-            border-radius:14px;
-
-            padding:20px;
-
-            color:#dde;
-
-            font-family:Segoe UI,sans-serif;
-`;
-
-        const diasSemana = [
-            'Dom',
-            'Seg',
-            'Ter',
-            'Qua',
-            'Qui',
-            'Sex',
-            'Sáb'
-        ];
-
-        let html = `
+    const DETAILS_HEADER_HTML = `
         <div style="
             display:flex;
             justify-content:space-between;
@@ -2650,53 +2600,9 @@
         </div>
     `;
 
-        let semanaAtual = null;
-        let totalSemana = 0;
-        let saldoSemana = 0;
+    function buildWeekTableOpenHtml(semana) {
 
-        r.dias
-            .filter(x =>
-                !x.isFuture &&
-                x.isBusinessDay
-            )
-            .sort((a, b) => a.data - b.data)
-            .forEach((d, idx, arr) => {
-
-                const semana =
-                    getWeekNumber(d.data);
-
-                if (
-                    semanaAtual !== null &&
-                    semana !== semanaAtual
-                ) {
-
-                    /* html += `
-                         <tr style="
-                             background:#1f2937;
-                             font-weight:bold;
-                         ">
-                             <td colspan="2">
-                                 TOTAL SEMANA
-                             </td>
-                             <td>
-                                 ${fmtMin(totalSemana)}
-                             </td>
-                             <td>
-                                 ${fmtMin(saldoSemana)}
-                             </td>
-                         </tr>
-                         <tr>
-                             <td colspan="4" style="height:18px"></td>
-                         </tr>
-                     `; */
-
-                    totalSemana = 0;
-                    saldoSemana = 0;
-                }
-
-                if (semana !== semanaAtual) {
-
-                    html += `
+        return `
                     <h3>
                         Semana ${semana}
                     </h3>
@@ -2728,17 +2634,14 @@
 
                         <tbody>
                 `;
+    }
 
-                    semanaAtual = semana;
-                }
+    function buildDayRowHtml(d) {
 
-                totalSemana += d.trabalhado;
-                saldoSemana += d.saldo;
-
-                html += `
+        return `
                 <tr>
                     <td>
-                        ${diasSemana[d.data.getDay()]}
+                        ${WEEKDAY_LABELS_PT[d.data.getDay()]}
                     </td>
 
                     <td>
@@ -2754,15 +2657,11 @@
                     </td>
                 </tr>
             `;
+    }
 
-                const next = arr[idx + 1];
+    function buildWeekTotalRowHtml(totalSemana, saldoSemana) {
 
-                if (
-                    !next ||
-                    getWeekNumber(next.data) !== semana
-                ) {
-
-                    html += `
+        return `
                     <tr style="
                         background:#1f2937;
                         font-weight:bold;
@@ -2783,18 +2682,89 @@
                     </tbody>
                     </table>
                 `;
-                }
-            });
+    }
 
-        box.innerHTML = html;
+    // Tabela mensal agrupada por semana, com linha de total ao fim de cada uma.
+    function buildDetailsHtml(dias) {
+
+        const relevantes = dias
+            .filter(x => !x.isFuture && x.isBusinessDay)
+            .sort((a, b) => a.data - b.data);
+
+        let html = DETAILS_HEADER_HTML;
+        let semanaAtual = null;
+        let totalSemana = 0;
+        let saldoSemana = 0;
+
+        relevantes.forEach((d, idx) => {
+
+            const semana = getWeekNumber(d.data);
+
+            if (semana !== semanaAtual) {
+                html += buildWeekTableOpenHtml(semana);
+                semanaAtual = semana;
+                totalSemana = 0;
+                saldoSemana = 0;
+            }
+
+            totalSemana += d.trabalhado;
+            saldoSemana += d.saldo;
+            html += buildDayRowHtml(d);
+
+            const proximo = relevantes[idx + 1];
+
+            if (!proximo || getWeekNumber(proximo.data) !== semana) {
+                html += buildWeekTotalRowHtml(totalSemana, saldoSemana);
+            }
+        });
+
+        return html;
+    }
+
+    function abrirDetalhes(r) {
+
+        document.getElementById('ahg-details')?.remove();
+
+        const modal = document.createElement('div');
+
+        modal.id = 'ahg-details';
+
+        modal.style = `
+        position:fixed;
+        inset:0;
+        background:rgba(0,0,0,.7);
+        z-index:999999;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+    `;
+
+        const box = document.createElement('div');
+
+        box.style = `
+            width:min(900px,95vw);
+            max-height:90vh;
+
+            overflow-y:auto;
+            overflow-x:auto;
+
+            background:#111827;
+
+            border-radius:14px;
+
+            padding:20px;
+
+            color:#dde;
+
+            font-family:Segoe UI,sans-serif;
+`;
+
+        box.innerHTML = buildDetailsHtml(r.dias);
 
         modal.appendChild(box);
-
         document.body.appendChild(modal);
 
-        document
-            .getElementById('ahg-close-details')
-            .onclick = () => modal.remove();
+        document.getElementById('ahg-close-details').onclick = () => modal.remove();
 
         modal.onclick = e => {
 
