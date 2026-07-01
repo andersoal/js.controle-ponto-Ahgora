@@ -2778,6 +2778,51 @@
        PUNCH EDITOR — CALENDAR DAY
     ========================================================= */
 
+    // Janela válida para a saída do 1º turno (batida de índice 1).
+    function getFirstShiftExitHint(t, working) {
+
+        const entrada = toMin(working[0]);
+        if (entrada === null) return null;
+
+        const min = entrada + CONFIG.MIN_TURNO_COM_INTERVALO;
+        const max = entrada + CONFIG.MAX_HORAS_TURNO;
+
+        if (t < min) return { level: 'error', text: `Turno < 2h — mínimo ${fmtHour(min)}` };
+        if (t > max) return { level: 'warn',  text: `Turno > 6h — máximo ${fmtHour(max)}` };
+        return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
+    }
+
+    // Janela válida para o retorno do intervalo (batida de índice 2).
+    function getIntervalReturnHint(t, working) {
+
+        const saida1 = toMin(working[1]);
+        if (saida1 === null) return null;
+
+        const min = saida1 + CONFIG.INTERVALO_MINIMO;
+        const max = saida1 + CONFIG.INTERVALO_MAXIMO;
+
+        if (t < min) return { level: 'error', text: `Intervalo < 30min — retornar após ${fmtHour(min)}` };
+        if (t > max) return { level: 'warn',  text: `Intervalo > 3h30 — máximo ${fmtHour(max)}` };
+        return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
+    }
+
+    // Janela válida para a saída final do dia (batida de índice 3).
+    function getFinalExitHint(t, working) {
+
+        const e1 = toMin(working[0]);
+        const s1 = toMin(working[1]);
+        const e2 = toMin(working[2]);
+        if (e1 === null || s1 === null || e2 === null) return null;
+
+        const worked1 = s1 - e1;
+        const h8  = e2 + (CONFIG.CARGA_DIARIA  - worked1);
+        const h10 = e2 + (CONFIG.MAX_HORAS_DIA - worked1);
+
+        if (t < h8)  return { level: 'warn',  text: `Abaixo de 8h — ideal ${fmtHour(h8)}` };
+        if (t > h10) return { level: 'error', text: `Acima de 10h — máximo ${fmtHour(h10)}` };
+        return { level: 'ok', hint: `8h: ${fmtHour(h8)} · 10h: ${fmtHour(h10)}` };
+    }
+
     function getPunchHint(working, idx) {
 
         if (idx === 0) return null;
@@ -2785,52 +2830,99 @@
         const t = toMin(working[idx]);
         if (t === null) return null;
 
-        if (idx === 1 && working[0]) {
-
-            const e = toMin(working[0]);
-            if (e === null) return null;
-            const min = e + CONFIG.MIN_TURNO_COM_INTERVALO;
-            const max = e + CONFIG.MAX_HORAS_TURNO;
-
-            if (t < min) return { level: 'error', text: `Turno < 2h — mínimo ${fmtHour(min)}` };
-            if (t > max) return { level: 'warn',  text: `Turno > 6h — máximo ${fmtHour(max)}` };
-            return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
-        }
-
-        if (idx === 2 && working[1]) {
-
-            const s1 = toMin(working[1]);
-            if (s1 === null) return null;
-            const min = s1 + CONFIG.INTERVALO_MINIMO;
-            const max = s1 + CONFIG.INTERVALO_MAXIMO;
-
-            if (t < min) return { level: 'error', text: `Intervalo < 30min — retornar após ${fmtHour(min)}` };
-            if (t > max) return { level: 'warn',  text: `Intervalo > 3h30 — máximo ${fmtHour(max)}` };
-            return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
-        }
-
-        if (idx === 3 && working.length >= 3) {
-
-            const e1 = toMin(working[0]);
-            const s1 = toMin(working[1]);
-            const e2 = toMin(working[2]);
-            if (e1 === null || s1 === null || e2 === null) return null;
-
-            const worked1 = s1 - e1;
-            const h8  = e2 + (CONFIG.CARGA_DIARIA  - worked1);
-            const h10 = e2 + (CONFIG.MAX_HORAS_DIA - worked1);
-
-            if (t < h8)  return { level: 'warn',  text: `Abaixo de 8h — ideal ${fmtHour(h8)}` };
-            if (t > h10) return { level: 'error', text: `Acima de 10h — máximo ${fmtHour(h10)}` };
-            return { level: 'ok', hint: `8h: ${fmtHour(h8)} · 10h: ${fmtHour(h10)}` };
-        }
+        if (idx === 1 && working[0]) return getFirstShiftExitHint(t, working);
+        if (idx === 2 && working[1]) return getIntervalReturnHint(t, working);
+        if (idx === 3 && working.length >= 3) return getFinalExitHint(t, working);
 
         return null;
+    }
+
+    // Listeners globais de drag; o editor re-renderiza, então busca o painel por id.
+    function installPunchEditorDragListeners() {
+
+        if (_peDragListenersAdded) {
+            return;
+        }
+
+        _peDragListenersAdded = true;
+
+        document.addEventListener('mousemove', e => {
+
+            if (!_peDrag.active) return;
+
+            const p = document.getElementById('ahg-punch-editor');
+
+            if (!p) { _peDrag.active = false; return; }
+
+            p.style.left = `${e.clientX - _peDrag.ox}px`;
+            p.style.top = `${e.clientY - _peDrag.oy}px`;
+        });
+
+        document.addEventListener('mouseup', () => {
+            _peDrag.active = false;
+        });
+    }
+
+    function ensurePunchEditorPanel() {
+
+        let panel = document.getElementById('ahg-punch-editor');
+
+        if (panel) {
+            return panel;
+        }
+
+        panel = document.createElement('div');
+        panel.id = 'ahg-punch-editor';
+        document.body.appendChild(panel);
+
+        // Posição inicial (centralizado no topo)
+        panel.style.top = '80px';
+        panel.style.left = '50%';
+        panel.style.transform = 'translateX(-50%)';
+
+        installPunchEditorDragListeners();
+
+        panel.addEventListener('mousedown', e => {
+
+            if (!e.target.closest('.ahg-pe-hdr')) return;
+
+            _peDrag.active = true;
+            panel.style.transform = '';
+
+            const r = panel.getBoundingClientRect();
+            _peDrag.ox = e.clientX - r.left;
+            _peDrag.oy = e.clientY - r.top;
+        });
+
+        return panel;
+    }
+
+    const PUNCH_EDITOR_WIDTH_PX = 270;
+    const PUNCH_EDITOR_GAP_PX = 10;
+
+    // Sem pin, o painel abre ao lado da célula clicada (ou à esquerda, se faltar espaço).
+    function positionPunchEditorNearDay(panel, targetEl) {
+
+        panel.style.transform = '';
+
+        const dayEl = targetEl.closest('.v-calendar-weekly__day') || targetEl;
+        const rect = dayEl.getBoundingClientRect();
+        const leftCandidate = rect.right + PUNCH_EDITOR_GAP_PX;
+        const overflowsRight =
+            leftCandidate + PUNCH_EDITOR_WIDTH_PX + PUNCH_EDITOR_GAP_PX > window.innerWidth;
+
+        const left = overflowsRight
+            ? Math.max(rect.left - PUNCH_EDITOR_WIDTH_PX - PUNCH_EDITOR_GAP_PX, PUNCH_EDITOR_GAP_PX)
+            : leftCandidate;
+
+        panel.style.left = `${left}px`;
+        panel.style.top = `${Math.max(rect.top, PUNCH_EDITOR_GAP_PX)}px`;
     }
 
     function openPunchEditor(dayInfo, targetEl) {
 
         const wasPinned = _peState ? _peState.pinned : false;
+        const overrides = getLocalDayPunchOverrides(dayInfo.dateKey);
 
         _peEditingIdx = null;
 
@@ -2838,140 +2930,94 @@
             dateKey: dayInfo.dateKey,
             dateLabel: dayInfo.dateLabel,
             mirrorPunches: dayInfo.mirrorPunches || [],
-            working: (() => {
-                const ov = getLocalDayPunchOverrides(dayInfo.dateKey);
-                return ov ? [...ov] : [...(dayInfo.mirrorPunches || [])];
-            })(),
+            working: overrides ? [...overrides] : [...(dayInfo.mirrorPunches || [])],
             pinned: wasPinned
         };
 
-        let panel = document.getElementById('ahg-punch-editor');
+        const panel = ensurePunchEditorPanel();
 
-        if (!panel) {
-
-            panel = document.createElement('div');
-            panel.id = 'ahg-punch-editor';
-            document.body.appendChild(panel);
-
-            // Initial position (centered top)
-            panel.style.top = '80px';
-            panel.style.left = '50%';
-            panel.style.transform = 'translateX(-50%)';
-
-            if (!_peDragListenersAdded) {
-
-                _peDragListenersAdded = true;
-
-                document.addEventListener('mousemove', e => {
-
-                    if (!_peDrag.active) return;
-
-                    const p = document.getElementById('ahg-punch-editor');
-
-                    if (!p) { _peDrag.active = false; return; }
-
-                    p.style.left = `${e.clientX - _peDrag.ox}px`;
-                    p.style.top = `${e.clientY - _peDrag.oy}px`;
-                });
-
-                document.addEventListener('mouseup', () => {
-                    _peDrag.active = false;
-                });
-            }
-
-            panel.addEventListener('mousedown', e => {
-
-                if (!e.target.closest('.ahg-pe-hdr')) return;
-
-                _peDrag.active = true;
-                panel.style.transform = '';
-
-                const r = panel.getBoundingClientRect();
-                _peDrag.ox = e.clientX - r.left;
-                _peDrag.oy = e.clientY - r.top;
-            });
-        }
-
-        // When not pinned, position panel near the clicked day cell
         if (!wasPinned && targetEl) {
-
-            panel.style.transform = '';
-
-            const dayEl = targetEl.closest('.v-calendar-weekly__day') || targetEl;
-            const r = dayEl.getBoundingClientRect();
-            const panelW = 270;
-            const leftCandidate = r.right + 10;
-            const left = leftCandidate + panelW + 10 > window.innerWidth
-                ? Math.max(r.left - panelW - 10, 10)
-                : leftCandidate;
-
-            panel.style.left = `${left}px`;
-            panel.style.top = `${Math.max(r.top, 10)}px`;
+            positionPunchEditorNearDay(panel, targetEl);
         }
 
         renderPunchEditor();
     }
 
-    function renderPunchEditor() {
+    const HINT_COLORS = { error: '#ff8888', warn: '#ffd08a', ok: '#9ef0bf' };
 
-        const panel = document.getElementById('ahg-punch-editor');
+    function buildPunchHintHtml(hint) {
 
-        if (!panel || !_peState) return;
+        if (!hint) {
+            return '';
+        }
 
-        const { dateKey, dateLabel, mirrorPunches, working, pinned } = _peState;
-        const hasOverrides = Boolean(getLocalDayPunchOverrides(dateKey));
-        const mirrorSet = new Set(mirrorPunches);
-        const trabalhado = working.length >= 2 ? calcularTrabalhado(working) : 0;
-        const saldo = trabalhado - CONFIG.CARGA_DIARIA;
-        const violations = getDayRuleViolations({ batidas: working, trabalhado });
+        const hintColor = HINT_COLORS[hint.level] || HINT_COLORS.ok;
 
-        const punchRows = working.length
-            ? working.map((t, i) => {
+        return `<div style="font-size:9px;padding:0 2px 4px 6px;color:${hintColor};${hint.level === 'ok' ? 'opacity:.55;' : ''}">${hint.level === 'ok' ? '✓' : '⚠'} ${hint.text || hint.hint}</div>`;
+    }
 
-                const isMirror = mirrorSet.has(t);
-                const isEditing = _peEditingIdx === i && !isMirror;
-                const hint = getPunchHint(working, i);
+    function buildPunchRowBorderStyle(hint) {
 
-                const hintColor = hint
-                    ? (hint.level === 'error' ? '#ff8888' : hint.level === 'warn' ? '#ffd08a' : '#9ef0bf')
-                    : '';
-                const hintHtml = hint
-                    ? `<div style="font-size:9px;padding:0 2px 4px 6px;color:${hintColor};${hint.level === 'ok' ? 'opacity:.55;' : ''}">${hint.level === 'ok' ? '✓' : '⚠'} ${hint.text || hint.hint}</div>`
-                    : '';
-                const rowBorder = hint && hint.level === 'error'
-                    ? 'border-left:2px solid #ff8888;padding-left:4px;'
-                    : hint && hint.level === 'warn'
-                        ? 'border-left:2px solid #ffd08a;padding-left:4px;'
-                        : '';
+        if (hint && hint.level === 'error') {
+            return `border-left:2px solid ${HINT_COLORS.error};padding-left:4px;`;
+        }
 
-                if (isEditing) {
-                    return `<div class="ahg-pe-punch" style="${rowBorder}">
+        if (hint && hint.level === 'warn') {
+            return `border-left:2px solid ${HINT_COLORS.warn};padding-left:4px;`;
+        }
+
+        return '';
+    }
+
+    // Linha de uma batida no editor: modo edição inline ou exibição normal.
+    function buildPunchRowHtml(working, i, mirrorSet) {
+
+        const t = working[i];
+        const isMirror = mirrorSet.has(t);
+        const isEditing = _peEditingIdx === i && !isMirror;
+        const hint = getPunchHint(working, i);
+        const hintHtml = buildPunchHintHtml(hint);
+        const rowBorder = buildPunchRowBorderStyle(hint);
+
+        if (isEditing) {
+            return `<div class="ahg-pe-punch" style="${rowBorder}">
                         <input class="ahg-pe-inline-input" data-idx="${i}" value="${escapeHtml(t)}" maxlength="5" placeholder="HH:MM" style="width:54px;font-size:12px;font-weight:700;background:var(--bg-input);color:var(--text-main);border:1px solid var(--primary);border-radius:var(--radius);padding:2px 5px;font-family:inherit;">
                         <button class="btn-icon btn-success ahg-pe-confirm" data-idx="${i}" title="Confirmar (Enter)" style="padding:1px 5px;font-size:12px;line-height:1;">✓</button>
                         <button class="btn-icon ahg-pe-cancel" data-idx="${i}" title="Cancelar (Esc)" style="padding:1px 5px;font-size:12px;line-height:1;">✗</button>
                     </div>${hintHtml}`;
-                }
+        }
 
-                const timeSpan = isMirror
-                    ? `<span class="ahg-pe-punch-time">${escapeHtml(t)}</span>`
-                    : `<span class="ahg-pe-punch-time ahg-pe-edit-time" data-idx="${i}" title="Clique para editar" style="cursor:pointer;text-decoration:underline dotted rgba(122,108,255,.5);">${escapeHtml(t)}</span>`;
+        const timeSpan = isMirror
+            ? `<span class="ahg-pe-punch-time">${escapeHtml(t)}</span>`
+            : `<span class="ahg-pe-punch-time ahg-pe-edit-time" data-idx="${i}" title="Clique para editar" style="cursor:pointer;text-decoration:underline dotted rgba(122,108,255,.5);">${escapeHtml(t)}</span>`;
 
-                return `<div class="ahg-pe-punch" style="${rowBorder}">
+        return `<div class="ahg-pe-punch" style="${rowBorder}">
                     ${timeSpan}
                     <span class="ahg-pe-punch-src">${isMirror ? '🔒' : '📍'} ${isMirror ? 'mirror' : 'local'}</span>
                     ${!isMirror ? `<button class="btn-icon ahg-pe-edit-inline" data-idx="${i}" title="Editar" style="padding:1px 4px;font-size:10px;line-height:1;opacity:.65;border-color:rgba(122,108,255,.3);">✏</button>` : ''}
                     <button class="btn-icon btn-danger ahg-pe-remove" data-idx="${i}" title="Remover" style="padding:1px 6px;font-size:13px;line-height:1;">×</button>
                 </div>${hintHtml}`;
-            }).join('')
+    }
+
+    function buildPunchEditorHtml(state) {
+
+        const { dateKey, dateLabel, mirrorPunches, working, pinned } = state;
+        const hasOverrides = Boolean(getLocalDayPunchOverrides(dateKey));
+        const mirrorSet = new Set(mirrorPunches);
+        const trabalhado = working.length >= 2 ? calcularTrabalhado(working) : 0;
+        const saldo = trabalhado - CONFIG.CARGA_DIARIA;
+        const violations = getDayRuleViolations({ batidas: working, trabalhado });
+        const saldoColor = saldo >= 0 ? '#3ddc84' : '#ff6b6b';
+
+        const punchRows = working.length
+            ? working.map((t, i) => buildPunchRowHtml(working, i, mirrorSet)).join('')
             : '<div style="font-size:10px;opacity:.45;padding:4px 0;">Nenhuma batida</div>';
 
         const violationsHtml = violations.length
             ? `<div style="font-size:9px;color:#ffd08a;margin-top:2px;">${violations.map(v => `⚠ ${v.label}`).join(' · ')}</div>`
             : '';
 
-        panel.className = pinned ? 'is-pinned' : '';
-
-        panel.innerHTML = `
+        return `
             <div class="ahg-pe-hdr">
                 ✏ ${escapeHtml(dateLabel)}
                 <span style="flex:1"></span>
@@ -2990,11 +3036,11 @@
                 <div class="ahg-pe-totals">
                     <div class="ahg-pe-total-item">
                         <div class="ahg-pe-total-lbl">Trabalhado</div>
-                        <div class="ahg-pe-total-val" style="color:${saldo >= 0 ? '#3ddc84' : '#ff6b6b'};">${fmtMin(trabalhado)}</div>
+                        <div class="ahg-pe-total-val" style="color:${saldoColor};">${fmtMin(trabalhado)}</div>
                     </div>
                     <div class="ahg-pe-total-item">
                         <div class="ahg-pe-total-lbl">Saldo</div>
-                        <div class="ahg-pe-total-val" style="color:${saldo >= 0 ? '#3ddc84' : '#ff6b6b'};">${fmtMin(saldo)}</div>
+                        <div class="ahg-pe-total-val" style="color:${saldoColor};">${fmtMin(saldo)}</div>
                     </div>
                 </div>
                 ${violationsHtml}
@@ -3004,6 +3050,9 @@
                 </div>
             </div>
         `;
+    }
+
+    function bindPunchEditorHeaderEvents(panel) {
 
         document.getElementById('ahg-pe-close')?.addEventListener('click', () => {
             panel.remove();
@@ -3014,6 +3063,9 @@
             _peState.pinned = !_peState.pinned;
             renderPunchEditor();
         });
+    }
+
+    function bindPunchEditorAddEvents() {
 
         document.getElementById('ahg-pe-add-btn')?.addEventListener('click', () => {
 
@@ -3038,6 +3090,9 @@
         document.getElementById('ahg-pe-add-input')?.addEventListener('keydown', e => {
             if (e.key === 'Enter') document.getElementById('ahg-pe-add-btn')?.click();
         });
+    }
+
+    function bindPunchEditorPersistenceEvents() {
 
         document.getElementById('ahg-pe-save')?.addEventListener('click', () => {
             setLocalDayPunchOverrides(_peState.dateKey, _peState.working);
@@ -3053,6 +3108,9 @@
             render();
             renderPunchEditor();
         });
+    }
+
+    function bindPunchEditorRowEvents(panel) {
 
         const startInlineEdit = (idx) => {
             _peEditingIdx = idx;
@@ -3103,6 +3161,21 @@
                 renderPunchEditor();
             });
         });
+    }
+
+    function renderPunchEditor() {
+
+        const panel = document.getElementById('ahg-punch-editor');
+
+        if (!panel || !_peState) return;
+
+        panel.className = _peState.pinned ? 'is-pinned' : '';
+        panel.innerHTML = buildPunchEditorHtml(_peState);
+
+        bindPunchEditorHeaderEvents(panel);
+        bindPunchEditorAddEvents();
+        bindPunchEditorPersistenceEvents();
+        bindPunchEditorRowEvents(panel);
     }
 
     /* =========================================================
