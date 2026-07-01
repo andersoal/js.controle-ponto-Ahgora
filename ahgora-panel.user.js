@@ -890,524 +890,314 @@
        EXTRAÇÃO DOM
     ========================================================= */
 
-    function extrairDados() {
+    function readDayCellPunches(dayEl) {
 
-        const dias =
-            [...document.querySelectorAll('.v-calendar-weekly__day')];
+        return [...dayEl.querySelectorAll('.batida')]
+            .filter(el => !el.classList.contains('prevista'))
+            .map(el => el.textContent.trim());
+    }
+
+    function isDayCellHoliday(dayEl) {
+
+        return [...dayEl.querySelectorAll('.material-icons')]
+            .some(icon => icon.textContent.trim() === 'star');
+    }
+
+    // Lê os fatos básicos de uma célula do calendário (sem efeitos no DOM).
+    function parseCalendarDayCell(dayEl, hoje) {
+
+        if (dayEl.classList.contains('v-outside')) {
+            return null;
+        }
+
+        const label = dayEl.querySelector('.v-calendar-weekly__day-label');
+        const numeroDia = label ? Number(label.textContent.trim()) : 0;
+
+        if (!numeroDia) {
+            return null;
+        }
+
+        const isHoliday = isDayCellHoliday(dayEl);
+        const batidas = readDayCellPunches(dayEl);
+        const data = new Date(hoje.getFullYear(), hoje.getMonth(), numeroDia);
+        const weekDay = data.getDay();
+
+        return {
+            data,
+            dateKey: formatDateKey(data),
+            isToday: dayEl.classList.contains('v-present'),
+            isFuture: dayEl.classList.contains('v-future'),
+            isHoliday,
+            isBusinessDay: (weekDay !== 0 && weekDay !== 6 && !isHoliday) || batidas.length > 0,
+            batidas
+        };
+    }
+
+    function ensureDayChild(dayEl, className) {
+
+        let el = dayEl.querySelector(`.${className}`);
+
+        if (!el) {
+            el = document.createElement('div');
+            el.className = className;
+            dayEl.appendChild(el);
+        }
+
+        return el;
+    }
+
+    function updateDayViolationBadge(dayEl, violations) {
+
+        const existing = dayEl.querySelector('.ahg-day-violations');
+
+        if (violations.length === 0) {
+            existing?.remove();
+            return;
+        }
+
+        const badge = existing || ensureDayChild(dayEl, 'ahg-day-violations');
+        const hasCritical = violations.some(x => x.code === 'TUR' || x.code === 'DIA');
+
+        badge.className = `ahg-day-violations ${hasCritical ? 'is-critical' : 'is-warning'}`;
+        badge.textContent = `⚠ ${violations.map(x => x.code).join('/')}`;
+        badge.title = violations.map(x => `${x.label}: ${x.detail}`).join(' | ');
+    }
+
+    // Mostra total, total arredondado e badge de violações na célula do dia.
+    function updateDayTotalsDisplay(dayEl, trabalhado, violations) {
+
+        if (trabalhado <= 0) {
+            ['.ahg-day-total', '.ahg-day-total-rounded', '.ahg-day-violations']
+                .forEach(selector => dayEl.querySelector(selector)?.remove());
+            return;
+        }
+
+        ensureDayChild(dayEl, 'ahg-day-total').textContent = renderMinutes(trabalhado);
+
+        const trabalhadoArredondado = roundUpQuarterHour(trabalhado);
+        ensureDayChild(dayEl, 'ahg-day-total-rounded').textContent =
+            `${renderMinutes(trabalhadoArredondado)} (${renderText(fmtQuarterDecimal(trabalhado))})`;
+
+        updateDayViolationBadge(dayEl, violations);
+    }
+
+    // Botão ✏ exibido no hover de dias úteis não futuros.
+    function updateDayEditButton(dayEl, facts, localOverrides, displayBatidas) {
+
+        const existing = dayEl.querySelector('.ahg-day-edit-btn');
+
+        if (facts.isFuture || !facts.isBusinessDay) {
+            existing?.remove();
+            return;
+        }
+
+        let editBtn = existing;
+
+        if (!editBtn) {
+            editBtn = document.createElement('button');
+            editBtn.className = 'ahg-day-edit-btn';
+            dayEl.appendChild(editBtn);
+        }
+
+        editBtn.textContent = '✏';
+        editBtn.title = localOverrides
+            ? `Batidas ajustadas (${displayBatidas.length}) — clique para editar`
+            : `Editar batidas (${facts.batidas.length} no mirror)`;
+        editBtn.classList.toggle('has-overrides', Boolean(localOverrides));
+
+        editBtn.onclick = (e) => {
+            e.stopPropagation();
+            openPunchEditor({
+                dateKey: facts.dateKey,
+                dateLabel: formatDayMonth(facts.data),
+                mirrorPunches: [...facts.batidas]
+            }, e.target);
+        };
+    }
+
+    // Lê um dia, atualiza a decoração da célula e devolve o resumo do dia.
+    function processCalendarDay(dayEl, hoje) {
+
+        const facts = parseCalendarDayCell(dayEl, hoje);
+
+        if (!facts) {
+            return null;
+        }
+
+        const localOverrides = !facts.isFuture ? getLocalDayPunchOverrides(facts.dateKey) : null;
+        const displayBatidas = localOverrides || facts.batidas;
+        const trabalhado = displayBatidas.length > 0 ? calcularTrabalhado(displayBatidas) : 0;
+        const saldo = facts.isBusinessDay ? trabalhado - CONFIG.CARGA_DIARIA : 0;
+        const violations = getDayRuleViolations({ batidas: displayBatidas, trabalhado });
+
+        updateDayTotalsDisplay(dayEl, trabalhado, violations);
+        updateDayEditButton(dayEl, facts, localOverrides, displayBatidas);
+
+        return { ...facts, trabalhado, saldo, violations };
+    }
+
+    function extrairDados() {
 
         const hoje = new Date();
 
-        const resultado = [];
-
-        dias.forEach(day => {
-
-            if (day.classList.contains('v-outside')) {
-                return;
-            }
-
-            const label =
-                day.querySelector('.v-calendar-weekly__day-label');
-
-            if (!label) return;
-
-            const numeroDia =
-                Number(label.textContent.trim());
-
-            if (!numeroDia) return;
-
-            const isToday =
-                day.classList.contains('v-present');
-
-            const isFuture =
-                day.classList.contains('v-future');
-
-            const isHoliday =
-                [...day.querySelectorAll('.material-icons')]
-                    .some(x =>
-                        x.textContent.trim() === 'star'
-                    );
-
-            const data =
-                new Date(
-                    hoje.getFullYear(),
-                    hoje.getMonth(),
-                    numeroDia
-                );
-
-            const weekDay =
-                data.getDay();
-
-            const batidas =
-                [...day.querySelectorAll('.batida')]
-                    .filter(x =>
-                        !x.classList.contains('prevista')
-                    )
-                    .map(x =>
-                        x.textContent.trim()
-                    );
-
-            const possuiBatidas = batidas.length > 0;
-
-            const isBusinessDay =
-                (
-                    weekDay !== 0 &&
-                    weekDay !== 6 &&
-                    !isHoliday
-                )
-                || possuiBatidas;
-
-            const dateKey = formatDateKey(data);
-            const localOverrides = !isFuture ? getLocalDayPunchOverrides(dateKey) : null;
-            const displayBatidas = localOverrides || batidas;
-
-            const trabalhado =
-                displayBatidas.length > 0
-                    ? calcularTrabalhado(displayBatidas)
-                    : 0;
-
-            const saldo =
-                isBusinessDay
-                    ? trabalhado - CONFIG.CARGA_DIARIA
-                    : 0;
-
-            let totalDiv =
-                day.querySelector('.ahg-day-total');
-
-            let roundedDiv =
-                day.querySelector('.ahg-day-total-rounded');
-
-            let violationDiv =
-                day.querySelector('.ahg-day-violations');
-
-            const violations = getDayRuleViolations({ batidas: displayBatidas, trabalhado });
-
-            if (trabalhado > 0) {
-
-                if (!totalDiv) {
-
-                    totalDiv = document.createElement('div');
-                    totalDiv.className = 'ahg-day-total';
-                    day.appendChild(totalDiv);
-                }
-
-                totalDiv.textContent = renderMinutes(trabalhado);
-
-                if (!roundedDiv) {
-
-                    roundedDiv = document.createElement('div');
-                    roundedDiv.className = 'ahg-day-total-rounded';
-                    day.appendChild(roundedDiv);
-                }
-
-                const trabalhadoArredondado =
-                    roundUpQuarterHour(trabalhado);
-
-                roundedDiv.textContent = `${renderMinutes(trabalhadoArredondado)} (${renderText(fmtQuarterDecimal(trabalhado))})`;
-
-                if (violations.length > 0) {
-
-                    if (!violationDiv) {
-
-                        violationDiv = document.createElement('div');
-                        violationDiv.className = 'ahg-day-violations';
-                        day.appendChild(violationDiv);
-                    }
-
-                    const hasCritical = violations.some(x => x.code === 'TUR' || x.code === 'DIA');
-                    violationDiv.className = `ahg-day-violations ${hasCritical ? 'is-critical' : 'is-warning'}`;
-                    violationDiv.textContent = `⚠ ${violations.map(x => x.code).join('/')}`;
-                    violationDiv.title = violations.map(x => `${x.label}: ${x.detail}`).join(' | ');
-
-                } else if (violationDiv) {
-                    violationDiv.remove();
-                }
-
-            } else {
-
-                if (totalDiv) {
-                    totalDiv.remove();
-                }
-
-                if (roundedDiv) {
-                    roundedDiv.remove();
-                }
-
-                if (violationDiv) {
-                    violationDiv.remove();
-                }
-            }
-
-            // Pencil edit button — shown on hover for all non-future business days
-            if (!isFuture && isBusinessDay) {
-
-                let editBtn = day.querySelector('.ahg-day-edit-btn');
-
-                if (!editBtn) {
-                    editBtn = document.createElement('button');
-                    editBtn.className = 'ahg-day-edit-btn';
-                    day.appendChild(editBtn);
-                }
-
-                editBtn.textContent = '✏';
-                editBtn.title = localOverrides
-                    ? `Batidas ajustadas (${displayBatidas.length}) — clique para editar`
-                    : `Editar batidas (${batidas.length} no mirror)`;
-                editBtn.classList.toggle('has-overrides', Boolean(localOverrides));
-
-                editBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    openPunchEditor({
-                        dateKey,
-                        dateLabel: formatDayMonth(data),
-                        mirrorPunches: [...batidas]
-                    }, e.target);
-                };
-
-            } else {
-
-                const editBtn = day.querySelector('.ahg-day-edit-btn');
-                if (editBtn) editBtn.remove();
-            }
-
-            resultado.push({
-                data,
-                dateKey,
-                isToday,
-                isFuture,
-                isHoliday,
-                isBusinessDay,
-                batidas,
-                trabalhado,
-                saldo,
-                violations
-            });
-        });
-
-        return resultado;
+        return [...document.querySelectorAll('.v-calendar-weekly__day')]
+            .map(dayEl => processCalendarDay(dayEl, hoje))
+            .filter(Boolean);
     }
 
     /* =========================================================
        RESUMO
     ========================================================= */
 
-    function calcularResumo() {
+    // Agregados de semana/mês calculados sobre os dias extraídos do calendário.
+    function computePeriodAggregates(dias) {
 
-        const dias =
-            extrairDados();
+        const agora = new Date();
+        const nestaSemana = x => sameWeek(x.data, agora);
+        const nesteMes = x => x.data.getMonth() === agora.getMonth();
 
-        const hoje =
-            dias.find(x => x.isToday);
+        const saldoSemana = dias
+            .filter(x => nestaSemana(x) && !x.isFuture && !x.isToday && x.isBusinessDay)
+            .reduce((total, dia) => total + dia.saldo, 0);
 
-        if (!hoje) {
-            return null;
-        }
+        const totalSemana = dias
+            .filter(x => nestaSemana(x) && !x.isFuture && x.isBusinessDay)
+            .reduce((total, dia) => total + dia.trabalhado, 0);
 
-        const saldoSemana = dias.filter(x =>
-            sameWeek(x.data, new Date()) &&
-            !x.isFuture &&
-            !x.isToday &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + b.saldo, 0);
+        const saldoMes = dias
+            .filter(x => nesteMes(x) && !x.isFuture && x.isBusinessDay)
+            .reduce((total, dia) => total + dia.saldo, 0);
 
-        const totalSemana = dias.filter(x =>
-            sameWeek(x.data, new Date()) &&
-            !x.isFuture &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + b.trabalhado, 0);
+        const totalMes = dias
+            .filter(x => nesteMes(x) && !x.isFuture && x.isBusinessDay)
+            .reduce((total, dia) => total + dia.trabalhado, 0);
 
-        gmSetValue(
-            STORAGE_KEYS.MIRROR_TODAY,
-            JSON.stringify(hoje.batidas || [])
-        );
+        const diasRestantesMes = dias.filter(x => x.isFuture && x.isBusinessDay).length;
+        const diasRegistrados = dias.filter(x => x.batidas.length > 0 && !x.isFuture).length;
 
-        gmSetValue(
-            STORAGE_KEYS.MIRROR_TODAY_REF,
-            formatDateKey(hoje.data)
-        );
+        return { saldoSemana, totalSemana, saldoMes, totalMes, diasRestantesMes, diasRegistrados };
+    }
 
-        gmSetValue(
-            STORAGE_KEYS.WEEK_BALANCE_CACHE,
-            String(saldoSemana)
-        );
+    // Cache lido pelo logger (novabatidaonline) quando o shared truth não basta.
+    function persistMirrorTodaySnapshot(hoje, saldoSemana) {
 
-        const saldoMes =
-            dias
-                .filter(x =>
-                    x.data.getMonth() === new Date().getMonth() &&
-                    !x.isFuture &&
-                    x.isBusinessDay
-                )
-                .reduce((a, b) => a + b.saldo, 0);
+        gmSetValue(STORAGE_KEYS.MIRROR_TODAY, JSON.stringify(hoje.batidas || []));
+        gmSetValue(STORAGE_KEYS.MIRROR_TODAY_REF, formatDateKey(hoje.data));
+        gmSetValue(STORAGE_KEYS.WEEK_BALANCE_CACHE, String(saldoSemana));
+    }
 
-        const totalMes = dias.filter(x =>
-            x.data.getMonth() === new Date().getMonth() &&
-            !x.isFuture &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + b.trabalhado, 0);
-
-        const diasRestantesMes =
-            dias.filter(x =>
-                x.isFuture &&
-                x.isBusinessDay
-            ).length;
-
-        const diasRegistrados =
-            dias.filter(x =>
-                x.batidas.length > 0 &&
-                !x.isFuture
-            ).length;
-
-        const entrada =
-            hoje.batidas[0]
-                ? toMin(hoje.batidas[0])
-                : null;
-
-        const ultimaBatida =
-            hoje.batidas.length >= 4
-                ? toMin(hoje.batidas[3])
-                : null;
+    // Horários-limite do dia: h6 (turno máximo), h8 (meta) e h10 (teto diário).
+    function computeExitMilestones(batidas) {
 
         let h6 = null;
         let h8 = null;
         let h10 = null;
 
-        if (hoje.batidas.length >= 3) {
-
-            // SEGUNDO TURNO
-
-            const inicioTurno2 =
-                toMin(hoje.batidas[2]);
-
-            h6 =
-                inicioTurno2 +
-                CONFIG.MAX_HORAS_TURNO;
-
-        } else if (hoje.batidas.length >= 1) {
-
-            // PRIMEIRO TURNO
-
-            const inicioTurno1 =
-                toMin(hoje.batidas[0]);
-
-            h6 =
-                inicioTurno1 +
-                CONFIG.MAX_HORAS_TURNO;
+        if (batidas.length >= 3) {
+            h6 = toMin(batidas[2]) + CONFIG.MAX_HORAS_TURNO;
+        } else if (batidas.length >= 1) {
+            h6 = toMin(batidas[0]) + CONFIG.MAX_HORAS_TURNO;
         }
 
-        if (hoje.batidas.length >= 2) {
+        if (batidas.length >= 2) {
 
-            const entrada1 =
-                toMin(hoje.batidas[0]);
+            const trabalhadoTurno1 = toMin(batidas[1]) - toMin(batidas[0]);
+            const inicioTurno2 = batidas[2] ? toMin(batidas[2]) : nowMin();
 
-            const saida1 =
-                toMin(hoje.batidas[1]);
+            h8 = inicioTurno2 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
+            h10 = inicioTurno2 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
 
-            const trabalhadoTurno1 =
-                saida1 - entrada1;
+        } else {
 
-            const inicioTurno2 =
-                hoje.batidas[2]
-                    ? toMin(hoje.batidas[2])
-                    : nowMin();
+            const entrada = batidas[0] ? toMin(batidas[0]) : null;
 
-            h8 =
-                inicioTurno2 +
-                (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
-
-            h10 =
-                inicioTurno2 +
-                (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
-
-        } else if (entrada !== null) {
-
-            h8 =
-                entrada + CONFIG.CARGA_DIARIA;
-
-            h10 =
-                entrada + CONFIG.MAX_HORAS_DIA;
+            if (entrada !== null) {
+                h8 = entrada + CONFIG.CARGA_DIARIA;
+                h10 = entrada + CONFIG.MAX_HORAS_DIA;
+            }
         }
 
-        const baseRetorno11h =
-            h10 !== null
-                ? h10
-                : ultimaBatida;
+        return { h6, h8, h10 };
+    }
 
-        const retorno11h =
-            baseRetorno11h !== null
-                ? baseRetorno11h + CONFIG.INTERJORNADA_MINIMA
-                : null;
+    // Resumo de um turno (par de batidas em startIdx/startIdx+1); turno aberto usa "agora".
+    function buildShiftSummary(batidas, startIdx, trabalhadoHoje) {
 
-        const saidaIdeal =
-            h8 !== null
-                ? h8 - saldoSemana
-                : null;
+        const entradaMin = toMin(batidas[startIdx]);
+        const saidaMin = batidas[startIdx + 1] ? toMin(batidas[startIdx + 1]) : nowMin();
+        const total = saidaMin - entradaMin;
 
-        let turno1 = null;
-        let turno2 = null;
+        const atingiuLimite =
+            total >= CONFIG.MAX_HORAS_TURNO ||
+            trabalhadoHoje >= CONFIG.MAX_HORAS_DIA;
 
-        /* =====================================================
-           PRIMEIRO TURNO
-        ===================================================== */
+        const pertoDoLimite =
+            total >= (CONFIG.MAX_HORAS_TURNO - CONFIG.MARGEM_AVISO_LIMITE) ||
+            trabalhadoHoje >= (CONFIG.MAX_HORAS_DIA - CONFIG.MARGEM_AVISO_LIMITE);
 
-        if (hoje.batidas.length >= 1) {
+        return {
+            entrada: batidas[startIdx],
+            saida: batidas[startIdx + 1] || 'agora',
+            aberto: !batidas[startIdx + 1],
+            total,
+            limite: CONFIG.MAX_HORAS_TURNO,
+            classe: atingiuLimite ? 'danger' : pertoDoLimite ? 'warn' : 'infos'
+        };
+    }
 
-            const e1 =
-                toMin(hoje.batidas[0]);
+    function getDayStatusLabel(punchCount) {
 
-            const s1 =
-                hoje.batidas[1]
-                    ? toMin(hoje.batidas[1])
-                    : nowMin();
+        if (punchCount === 0) return '🛬 Não iniciado';
+        if (punchCount === 1) return '🥇 Primeiro turno';
+        if (punchCount === 2) return '⏸ Intervalo';
+        if (punchCount === 3) return '🥈 Segundo turno';
+        if (punchCount >= 4) return '🛫 Encerrado';
 
-            turno1 = {
+        return '--';
+    }
 
-                entrada: hoje.batidas[0],
+    // Janela de retorno do intervalo; só existe com exatamente 2 batidas.
+    function computeReturnWindow(batidas) {
 
-                saida: hoje.batidas[1] || 'agora',
-
-                aberto: !hoje.batidas[1],
-
-                total: s1 - e1,
-
-                limite: CONFIG.MAX_HORAS_TURNO,
-
-                classe:
-                    (
-                        (s1 - e1) >= CONFIG.MAX_HORAS_TURNO ||
-                        hoje.trabalhado >= CONFIG.MAX_HORAS_DIA
-                    )
-                        ? 'danger'
-                        : (
-                            (s1 - e1) >= (CONFIG.MAX_HORAS_TURNO - CONFIG.MARGEM_AVISO_LIMITE) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - CONFIG.MARGEM_AVISO_LIMITE)
-                        )
-                            ? 'warn'
-                            : 'infos',
-            };
+        if (batidas.length !== 2) {
+            return { retornoMinimo: null, retornoMaximo: null };
         }
 
-        /* =====================================================
-           SEGUNDO TURNO
-        ===================================================== */
+        const saida1 = toMin(batidas[1]);
 
-        if (hoje.batidas.length >= 3) {
+        return {
+            retornoMinimo: saida1 + CONFIG.INTERVALO_MINIMO,
+            retornoMaximo: saida1 + CONFIG.INTERVALO_MAXIMO
+        };
+    }
 
-            const e2 =
-                toMin(hoje.batidas[2]);
-
-            const s2 =
-                hoje.batidas[3]
-                    ? toMin(hoje.batidas[3])
-                    : nowMin();
-
-            turno2 = {
-
-                entrada: hoje.batidas[2],
-
-                saida: hoje.batidas[3] || 'agora',
-
-                aberto: !hoje.batidas[3],
-
-                total: s2 - e2,
-
-                limite: CONFIG.MAX_HORAS_TURNO,
-
-                classe:
-                    (
-                        (s2 - e2) >= CONFIG.MAX_HORAS_TURNO ||
-                        hoje.trabalhado >= CONFIG.MAX_HORAS_DIA
-                    )
-                        ? 'danger'
-
-                        : (
-                            (s2 - e2) >= (CONFIG.MAX_HORAS_TURNO - CONFIG.MARGEM_AVISO_LIMITE) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - CONFIG.MARGEM_AVISO_LIMITE)
-                        )
-                            ? 'warn'
-                            : 'infos',
-            };
-        }
-
-        const status =
-            (() => {
-
-                const qtd =
-                    hoje.batidas.length;
-
-                if (qtd === 0) {
-                    return '🛬 Não iniciado';
-                }
-
-                if (qtd === 1) {
-                    return '🥇 Primeiro turno';
-                }
-
-                if (qtd === 2) {
-                    return '⏸ Intervalo';
-                }
-
-                if (qtd === 3) {
-                    return '🥈 Segundo turno';
-                }
-
-                if (qtd >= 4) {
-                    return '🛫 Encerrado';
-                }
-
-                return '--';
-            })();
-
-        let retornoMinimo = null;
-        let retornoMaximo = null;
-
-        if (hoje.batidas.length === 2) {
-
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            retornoMinimo =
-                saida1 + CONFIG.INTERVALO_MINIMO;
-
-            retornoMaximo =
-                saida1 + CONFIG.INTERVALO_MAXIMO;
-        }
+    function computeDailyAlert(hoje) {
 
         let alerta = null;
 
         if (hoje.batidas.length >= 2) {
 
-            const entrada1 =
-                toMin(hoje.batidas[0]);
+            const duracaoTurno1 = toMin(hoje.batidas[1]) - toMin(hoje.batidas[0]);
 
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            const turno1 =
-                saida1 - entrada1;
-
-            if (turno1 > CONFIG.MAX_HORAS_TURNO) {
-
-                alerta =
-                    '⚠️ Primeiro turno excedeu 6h';
+            if (duracaoTurno1 > CONFIG.MAX_HORAS_TURNO) {
+                alerta = '⚠️ Primeiro turno excedeu 6h';
             }
         }
 
         if (hoje.trabalhado > CONFIG.MAX_HORAS_DIA) {
-
-            alerta =
-                '⚠️ Limite diário excedido';
+            alerta = '⚠️ Limite diário excedido';
         }
 
-        const hojePunchHealth = getPunchCountHealth(
-            hoje.batidas.length,
-            { isToday: true }
-        );
+        return alerta;
+    }
 
-        const punchAnomalyDays = dias
-            .filter(x => !x.isFuture && x.batidas.length > 0)
+    // Dias passados com anomalias de contagem ou violações de limite (BR-003/004/005).
+    function collectComplianceDays(dias) {
+
+        const diasPassados = dias.filter(x => !x.isFuture);
+
+        const punchAnomalyDays = diasPassados
+            .filter(x => x.batidas.length > 0)
             .map(x => ({
                 date: x.data,
                 count: x.batidas.length,
@@ -1415,89 +1205,68 @@
             }))
             .filter(x => x.health.level !== 'ok');
 
-        const intrajornadaMaxViolationDays = dias
-            .filter(x => !x.isFuture && x.batidas.length >= 3)
-            .map(x => ({
-                date: x.data,
-                intervals: getIntrajornadaMaxViolations(x.batidas)
-            }))
+        const intrajornadaMaxViolationDays = diasPassados
+            .filter(x => x.batidas.length >= 3)
+            .map(x => ({ date: x.data, intervals: getIntrajornadaMaxViolations(x.batidas) }))
             .filter(x => x.intervals.length > 0);
 
-        const maxShiftViolationDays = dias
-            .filter(x => !x.isFuture && x.batidas.length >= 2)
-            .map(x => ({
-                date: x.data,
-                shifts: getMaxShiftViolations(x.batidas)
-            }))
+        const maxShiftViolationDays = diasPassados
+            .filter(x => x.batidas.length >= 2)
+            .map(x => ({ date: x.data, shifts: getMaxShiftViolations(x.batidas) }))
             .filter(x => x.shifts.length > 0);
 
-        const maxDailyViolationDays = dias
-            .filter(x => !x.isFuture && x.batidas.length > 0 && x.trabalhado > CONFIG.MAX_HORAS_DIA)
+        const maxDailyViolationDays = diasPassados
+            .filter(x => x.batidas.length > 0 && x.trabalhado > CONFIG.MAX_HORAS_DIA)
             .map(x => ({
                 date: x.data,
                 worked: x.trabalhado,
                 excess: x.trabalhado - CONFIG.MAX_HORAS_DIA
             }));
 
-        const trabalhado = hoje.trabalhado;
+        return { punchAnomalyDays, intrajornadaMaxViolationDays, maxShiftViolationDays, maxDailyViolationDays };
+    }
 
-        persistSharedTruth({
+    function calcularResumo() {
+
+        const dias = extrairDados();
+        const hoje = dias.find(x => x.isToday);
+
+        if (!hoje) {
+            return null;
+        }
+
+        const aggregates = computePeriodAggregates(dias);
+
+        persistMirrorTodaySnapshot(hoje, aggregates.saldoSemana);
+
+        const batidas = hoje.batidas;
+        const { h6, h8, h10 } = computeExitMilestones(batidas);
+        const ultimaBatida = batidas.length >= 4 ? toMin(batidas[3]) : null;
+        const baseRetorno11h = h10 !== null ? h10 : ultimaBatida;
+
+        const resumo = {
             hoje,
-            saldoSemana,
-            totalSemana,
-            saldoMes,
-            totalMes,
+            ...aggregates,
             dias,
-            diasRestantesMes,
-            diasRegistrados,
-            entrada,
-            turno1,
-            turno2,
-            retorno11h,
+            entrada: batidas[0] ? toMin(batidas[0]) : null,
+            turno1: batidas.length >= 1 ? buildShiftSummary(batidas, 0, hoje.trabalhado) : null,
+            turno2: batidas.length >= 3 ? buildShiftSummary(batidas, 2, hoje.trabalhado) : null,
+            retorno11h: baseRetorno11h !== null ? baseRetorno11h + CONFIG.INTERJORNADA_MINIMA : null,
             h6,
             h8,
             h10,
-            saidaIdeal,
-            status,
-            retornoMinimo,
-            retornoMaximo,
-            trabalhado,
-            alerta,
-            hojePunchHealth,
-            punchAnomalyDays,
-            intrajornadaMaxViolationDays,
-            maxShiftViolationDays,
-            maxDailyViolationDays
-        });
-
-        return {
-            hoje,
-            saldoSemana,
-            totalSemana,
-            saldoMes,
-            totalMes,
-            dias,
-            diasRestantesMes,
-            diasRegistrados,
-            entrada,
-            turno1,
-            turno2,
-            retorno11h,
-            h6,
-            h8,
-            h10,
-            saidaIdeal,
-            status,
-            retornoMinimo,
-            retornoMaximo,
-            trabalhado,
-            alerta,
-            hojePunchHealth,
-            punchAnomalyDays,
-            intrajornadaMaxViolationDays,
-            maxShiftViolationDays,
-            maxDailyViolationDays
+            saidaIdeal: h8 !== null ? h8 - aggregates.saldoSemana : null,
+            status: getDayStatusLabel(batidas.length),
+            ...computeReturnWindow(batidas),
+            trabalhado: hoje.trabalhado,
+            alerta: computeDailyAlert(hoje),
+            hojePunchHealth: getPunchCountHealth(batidas.length, { isToday: true }),
+            ...collectComplianceDays(dias)
         };
+
+        persistSharedTruth(resumo);
+
+        return resumo;
     }
 
     function createEmptyGuidance(punches) {
