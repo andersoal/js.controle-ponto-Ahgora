@@ -529,54 +529,42 @@
         return findPunchPairViolations(batidas, 0, CONFIG.MAX_HORAS_TURNO);
     }
 
+    function appendViolationNote(byDate, date, note) {
+
+        const key = formatDateKey(date);
+
+        if (!byDate.has(key)) {
+            byDate.set(key, { key, date, notes: [] });
+        }
+
+        byDate.get(key).notes.push(note);
+    }
+
+    // Uma linha por dia com violações, ex.: "03/06: intervalo 12:00→16:00 (04:00)".
     function buildViolationDaysSummary(resumo) {
 
         const byDate = new Map();
 
-        const ensureDay = (date) => {
-
-            const key = formatDateKey(date);
-
-            if (!byDate.has(key)) {
-                byDate.set(key, {
-                    key,
-                    date,
-                    notes: []
-                });
-            }
-
-            return byDate.get(key);
-        };
-
         (resumo.intrajornadaMaxViolationDays || []).forEach(day => {
 
-            const entry = ensureDay(day.date);
             const first = day.intervals?.[0];
 
-            if (!first) {
-                return;
+            if (first) {
+                appendViolationNote(byDate, day.date, `intervalo ${first.start}→${first.end} (${fmtMin(first.duration)})`);
             }
-
-            entry.notes.push(`intervalo ${first.start}→${first.end} (${fmtMin(first.duration)})`);
         });
 
         (resumo.maxShiftViolationDays || []).forEach(day => {
 
-            const entry = ensureDay(day.date);
             const first = day.shifts?.[0];
 
-            if (!first) {
-                return;
+            if (first) {
+                appendViolationNote(byDate, day.date, `turno ${first.start}→${first.end} (${fmtMin(first.duration)})`);
             }
-
-            entry.notes.push(`turno ${first.start}→${first.end} (${fmtMin(first.duration)})`);
         });
 
         (resumo.maxDailyViolationDays || []).forEach(day => {
-
-            const entry = ensureDay(day.date);
-
-            entry.notes.push(`dia ${fmtMin(day.worked)}`);
+            appendViolationNote(byDate, day.date, `dia ${fmtMin(day.worked)}`);
         });
 
         return [...byDate.values()]
@@ -667,26 +655,15 @@
         return Math.ceil((((d - yearStart) / MS_PER_DAY) + 1) / 7);
     }
 
+    // Soma os pares entrada/saída; turno aberto conta até o horário atual.
     function calcularTrabalhado(batidas) {
 
         let total = 0;
 
         for (let i = 0; i < batidas.length; i += 2) {
 
-            const entrada =
-                toMin(batidas[i]);
-
-            let saida;
-
-            if (batidas[i + 1]) {
-
-                saida =
-                    toMin(batidas[i + 1]);
-
-            } else {
-
-                saida = nowMin();
-            }
+            const entrada = toMin(batidas[i]);
+            const saida = batidas[i + 1] ? toMin(batidas[i + 1]) : nowMin();
 
             total += (saida - entrada);
         }
@@ -884,70 +861,29 @@
         }
     }
 
+    // Notifica um marco duas vezes: aviso ~NOTIFICAR_ANTES min antes e no horário.
+    function checkMilestoneNotification(milestoneMinute, id, title, message, urgente) {
+
+        if (milestoneMinute === null) return;
+
+        const lead = CONFIG.NOTIFICAR_ANTES;
+        const minutesLeft = milestoneMinute - nowMin();
+
+        if (minutesLeft >= lead - 1 && minutesLeft <= lead + 2) {
+            notif(`${id}-av`, `⏰ ${title}`, `${message}\nFaltam ~${lead}min`, urgente);
+        }
+
+        if (minutesLeft >= -1 && minutesLeft <= 1) {
+            notif(`${id}-ok`, `✅ ${title}`, message, urgente);
+        }
+    }
+
     function checarNotifs(resumo) {
 
-        const now = nowMin();
-
-        const A = CONFIG.NOTIFICAR_ANTES;
-
-        const chk = (h, id, tit, msg, urgente) => {
-
-            if (h === null) return;
-
-            const f = h - now;
-
-            if (f >= A - 1 && f <= A + 2) {
-
-                notif(
-                    `${id}-av`,
-                    `⏰ ${tit}`,
-                    `${msg}\nFaltam ~${A}min`,
-                    urgente
-                );
-            }
-
-            if (f >= -1 && f <= 1) {
-
-                notif(
-                    `${id}-ok`,
-                    `✅ ${tit}`,
-                    msg,
-                    urgente
-                );
-            }
-        };
-
-        chk(
-            resumo.h6,
-            '6h',
-            '6h atingidas',
-            'Você completou o mínimo de 6h.',
-            true
-        );
-
-        chk(
-            resumo.h8,
-            '8h',
-            'Meta diária',
-            'Você completou as 8h.',
-            false
-        );
-
-        chk(
-            resumo.h10,
-            '10h',
-            'Limite diário',
-            '⚠ Limite diário atingido.',
-            true
-        );
-
-        chk(
-            resumo.saidaIdeal,
-            'ideal',
-            'Saída ideal',
-            'Saldo semanal compensado.',
-            false
-        );
+        checkMilestoneNotification(resumo.h6, '6h', '6h atingidas', 'Você completou o mínimo de 6h.', true);
+        checkMilestoneNotification(resumo.h8, '8h', 'Meta diária', 'Você completou as 8h.', false);
+        checkMilestoneNotification(resumo.h10, '10h', 'Limite diário', '⚠ Limite diário atingido.', true);
+        checkMilestoneNotification(resumo.saidaIdeal, 'ideal', 'Saída ideal', 'Saldo semanal compensado.', false);
     }
 
     /* =========================================================
@@ -1564,12 +1500,10 @@
         };
     }
 
-    function buildPunchGuidance(punches, saldoSemanaAnt = 0) {
+    function createEmptyGuidance(punches) {
 
-        const lista = (punches || []).filter(Boolean);
-
-        const guidance = {
-            punches: lista,
+        return {
+            punches,
             stage: 'entry',
             title: 'Entrar',
             summary: 'Aguardando primeira batida.',
@@ -1599,141 +1533,165 @@
             copyTarget: null,
             copyLabel: null
         };
+    }
 
-        if (lista.length >= 1) {
+    // Marcos derivados da 1ª entrada: 4h/6h de turno e 8h/10h de jornada.
+    function applyFirstEntryMilestones(guidance, lista) {
 
-            const firstStart = toMin(lista[0]);
+        const firstStart = toMin(lista[0]);
 
-            if (firstStart !== null) {
-
-                guidance.firstTurn4h = firstStart + CONFIG.QUATRO_HORAS;
-                guidance.firstTurn6h = firstStart + CONFIG.MAX_HORAS_TURNO;
-                guidance.day8h = firstStart + CONFIG.CARGA_DIARIA;
-                guidance.day10h = firstStart + CONFIG.MAX_HORAS_DIA;
-                guidance.day8WithIntervalMin = firstStart + CONFIG.CARGA_DIARIA + CONFIG.INTERVALO_MINIMO;
-                guidance.day8WithIntervalMax = firstStart + CONFIG.CARGA_DIARIA + CONFIG.INTERVALO_MAXIMO;
-                guidance.day10WithIntervalMin = firstStart + CONFIG.MAX_HORAS_DIA + CONFIG.INTERVALO_MINIMO;
-                guidance.day10WithIntervalMax = firstStart + CONFIG.MAX_HORAS_DIA + CONFIG.INTERVALO_MAXIMO;
-            }
+        if (firstStart === null) {
+            return;
         }
 
-        if (lista.length >= 3) {
+        guidance.firstTurn4h = firstStart + CONFIG.QUATRO_HORAS;
+        guidance.firstTurn6h = firstStart + CONFIG.MAX_HORAS_TURNO;
+        guidance.day8h = firstStart + CONFIG.CARGA_DIARIA;
+        guidance.day10h = firstStart + CONFIG.MAX_HORAS_DIA;
+        guidance.day8WithIntervalMin = firstStart + CONFIG.CARGA_DIARIA + CONFIG.INTERVALO_MINIMO;
+        guidance.day8WithIntervalMax = firstStart + CONFIG.CARGA_DIARIA + CONFIG.INTERVALO_MAXIMO;
+        guidance.day10WithIntervalMin = firstStart + CONFIG.MAX_HORAS_DIA + CONFIG.INTERVALO_MINIMO;
+        guidance.day10WithIntervalMax = firstStart + CONFIG.MAX_HORAS_DIA + CONFIG.INTERVALO_MAXIMO;
+    }
 
-            const secondStart = toMin(lista[2]);
+    // Com a 2ª entrada conhecida, 8h/10h passam a descontar o 1º turno real.
+    function applySecondEntryMilestones(guidance, lista) {
 
-            if (secondStart !== null) {
+        const secondStart = toMin(lista[2]);
 
-                guidance.secondTurn4h = secondStart + CONFIG.QUATRO_HORAS;
-                guidance.secondTurn6h = secondStart + CONFIG.MAX_HORAS_TURNO;
-                guidance.day8h = secondStart + (CONFIG.CARGA_DIARIA - (toMin(lista[1]) - toMin(lista[0])));
-                guidance.day10h = secondStart + (CONFIG.MAX_HORAS_DIA - (toMin(lista[1]) - toMin(lista[0])));
-            }
+        if (secondStart === null) {
+            return;
         }
 
-        if (lista.length === 1) {
-            guidance.stage = 'interval';
-            guidance.title = 'Intervalo';
+        const workedTurn1 = toMin(lista[1]) - toMin(lista[0]);
 
-            guidance.minTime = guidance.firstTurn6h;
+        guidance.secondTurn4h = secondStart + CONFIG.QUATRO_HORAS;
+        guidance.secondTurn6h = secondStart + CONFIG.MAX_HORAS_TURNO;
+        guidance.day8h = secondStart + (CONFIG.CARGA_DIARIA - workedTurn1);
+        guidance.day10h = secondStart + (CONFIG.MAX_HORAS_DIA - workedTurn1);
+    }
 
-            const firstStart = toMin(lista[0]);
+    // 1 batida: trabalhando no 1º turno; orienta a janela de saída para o intervalo.
+    function applyIntervalStageGuidance(guidance, lista) {
 
-            if (firstStart !== null) {
+        guidance.stage = 'interval';
+        guidance.title = 'Intervalo';
+        guidance.minTime = guidance.firstTurn6h;
 
-                guidance.firstExitMin = firstStart + CONFIG.MIN_TURNO_COM_INTERVALO;
-                guidance.firstExitMax = firstStart + CONFIG.MAX_HORAS_TURNO;
-                guidance.secondEntryMin = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
-                guidance.secondEntryMax = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
-                guidance.firstExitMinPause30 = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
-                guidance.firstExitMinPause210 = guidance.firstExitMin + CONFIG.INTERVALO_MAXIMO;
-                guidance.firstExitMaxPause30 = guidance.firstExitMax + CONFIG.INTERVALO_MINIMO;
-                guidance.firstExitMaxPause210 = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
+        const firstStart = toMin(lista[0]);
 
-                guidance.summary = `Saída mín. 2h: ${renderClock(guidance.firstExitMin)} · máx. 6h: ${renderClock(guidance.firstExitMax)} · retorno +30m/+210m`;
-            } else {
-                guidance.summary = `Saída entre 2h e 6h · pausa entre ${CONFIG.INTERVALO_MINIMO}m e ${CONFIG.INTERVALO_MAXIMO}m`;
-            }
-
+        if (firstStart === null) {
+            guidance.summary = `Saída entre 2h e 6h · pausa entre ${CONFIG.INTERVALO_MINIMO}m e ${CONFIG.INTERVALO_MAXIMO}m`;
             return guidance;
         }
 
-        if (lista.length === 2) {
+        guidance.firstExitMin = firstStart + CONFIG.MIN_TURNO_COM_INTERVALO;
+        guidance.firstExitMax = firstStart + CONFIG.MAX_HORAS_TURNO;
+        guidance.secondEntryMin = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
+        guidance.secondEntryMax = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
+        guidance.firstExitMinPause30 = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
+        guidance.firstExitMinPause210 = guidance.firstExitMin + CONFIG.INTERVALO_MAXIMO;
+        guidance.firstExitMaxPause30 = guidance.firstExitMax + CONFIG.INTERVALO_MINIMO;
+        guidance.firstExitMaxPause210 = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
+        guidance.summary = `Saída mín. 2h: ${renderClock(guidance.firstExitMin)} · máx. 6h: ${renderClock(guidance.firstExitMax)} · retorno +30m/+210m`;
 
-            const saida1 = toMin(lista[1]);
-            const minRet = saida1 + CONFIG.INTERVALO_MINIMO;
-            const maxRet = saida1 + CONFIG.INTERVALO_MAXIMO;
+        return guidance;
+    }
 
-            guidance.stage = 'return';
-            guidance.title = 'Retorno';
-            guidance.summary = `Janela permitida: ${renderClock(minRet)} até ${renderClock(maxRet)}`;
-            guidance.minTime = minRet;
-            guidance.maxTime = maxRet;
-            guidance.intervalMin = minRet;
-            guidance.intervalMax = maxRet;
-            const workedTurn1 = saida1 - toMin(lista[0]);
-            const remaining8h = CONFIG.CARGA_DIARIA - workedTurn1;
-            const remaining10h = CONFIG.MAX_HORAS_DIA - workedTurn1;
+    // 2 batidas: em intervalo; orienta a janela de retorno permitida.
+    function applyReturnStageGuidance(guidance, lista) {
 
-            guidance.day8WithIntervalMin = minRet + remaining8h;
-            guidance.day8WithIntervalMax = maxRet + remaining8h;
-            guidance.day10WithIntervalMin = minRet + remaining10h;
-            guidance.day10WithIntervalMax = maxRet + remaining10h;
-            guidance.copyTarget = fmtHour(minRet);
-            guidance.copyLabel = 'Copiar retorno mínimo';
-            return guidance;
-        }
+        const saida1 = toMin(lista[1]);
+        const minRet = saida1 + CONFIG.INTERVALO_MINIMO;
+        const maxRet = saida1 + CONFIG.INTERVALO_MAXIMO;
+        const workedTurn1 = saida1 - toMin(lista[0]);
+        const remaining8h = CONFIG.CARGA_DIARIA - workedTurn1;
+        const remaining10h = CONFIG.MAX_HORAS_DIA - workedTurn1;
 
-        if (lista.length === 3) {
+        guidance.stage = 'return';
+        guidance.title = 'Retorno';
+        guidance.summary = `Janela permitida: ${renderClock(minRet)} até ${renderClock(maxRet)}`;
+        guidance.minTime = minRet;
+        guidance.maxTime = maxRet;
+        guidance.intervalMin = minRet;
+        guidance.intervalMax = maxRet;
+        guidance.day8WithIntervalMin = minRet + remaining8h;
+        guidance.day8WithIntervalMax = maxRet + remaining8h;
+        guidance.day10WithIntervalMin = minRet + remaining10h;
+        guidance.day10WithIntervalMax = maxRet + remaining10h;
+        guidance.copyTarget = fmtHour(minRet);
+        guidance.copyLabel = 'Copiar retorno mínimo';
 
-            const entrada1 = toMin(lista[0]);
-            const saida1 = toMin(lista[1]);
-            const entrada2 = toMin(lista[2]);
-            const workedTurn1 = saida1 - entrada1;
-            const h8 = entrada2 + (CONFIG.CARGA_DIARIA - workedTurn1);
+        return guidance;
+    }
 
-            guidance.stage = 'exit';
-            guidance.title = 'Saída';
-            guidance.summary = `8h: ${renderClock(h8)}`;
-            guidance.minTime = h8;
-            guidance.day8h = h8;
-            guidance.day10h = entrada2 + (CONFIG.MAX_HORAS_DIA - workedTurn1);
-            guidance.day8WithIntervalMin = h8;
-            guidance.day8WithIntervalMax = h8;
-            guidance.day10WithIntervalMin = guidance.day10h;
-            guidance.day10WithIntervalMax = guidance.day10h;
-            guidance.idealTime = h8 - saldoSemanaAnt;
-            guidance.copyTarget = fmtHour(guidance.idealTime);
-            guidance.copyLabel = 'Copiar saída ideal';
-            return guidance;
-        }
+    // 3 batidas: no 2º turno; orienta a saída (8h/10h e saída ideal pelo saldo).
+    function applyExitStageGuidance(guidance, lista, saldoSemanaAnt) {
 
-        if (lista.length === 5) {
+        const workedTurn1 = toMin(lista[1]) - toMin(lista[0]);
+        const entrada2 = toMin(lista[2]);
+        const h8 = entrada2 + (CONFIG.CARGA_DIARIA - workedTurn1);
 
-            const e3 = toMin(lista[4]);
+        guidance.stage = 'exit';
+        guidance.title = 'Saída';
+        guidance.summary = `8h: ${renderClock(h8)}`;
+        guidance.minTime = h8;
+        guidance.day8h = h8;
+        guidance.day10h = entrada2 + (CONFIG.MAX_HORAS_DIA - workedTurn1);
+        guidance.day8WithIntervalMin = h8;
+        guidance.day8WithIntervalMax = h8;
+        guidance.day10WithIntervalMin = guidance.day10h;
+        guidance.day10WithIntervalMax = guidance.day10h;
+        guidance.idealTime = h8 - saldoSemanaAnt;
+        guidance.copyTarget = fmtHour(guidance.idealTime);
+        guidance.copyLabel = 'Copiar saída ideal';
 
-            guidance.stage = 'extra-turn';
-            guidance.title = 'Ajuste com justificativa';
-            guidance.summary = '5 batidas registradas. Feche com a 6ª batida e registre justificativa.';
+        return guidance;
+    }
 
-            if (e3 !== null) {
-                guidance.minTime = e3 + CONFIG.QUATRO_HORAS;
-                guidance.maxTime = e3 + CONFIG.MAX_HORAS_TURNO;
-            }
+    // 5 batidas: turno extra que exige justificativa e fechamento com a 6ª batida.
+    function applyExtraTurnStageGuidance(guidance, lista) {
 
-            return guidance;
-        }
+        const inicioTurno3 = toMin(lista[4]);
 
-        if (lista.length >= 4) {
+        guidance.stage = 'extra-turn';
+        guidance.title = 'Ajuste com justificativa';
+        guidance.summary = '5 batidas registradas. Feche com a 6ª batida e registre justificativa.';
 
-            guidance.stage = 'done';
-            guidance.title = 'Jornada Encerrada';
-            guidance.summary = 'Nenhuma próxima batida pendente.';
-            return guidance;
+        if (inicioTurno3 !== null) {
+            guidance.minTime = inicioTurno3 + CONFIG.QUATRO_HORAS;
+            guidance.maxTime = inicioTurno3 + CONFIG.MAX_HORAS_TURNO;
         }
 
         return guidance;
     }
 
+    function applyDoneStageGuidance(guidance) {
+
+        guidance.stage = 'done';
+        guidance.title = 'Jornada Encerrada';
+        guidance.summary = 'Nenhuma próxima batida pendente.';
+
+        return guidance;
+    }
+
+    // Traduz a lista de batidas do dia em "qual é a próxima ação e seus horários".
+    function buildPunchGuidance(punches, saldoSemanaAnt = 0) {
+
+        const lista = (punches || []).filter(Boolean);
+        const guidance = createEmptyGuidance(lista);
+
+        if (lista.length >= 1) applyFirstEntryMilestones(guidance, lista);
+        if (lista.length >= 3) applySecondEntryMilestones(guidance, lista);
+
+        if (lista.length === 1) return applyIntervalStageGuidance(guidance, lista);
+        if (lista.length === 2) return applyReturnStageGuidance(guidance, lista);
+        if (lista.length === 3) return applyExitStageGuidance(guidance, lista, saldoSemanaAnt);
+        if (lista.length === 5) return applyExtraTurnStageGuidance(guidance, lista);
+        if (lista.length >= 4) return applyDoneStageGuidance(guidance);
+
+        return guidance;
+    }
 
     function persistSharedTruth(resumo) {
 
