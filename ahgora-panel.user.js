@@ -111,21 +111,16 @@
        UTILS
     ========================================================= */
 
+    // Agenda um render alinhado à virada de cada minuto (relógio da UI).
     function agendarRenderMinuto() {
 
-        const agora =
-            new Date();
-
+        const agora = new Date();
         const msAteProximoMinuto =
-            (60 - agora.getSeconds()) * MS_PER_SECOND
-            - agora.getMilliseconds();
+            (60 - agora.getSeconds()) * MS_PER_SECOND - agora.getMilliseconds();
 
         setTimeout(() => {
 
-            if (
-                document.visibilityState === 'visible'
-            ) {
-
+            if (document.visibilityState === 'visible') {
                 render();
             }
 
@@ -134,37 +129,36 @@
         }, msAteProximoMinuto);
     }
 
+    const pad2 = value => String(value).padStart(2, '0');
+
+    // "08:30" -> 510 minutos. Aceita valores negativos ("-01:15").
     const toMin = s => {
 
         if (!s) return null;
 
         s = String(s).trim();
 
-        const neg = s.startsWith('-');
+        const negativo = s.startsWith('-');
+        const [horas, minutos] = s.replace(/[^0-9:]/g, '').split(':').map(Number);
 
-        const [h, m] =
-            s.replace(/[^0-9:]/g, '')
-                .split(':')
-                .map(Number);
+        if (isNaN(horas)) return null;
 
-        if (isNaN(h)) return null;
+        const total = horas * MINUTES_PER_HOUR + (minutos || 0);
 
-        return neg
-            ? -(h * 60 + (m || 0))
-            : h * 60 + (m || 0);
+        return negativo ? -total : total;
     };
 
+    // Duração em minutos -> "HH:MM" (aceita negativos: -75 -> "-01:15").
     const fmtMin = m => {
 
         if (m === null || m === undefined) {
             return '--:--';
         }
 
-        const neg = m < 0;
-
+        const negativo = m < 0;
         const abs = Math.abs(Math.round(m));
 
-        return `${neg ? '-' : ''}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+        return `${negativo ? '-' : ''}${pad2(Math.floor(abs / MINUTES_PER_HOUR))}:${pad2(abs % MINUTES_PER_HOUR)}`;
     };
 
     const roundUpQuarterHour = m => {
@@ -176,13 +170,14 @@
         return Math.ceil(m / QUARTER_HOUR_MINUTES) * QUARTER_HOUR_MINUTES;
     };
 
+    // Minutos -> horas decimais arredondadas ao quarto de hora acima (500 -> "8.5").
     const fmtQuarterDecimal = m => {
 
         if (m === null || m === undefined) {
             return '--';
         }
 
-        const decimal = roundUpQuarterHour(m) / 60;
+        const decimal = roundUpQuarterHour(m) / MINUTES_PER_HOUR;
 
         if (Number.isInteger(decimal)) {
             return String(decimal);
@@ -193,24 +188,37 @@
             .replace(/\.$/, '');
     };
 
+    // Minuto do dia -> "HH:MM", com wrap em 24h (1470 -> "00:30").
     const fmtHour = m => {
 
         if (m === null || m === undefined) {
             return '--:--';
         }
 
-        const n =
+        const minutoDoDia =
             ((Math.round(m) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
 
-        return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+        return `${pad2(Math.floor(minutoDoDia / MINUTES_PER_HOUR))}:${pad2(minutoDoDia % MINUTES_PER_HOUR)}`;
     };
 
     const nowMin = () => {
 
-        const d = new Date();
+        const agora = new Date();
 
-        return d.getHours() * 60 + d.getMinutes();
+        return agora.getHours() * MINUTES_PER_HOUR + agora.getMinutes();
     };
+
+    // window.open com bloqueio explícito de acesso reverso via opener.
+    function openInNewTab(url) {
+
+        const opened = window.open(url, '_blank', 'noopener,noreferrer');
+
+        if (opened) {
+            opened.opener = null;
+        }
+
+        return opened;
+    }
 
     const gmGetValue = (key, fallback) => {
 
@@ -368,14 +376,14 @@
             return '--/--';
         }
 
-        return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+        return `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}`;
     }
 
     function formatDateKey(date = new Date()) {
 
         const d = new Date(date);
 
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
     }
 
     function normalizePunchTime(value) {
@@ -403,7 +411,7 @@
             return null;
         }
 
-        return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+        return `${pad2(hh)}:${pad2(mm)}`;
     }
 
     function shiftPunchTime(time, deltaMinutes) {
@@ -480,32 +488,30 @@
         };
     }
 
-    function getIntrajornadaMaxViolations(batidas) {
+    // Varre pares (início, fim) de batidas e devolve os que excedem o limite.
+    // firstPairIndex 0 varre turnos (entrada→saída); 1 varre intervalos (saída→retorno).
+    function findPunchPairViolations(batidas, firstPairIndex, maxDurationMinutes) {
 
         const punches = Array.isArray(batidas) ? batidas : [];
         const violations = [];
 
-        for (let i = 1; i + 1 < punches.length; i += 2) {
+        for (let i = firstPairIndex; i + 1 < punches.length; i += 2) {
 
-            const saida = toMin(punches[i]);
-            const retorno = toMin(punches[i + 1]);
+            const inicio = toMin(punches[i]);
+            const fim = toMin(punches[i + 1]);
 
-            if (!Number.isFinite(saida) || !Number.isFinite(retorno)) {
+            if (!Number.isFinite(inicio) || !Number.isFinite(fim)) {
                 continue;
             }
 
-            const duration = retorno - saida;
+            const duration = fim - inicio;
 
-            if (!Number.isFinite(duration) || duration <= 0) {
-                continue;
-            }
-
-            if (duration > CONFIG.INTERVALO_MAXIMO) {
+            if (duration > 0 && duration > maxDurationMinutes) {
                 violations.push({
                     start: punches[i],
                     end: punches[i + 1],
                     duration,
-                    excess: duration - CONFIG.INTERVALO_MAXIMO
+                    excess: duration - maxDurationMinutes
                 });
             }
         }
@@ -513,37 +519,14 @@
         return violations;
     }
 
+    function getIntrajornadaMaxViolations(batidas) {
+
+        return findPunchPairViolations(batidas, 1, CONFIG.INTERVALO_MAXIMO);
+    }
+
     function getMaxShiftViolations(batidas) {
 
-        const punches = Array.isArray(batidas) ? batidas : [];
-        const violations = [];
-
-        for (let i = 0; i + 1 < punches.length; i += 2) {
-
-            const entrada = toMin(punches[i]);
-            const saida = toMin(punches[i + 1]);
-
-            if (!Number.isFinite(entrada) || !Number.isFinite(saida)) {
-                continue;
-            }
-
-            const duration = saida - entrada;
-
-            if (!Number.isFinite(duration) || duration <= 0) {
-                continue;
-            }
-
-            if (duration > CONFIG.MAX_HORAS_TURNO) {
-                violations.push({
-                    start: punches[i],
-                    end: punches[i + 1],
-                    duration,
-                    excess: duration - CONFIG.MAX_HORAS_TURNO
-                });
-            }
-        }
-
-        return violations;
+        return findPunchPairViolations(batidas, 0, CONFIG.MAX_HORAS_TURNO);
     }
 
     function buildViolationDaysSummary(resumo) {
@@ -741,14 +724,10 @@
 
     function fmtGoogleCalendarDate(date) {
 
-        const yyyy = date.getFullYear();
-        const mm = String(date.getMonth() + 1).padStart(2, '0');
-        const dd = String(date.getDate()).padStart(2, '0');
-        const hh = String(date.getHours()).padStart(2, '0');
-        const min = String(date.getMinutes()).padStart(2, '0');
-        const ss = String(date.getSeconds()).padStart(2, '0');
+        const dia = `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
+        const hora = `${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(date.getSeconds())}`;
 
-        return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
+        return `${dia}T${hora}`;
     }
 
     function normalizeGoogleCalendarUserPath(value) {
@@ -792,7 +771,8 @@
         return '0';
     }
 
-    function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date(), userPath = null }) {
+    // Resolve início/fim do evento; fim ausente ou inválido vira início + duração padrão.
+    function resolveCalendarEventWindow(startMinute, endMinute, baseDate) {
 
         if (startMinute === null || startMinute === undefined) {
             return null;
@@ -800,55 +780,58 @@
 
         const startDate = minuteToDate(baseDate, startMinute);
 
-        let endDate =
-            (endMinute === null || endMinute === undefined)
-                ? null
-                : minuteToDate(baseDate, endMinute);
+        let endDate = (endMinute === null || endMinute === undefined)
+            ? null
+            : minuteToDate(baseDate, endMinute);
 
         if (!endDate || endDate <= startDate) {
             endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * MS_PER_MINUTE));
         }
 
+        return { startDate, endDate };
+    }
+
+    function buildCalendarEventTitle(title) {
+
+        return `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim() || 'Ahgora';
+    }
+
+    function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date(), userPath = null }) {
+
+        const eventWindow = resolveCalendarEventWindow(startMinute, endMinute, baseDate);
+
+        if (!eventWindow) {
+            return null;
+        }
+
         const normalizedPath = normalizeGoogleCalendarUserPath(userPath || CONFIG.GCAL_USER_PATH);
-        const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
 
         const params = new URLSearchParams();
         params.set('action', 'TEMPLATE');
-        params.set('text', fullTitle || 'Ahgora');
+        params.set('text', buildCalendarEventTitle(title));
         params.set('details', details || '');
         params.set('ctz', CONFIG.GCAL_TIMEZONE || 'America/Sao_Paulo');
-        params.set('dates', `${fmtGoogleCalendarDate(startDate)}/${fmtGoogleCalendarDate(endDate)}`);
+        params.set('dates', `${fmtGoogleCalendarDate(eventWindow.startDate)}/${fmtGoogleCalendarDate(eventWindow.endDate)}`);
 
         return `https://calendar.google.com/calendar/u/${encodeURIComponent(normalizedPath)}/r/eventedit?${params.toString()}`;
     }
 
     function buildOutlookCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date() }) {
 
-        if (startMinute === null || startMinute === undefined) {
+        const eventWindow = resolveCalendarEventWindow(startMinute, endMinute, baseDate);
+
+        if (!eventWindow) {
             return null;
         }
-
-        const startDate = minuteToDate(baseDate, startMinute);
-
-        let endDate =
-            (endMinute === null || endMinute === undefined)
-                ? null
-                : minuteToDate(baseDate, endMinute);
-
-        if (!endDate || endDate <= startDate) {
-            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * MS_PER_MINUTE));
-        }
-
-        const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
 
         const params = new URLSearchParams();
         // Outlook Web usa deeplink de compose para abrir o formulário já preenchido.
         params.set('path', '/calendar/action/compose');
         params.set('rru', 'addevent');
-        params.set('subject', fullTitle || 'Ahgora');
+        params.set('subject', buildCalendarEventTitle(title));
         params.set('body', details || '');
-        params.set('startdt', startDate.toISOString());
-        params.set('enddt', endDate.toISOString());
+        params.set('startdt', eventWindow.startDate.toISOString());
+        params.set('enddt', eventWindow.endDate.toISOString());
 
         return `https://outlook.office.com/calendar/0/deeplink/compose?${params.toString()}`;
     }
@@ -4422,8 +4405,8 @@
 
                 if (timeParts.length >= 2 && datePart) {
 
-                    const hours = String(timeParts[0].innerText).padStart(2, '0');
-                    const minutes = String(timeParts[1].innerText).padStart(2, '0');
+                    const hours = pad2(timeParts[0].innerText);
+                    const minutes = pad2(timeParts[1].innerText);
                     const time = `${hours}:${minutes}`;
                     const date = String(datePart.innerText).replace(/from\s/g, '').trim();
 
