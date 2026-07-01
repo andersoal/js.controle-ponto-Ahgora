@@ -24,27 +24,42 @@
        CONFIG
     ========================================================= */
 
+    // Conversões de tempo usadas em todo o script (antes espalhadas
+    // como números mágicos: 60, 1440, 1000, 60000, 86400000...).
+    const MINUTES_PER_HOUR = 60;
+    const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
+    const MS_PER_SECOND = 1000;
+    const MS_PER_MINUTE = 60 * MS_PER_SECOND;
+    const MS_PER_DAY = MINUTES_PER_DAY * MS_PER_MINUTE;
+    const QUARTER_HOUR_MINUTES = 15;
+
     const CONFIG = {
 
         // Jornada
-        CARGA_DIARIA: 8 * 60,
+        CARGA_DIARIA: 8 * MINUTES_PER_HOUR,
 
         // Limites
-        MAX_HORAS_DIA: 10 * 60,
-        MAX_HORAS_TURNO: 6 * 60,
-        QUATRO_HORAS: 4 * 60,
+        MAX_HORAS_DIA: 10 * MINUTES_PER_HOUR,
+        MAX_HORAS_TURNO: 6 * MINUTES_PER_HOUR,
+        QUATRO_HORAS: 4 * MINUTES_PER_HOUR,
+
+        // BR-001: interjornada mínima entre o fim de um dia e o início do outro.
+        INTERJORNADA_MINIMA: 11 * MINUTES_PER_HOUR,
+
+        // Margem antes de estourar turno/dia em que a UI passa a exibir "warn".
+        MARGEM_AVISO_LIMITE: 30,
 
         // Intervalo entre turnos
         INTERVALO_MINIMO: 30,
-        INTERVALO_MAXIMO: (3 * 60) + 30,
-        MIN_TURNO_COM_INTERVALO: 2 * 60,
+        INTERVALO_MAXIMO: (3 * MINUTES_PER_HOUR) + 30,
+        MIN_TURNO_COM_INTERVALO: 2 * MINUTES_PER_HOUR,
 
         // Regras de quantidade de batidas
         MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA: 4,
         MAX_BATIDAS_DIA_COM_JUSTIFICATIVA: 6,
 
         // Atualização
-        UPDATE_INTERVAL: 1 * 1000,
+        UPDATE_INTERVAL: 1 * MS_PER_SECOND,
 
         // Notificações
         NOTIFICAR_ANTES: 5,
@@ -52,9 +67,15 @@
         // Alarmes logger (novabatidaonline)
         LOGGER_ALARM_LEAD_MINUTES: 5,
         LOGGER_ALARM_REPEAT: 'once',
+        LOGGER_ALARM_CHECK_MS: 10 * MS_PER_SECOND,
+        LOGGER_ALARM_LEAD_OPTIONS: [1, 3, 5, 10, 15],
+        LOGGER_MONITOR_INTERVAL_MS: 500,
 
         // Logger
         LOGGER_HISTORY_SIZE: 5,
+        LOGGER_HISTORY_MAX_ENTRIES: 100,
+        LOGGER_AUTOPEN_STATE_MAX_ENTRIES: 120,
+        TOAST_DURATION_MS: 2200,
 
         // Google Calendar
         // Aceita "0" ou "example@gmail.com" para gerar /u/{valor}/ na URL.
@@ -63,12 +84,28 @@
         GCAL_TIMEZONE: 'America/Sao_Paulo',
         // Duração padrão (em minutos) dos eventos criados via Google Calendar.
         GCAL_EVENT_DURATION_MIN: 1,
+        QUICK_CALENDAR_OFFSET_OPTIONS: [5, 10, 15],
 
         AUTO_REFRESH_MINUTES: 15,
         URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
     };
 
-    let NEXT_REFRESH = Date.now() + (CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
+    // Todas as chaves de armazenamento (GM/localStorage) em um só lugar,
+    // em vez de strings repetidas pelo código.
+    const STORAGE_KEYS = {
+        PRIVACY_HIDE: 'ahgora_privacy_hide_times',
+        LOGGER_ALARM_CONFIG: 'ahgora_logger_alarm_v1',
+        LOGGER_ALARM_FIRED: 'ahgora_logger_alarm_fired_v1',
+        LOGGER_GCAL_AUTOPEN: 'ahgora_logger_gcal_autopen_v1',
+        SHARED_TRUTH: 'ahgora_shared_truth_v1',
+        LOCAL_DAY_PUNCHES: 'ahgora_local_day_punches_v1',
+        PUNCH_HISTORY: 'ahgora_history_v6',
+        MIRROR_TODAY: 'ahgora_mirror_today',
+        MIRROR_TODAY_REF: 'ahgora_mirror_today_ref',
+        WEEK_BALANCE_CACHE: 'ahgora_saldo_semana_anterior'
+    };
+
+    let NEXT_REFRESH = Date.now() + (CONFIG.AUTO_REFRESH_MINUTES * MS_PER_MINUTE);
 
     /* =========================================================
        UTILS
@@ -80,7 +117,7 @@
             new Date();
 
         const msAteProximoMinuto =
-            (60 - agora.getSeconds()) * 1000
+            (60 - agora.getSeconds()) * MS_PER_SECOND
             - agora.getMilliseconds();
 
         setTimeout(() => {
@@ -136,7 +173,7 @@
             return null;
         }
 
-        return Math.ceil(m / 15) * 15;
+        return Math.ceil(m / QUARTER_HOUR_MINUTES) * QUARTER_HOUR_MINUTES;
     };
 
     const fmtQuarterDecimal = m => {
@@ -163,7 +200,7 @@
         }
 
         const n =
-            ((Math.round(m) % 1440) + 1440) % 1440;
+            ((Math.round(m) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
 
         return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
     };
@@ -207,14 +244,9 @@
         }
     };
 
-    const PRIVACY_HIDE_KEY = 'ahgora_privacy_hide_times';
-    const LOGGER_ALARM_CONFIG_KEY = 'ahgora_logger_alarm_v1';
-    const LOGGER_ALARM_FIRED_STATE_KEY = 'ahgora_logger_alarm_fired_v1';
-    const LOGGER_GCAL_AUTOPEN_STATE_KEY = 'ahgora_logger_gcal_autopen_v1';
-
     function isPrivacyHidden() {
 
-        return gmGetValue(PRIVACY_HIDE_KEY, 'false') === 'true';
+        return gmGetValue(STORAGE_KEYS.PRIVACY_HIDE, 'false') === 'true';
     }
 
     function applyPrivacyState() {
@@ -229,7 +261,7 @@
 
     function setPrivacyHidden(hidden) {
 
-        gmSetValue(PRIVACY_HIDE_KEY, hidden ? 'true' : 'false');
+        gmSetValue(STORAGE_KEYS.PRIVACY_HIDE, hidden ? 'true' : 'false');
         applyPrivacyState();
     }
 
@@ -649,7 +681,7 @@
         const yearStart =
             new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
 
-        return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+        return Math.ceil((((d - yearStart) / MS_PER_DAY) + 1) / 7);
     }
 
     function calcularTrabalhado(batidas) {
@@ -700,7 +732,7 @@
         }
 
         const date = new Date(baseDate || new Date());
-        const n = ((Math.round(minute) % 1440) + 1440) % 1440;
+        const n = ((Math.round(minute) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
 
         date.setHours(Math.floor(n / 60), n % 60, 0, 0);
 
@@ -774,7 +806,7 @@
                 : minuteToDate(baseDate, endMinute);
 
         if (!endDate || endDate <= startDate) {
-            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * 60 * 1000));
+            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * MS_PER_MINUTE));
         }
 
         const normalizedPath = normalizeGoogleCalendarUserPath(userPath || CONFIG.GCAL_USER_PATH);
@@ -804,7 +836,7 @@
                 : minuteToDate(baseDate, endMinute);
 
         if (!endDate || endDate <= startDate) {
-            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * 60 * 1000));
+            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * MS_PER_MINUTE));
         }
 
         const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
@@ -1167,17 +1199,17 @@
             .reduce((a, b) => a + b.trabalhado, 0);
 
         gmSetValue(
-            'ahgora_mirror_today',
+            STORAGE_KEYS.MIRROR_TODAY,
             JSON.stringify(hoje.batidas || [])
         );
 
         gmSetValue(
-            'ahgora_mirror_today_ref',
+            STORAGE_KEYS.MIRROR_TODAY_REF,
             formatDateKey(hoje.data)
         );
 
         gmSetValue(
-            'ahgora_saldo_semana_anterior',
+            STORAGE_KEYS.WEEK_BALANCE_CACHE,
             String(saldoSemana)
         );
 
@@ -1286,7 +1318,7 @@
 
         const retorno11h =
             baseRetorno11h !== null
-                ? baseRetorno11h + (11 * 60)
+                ? baseRetorno11h + CONFIG.INTERJORNADA_MINIMA
                 : null;
 
         const saidaIdeal =
@@ -1330,8 +1362,8 @@
                     )
                         ? 'danger'
                         : (
-                            (s1 - e1) >= (CONFIG.MAX_HORAS_TURNO - 30) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)
+                            (s1 - e1) >= (CONFIG.MAX_HORAS_TURNO - CONFIG.MARGEM_AVISO_LIMITE) ||
+                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - CONFIG.MARGEM_AVISO_LIMITE)
                         )
                             ? 'warn'
                             : 'infos',
@@ -1372,8 +1404,8 @@
                         ? 'danger'
 
                         : (
-                            (s2 - e2) >= (CONFIG.MAX_HORAS_TURNO - 30) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)
+                            (s2 - e2) >= (CONFIG.MAX_HORAS_TURNO - CONFIG.MARGEM_AVISO_LIMITE) ||
+                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - CONFIG.MARGEM_AVISO_LIMITE)
                         )
                             ? 'warn'
                             : 'infos',
@@ -1719,7 +1751,6 @@
         return guidance;
     }
 
-    const SHARED_TRUTH_KEY = 'ahgora_shared_truth_v1';
 
     function persistSharedTruth(resumo) {
 
@@ -1755,13 +1786,13 @@
             maxDailyViolationDays: resumo.maxDailyViolationDays || []
         };
 
-        gmSetValue(SHARED_TRUTH_KEY, JSON.stringify(shared));
+        gmSetValue(STORAGE_KEYS.SHARED_TRUTH, JSON.stringify(shared));
     }
 
     function readSharedTruth() {
 
         return parseJson(
-            gmGetValue(SHARED_TRUTH_KEY, '{}'),
+            gmGetValue(STORAGE_KEYS.SHARED_TRUTH, '{}'),
             {}
         );
     }
@@ -3414,7 +3445,6 @@
 
     /* ─── Local per-day punch overrides ─── */
 
-    const LOCAL_DAY_PUNCHES_KEY = 'ahgora_local_day_punches_v1';
 
     let _peState = null;
     let _peDrag = { active: false, ox: 0, oy: 0 };
@@ -3423,7 +3453,7 @@
 
     function getLocalDayPunchOverrides(dateKey) {
 
-        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
+        const store = parseJson(gmGetValue(STORAGE_KEYS.LOCAL_DAY_PUNCHES, '{}'), {});
         const raw = store[dateKey];
 
         if (!Array.isArray(raw)) {
@@ -3437,7 +3467,7 @@
 
     function setLocalDayPunchOverrides(dateKey, punches) {
 
-        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
+        const store = parseJson(gmGetValue(STORAGE_KEYS.LOCAL_DAY_PUNCHES, '{}'), {});
         const valid = (punches || [])
             .map(normalizePunchTime)
             .filter(Boolean)
@@ -3449,14 +3479,14 @@
             store[dateKey] = valid;
         }
 
-        gmSetValue(LOCAL_DAY_PUNCHES_KEY, JSON.stringify(store));
+        gmSetValue(STORAGE_KEYS.LOCAL_DAY_PUNCHES, JSON.stringify(store));
     }
 
     function clearLocalDayPunchOverrides(dateKey) {
 
-        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
+        const store = parseJson(gmGetValue(STORAGE_KEYS.LOCAL_DAY_PUNCHES, '{}'), {});
         delete store[dateKey];
-        gmSetValue(LOCAL_DAY_PUNCHES_KEY, JSON.stringify(store));
+        gmSetValue(STORAGE_KEYS.LOCAL_DAY_PUNCHES, JSON.stringify(store));
     }
 
     function showLoggerToast(message) {
@@ -3487,7 +3517,7 @@
 
         setTimeout(() => {
             if (toast) toast.style.display = 'none';
-        }, 2200);
+        }, CONFIG.TOAST_DURATION_MS);
     }
 
     function getLoggerAlarmDefaults() {
@@ -3519,8 +3549,7 @@
             ? src.mode
             : defaults.mode;
 
-        const leadCandidates = [1, 3, 5, 10, 15];
-        const leadMinutes = leadCandidates.includes(Number(src.leadMinutes))
+        const leadMinutes = CONFIG.LOGGER_ALARM_LEAD_OPTIONS.includes(Number(src.leadMinutes))
             ? Number(src.leadMinutes)
             : defaults.leadMinutes;
 
@@ -3533,8 +3562,7 @@
             : {};
 
         const gcalUserPath = normalizeGoogleCalendarUserPath(src.gcalUserPath || defaults.gcalUserPath);
-        const quickGcalOffsetCandidates = [5, 10, 15];
-        const quickGcalOffsetMinutes = quickGcalOffsetCandidates.includes(Number(src.quickGcalOffsetMinutes))
+        const quickGcalOffsetMinutes = CONFIG.QUICK_CALENDAR_OFFSET_OPTIONS.includes(Number(src.quickGcalOffsetMinutes))
             ? Number(src.quickGcalOffsetMinutes)
             : defaults.quickGcalOffsetMinutes;
         const quickGcalAutoOpenStage = ['off', 'interval', 'return', 'exit', 'any'].includes(String(src.quickGcalAutoOpenStage || 'off'))
@@ -3565,7 +3593,7 @@
     function readLoggerAlarmConfig() {
 
         const raw = parseJson(
-            gmGetValue(LOGGER_ALARM_CONFIG_KEY, '{}'),
+            gmGetValue(STORAGE_KEYS.LOGGER_ALARM_CONFIG, '{}'),
             {}
         );
 
@@ -3577,7 +3605,7 @@
         const normalized = normalizeLoggerAlarmConfig(nextConfig);
 
         gmSetValue(
-            LOGGER_ALARM_CONFIG_KEY,
+            STORAGE_KEYS.LOGGER_ALARM_CONFIG,
             JSON.stringify(normalized)
         );
 
@@ -3653,7 +3681,7 @@
     function readLoggerGcalAutoOpenState() {
 
         const raw = parseJson(
-            gmGetValue(LOGGER_GCAL_AUTOPEN_STATE_KEY, '[]'),
+            gmGetValue(STORAGE_KEYS.LOGGER_GCAL_AUTOPEN, '[]'),
             []
         );
 
@@ -3663,7 +3691,7 @@
 
         return raw
             .filter(entry => entry && typeof entry === 'object' && typeof entry.token === 'string')
-            .slice(-120);
+            .slice(-CONFIG.LOGGER_AUTOPEN_STATE_MAX_ENTRIES);
     }
 
     function hasLoggerGcalAutoOpenToken(token) {
@@ -3682,8 +3710,8 @@
         });
 
         gmSetValue(
-            LOGGER_GCAL_AUTOPEN_STATE_KEY,
-            JSON.stringify(state.slice(-120))
+            STORAGE_KEYS.LOGGER_GCAL_AUTOPEN,
+            JSON.stringify(state.slice(-CONFIG.LOGGER_AUTOPEN_STATE_MAX_ENTRIES))
         );
     }
 
@@ -3694,7 +3722,7 @@
         }
 
         const raw = parseJson(
-            gmGetValue(LOGGER_ALARM_FIRED_STATE_KEY, '{}'),
+            gmGetValue(STORAGE_KEYS.LOGGER_ALARM_FIRED, '{}'),
             {}
         );
 
@@ -3733,7 +3761,7 @@
         state.fired.push(token);
 
         gmSetValue(
-            LOGGER_ALARM_FIRED_STATE_KEY,
+            STORAGE_KEYS.LOGGER_ALARM_FIRED,
             JSON.stringify(state)
         );
     }
@@ -3847,7 +3875,7 @@
 
         const nowTs = Date.now();
 
-        if ((nowTs - _loggerAlarmLastCheckAt) < 10000) {
+        if ((nowTs - _loggerAlarmLastCheckAt) < CONFIG.LOGGER_ALARM_CHECK_MS) {
             return;
         }
 
@@ -3867,11 +3895,11 @@
         } = getMirrorTodayContext(sharedTruth, todayKey);
 
         const saldoSemanaAnt = Number(
-            sharedTruth.weekBalance ?? gmGetValue('ahgora_saldo_semana_anterior', '0')
+            sharedTruth.weekBalance ?? gmGetValue(STORAGE_KEYS.WEEK_BALANCE_CACHE, '0')
         );
 
         const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
+            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
             []
         );
 
@@ -3970,7 +3998,7 @@
         const normalizedDate = String(date || fallbackDate).trim() || fallbackDate;
 
         const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
+            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
             []
         );
 
@@ -3989,12 +4017,12 @@
             timestamp: normalizedTimestamp
         });
 
-        if (history.length > 100) {
+        if (history.length > CONFIG.LOGGER_HISTORY_MAX_ENTRIES) {
             history.shift();
         }
 
         gmSetValue(
-            'ahgora_history_v6',
+            STORAGE_KEYS.PUNCH_HISTORY,
             JSON.stringify(history)
         );
 
@@ -4006,7 +4034,7 @@
     function deleteLastSavedPunch() {
 
         const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
+            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
             []
         );
 
@@ -4029,7 +4057,7 @@
         history.pop();
 
         gmSetValue(
-            'ahgora_history_v6',
+            STORAGE_KEYS.PUNCH_HISTORY,
             JSON.stringify(history)
         );
 
@@ -4054,7 +4082,7 @@
         }
 
         const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
+            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
             []
         );
 
@@ -4088,11 +4116,11 @@
         }
 
         history[targetIndex].time = to;
-        history[targetIndex].timestamp = startMs + (toMin(to) * 60000);
+        history[targetIndex].timestamp = startMs + (toMin(to) * MS_PER_MINUTE);
         history[targetIndex].date = new Date(startMs).toLocaleDateString('pt-BR');
 
         gmSetValue(
-            'ahgora_history_v6',
+            STORAGE_KEYS.PUNCH_HISTORY,
             JSON.stringify(history)
         );
 
@@ -4120,7 +4148,7 @@
         }
 
         const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
+            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
             []
         );
 
@@ -4143,7 +4171,7 @@
         history.splice(targetIndex, 1);
 
         gmSetValue(
-            'ahgora_history_v6',
+            STORAGE_KEYS.PUNCH_HISTORY,
             JSON.stringify(history)
         );
 
@@ -4226,9 +4254,9 @@
     function getMirrorTodayContext(sharedTruth, todayKey) {
 
         const sharedTodayKey = String(sharedTruth.todayKey || '');
-        const mirrorTodayKey = String(gmGetValue('ahgora_mirror_today_ref', ''));
+        const mirrorTodayKey = String(gmGetValue(STORAGE_KEYS.MIRROR_TODAY_REF, ''));
         const mirrorCachedPunches = parseJson(
-            gmGetValue('ahgora_mirror_today', '[]'),
+            gmGetValue(STORAGE_KEYS.MIRROR_TODAY, '[]'),
             []
         );
 
@@ -4336,7 +4364,7 @@
             .map(entry => ({
                 source: entry.source,
                 time: entry.time,
-                timestamp: startMs + ((toMin(entry.time) || 0) * 60000),
+                timestamp: startMs + ((toMin(entry.time) || 0) * MS_PER_MINUTE),
                 dateLabel: todayDateLabel
             }));
 
@@ -4432,11 +4460,11 @@
         } = getMirrorTodayContext(sharedTruth, todayKey);
 
         const saldoSemanaAnt = Number(
-            sharedTruth.weekBalance ?? gmGetValue('ahgora_saldo_semana_anterior', '0')
+            sharedTruth.weekBalance ?? gmGetValue(STORAGE_KEYS.WEEK_BALANCE_CACHE, '0')
         );
 
         const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
+            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
             []
         );
 
@@ -4457,7 +4485,7 @@
 
         if (reconciled.removedCount > 0) {
             gmSetValue(
-                'ahgora_history_v6',
+                STORAGE_KEYS.PUNCH_HISTORY,
                 JSON.stringify(effectiveHistory)
             );
         }
@@ -4817,7 +4845,7 @@
             { value: 'interval', label: 'Intervalo' },
             { value: 'complete', label: 'Completo' }
         ].map(item => `<option value="${item.value}" ${item.value === alarmConfig.mode ? 'selected' : ''}>${item.label}</option>`).join('');
-        const alarmLeadOptions = [1, 3, 5, 10, 15]
+        const alarmLeadOptions = CONFIG.LOGGER_ALARM_LEAD_OPTIONS
             .map(min => `<option value="${min}" ${min === alarmConfig.leadMinutes ? 'selected' : ''}>${min} min</option>`)
             .join('');
         const alarmRepeatOptions = [
@@ -4830,7 +4858,7 @@
             : alarmConfig.soundRepeat === 'loop'
                 ? 'som contínuo'
                 : 'som 1x';
-        const quickGcalOffsetOptions = [5, 10, 15]
+        const quickGcalOffsetOptions = CONFIG.QUICK_CALENDAR_OFFSET_OPTIONS
             .map(min => `<option value="${min}" ${min === alarmConfig.quickGcalOffsetMinutes ? 'selected' : ''}>-${min} min</option>`)
             .join('');
         const quickGcalAutoOpenStageOptions = [
@@ -5202,7 +5230,7 @@
                 return;
             }
 
-            const manualTimestamp = startMs + (minute * 60000);
+            const manualTimestamp = startMs + (minute * MS_PER_MINUTE);
             const todayDateLabel = new Date(startMs).toLocaleDateString('pt-BR');
             const inserted = savePunch(time, todayDateLabel, manualTimestamp);
 
@@ -5480,7 +5508,7 @@
         setInterval(() => {
             monitorModal();
             evaluateLoggerAlarms();
-        }, 500);
+        }, CONFIG.LOGGER_MONITOR_INTERVAL_MS);
     }
 
     /* =========================================================
@@ -5502,7 +5530,7 @@
             console.log('[AHGORA PANEL] recarregando página...');
             console.log(CONFIG.URL_REFRESH);
             window.top.location = CONFIG.URL_REFRESH;
-        }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
+        }, CONFIG.AUTO_REFRESH_MINUTES * MS_PER_MINUTE);
     }
 
     /* =========================================================
@@ -5563,7 +5591,7 @@
 
                 location.reload();
 
-            }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
+            }, CONFIG.AUTO_REFRESH_MINUTES * MS_PER_MINUTE);
         }
     }
 
