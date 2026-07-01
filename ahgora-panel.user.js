@@ -3196,6 +3196,33 @@
         }
     }
 
+    // Histórico local de batidas do logger (novabatidaonline).
+    function readPunchHistory() {
+
+        return parseJson(gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'), []);
+    }
+
+    function writePunchHistory(history) {
+
+        gmSetValue(STORAGE_KEYS.PUNCH_HISTORY, JSON.stringify(history));
+    }
+
+    const isEntryInRange = (entry, startMs, endMs) => {
+
+        const ts = Number(entry?.timestamp);
+
+        return Number.isFinite(ts) && ts >= startMs && ts < endMs;
+    };
+
+    // Índice no histórico da batida local de hoje com o horário informado.
+    function findTodayPunchIndex(history, normalizedTime, startMs, endMs) {
+
+        return history.findIndex(entry =>
+            isEntryInRange(entry, startMs, endMs) &&
+            normalizePunchTime(entry?.time) === normalizedTime
+        );
+    }
+
     /* ─── Local per-day punch overrides ─── */
 
 
@@ -3293,53 +3320,41 @@
         };
     }
 
+    const pickOneOf = (value, allowed, fallback) =>
+        allowed.includes(value) ? value : fallback;
+
+    // Sanitiza a configuração persistida: valores fora das opções voltam ao padrão.
     function normalizeLoggerAlarmConfig(raw) {
 
         const defaults = getLoggerAlarmDefaults();
         const src = raw && typeof raw === 'object' ? raw : {};
-
-        const mode = ['10h', 'interval', 'complete'].includes(src.mode)
-            ? src.mode
-            : defaults.mode;
-
-        const leadMinutes = CONFIG.LOGGER_ALARM_LEAD_OPTIONS.includes(Number(src.leadMinutes))
-            ? Number(src.leadMinutes)
-            : defaults.leadMinutes;
-
-        const soundRepeat = ['once', 'triple', 'loop'].includes(src.soundRepeat)
-            ? src.soundRepeat
-            : defaults.soundRepeat;
-
         const channelsRaw = src.channels && typeof src.channels === 'object'
             ? src.channels
             : {};
 
-        const gcalUserPath = normalizeGoogleCalendarUserPath(src.gcalUserPath || defaults.gcalUserPath);
-        const quickGcalOffsetMinutes = CONFIG.QUICK_CALENDAR_OFFSET_OPTIONS.includes(Number(src.quickGcalOffsetMinutes))
-            ? Number(src.quickGcalOffsetMinutes)
-            : defaults.quickGcalOffsetMinutes;
-        const quickGcalAutoOpenStage = ['off', 'interval', 'return', 'exit', 'any'].includes(String(src.quickGcalAutoOpenStage || 'off'))
-            ? String(src.quickGcalAutoOpenStage)
-            : defaults.quickGcalAutoOpenStage;
-        const quickCalendarProvider = ['google', 'outlook', 'both'].includes(String(src.quickCalendarProvider || 'both'))
-            ? String(src.quickCalendarProvider)
-            : defaults.quickCalendarProvider;
-
         return {
             enabled: Boolean(src.enabled),
-            mode,
-            leadMinutes,
+            mode: pickOneOf(src.mode, ['10h', 'interval', 'complete'], defaults.mode),
+            leadMinutes: pickOneOf(Number(src.leadMinutes), CONFIG.LOGGER_ALARM_LEAD_OPTIONS, defaults.leadMinutes),
             channels: {
                 sound: channelsRaw.sound !== false,
                 desktop: channelsRaw.desktop !== false
             },
-            soundRepeat,
-            gcalUserPath,
+            soundRepeat: pickOneOf(src.soundRepeat, ['once', 'triple', 'loop'], defaults.soundRepeat),
+            gcalUserPath: normalizeGoogleCalendarUserPath(src.gcalUserPath || defaults.gcalUserPath),
             quickGcalEnabled: src.quickGcalEnabled !== false,
-            quickCalendarProvider,
-            quickGcalOffsetMinutes,
+            // Nota: os dois campos abaixo preservam um comportamento pré-existente —
+            // sem valor salvo, a validação passa pelo fallback ('both'/'off') mas o
+            // retorno é String(undefined) = "undefined", o que oculta os botões
+            // rápidos até o usuário escolher uma opção. Corrigir exigiria migração.
+            quickCalendarProvider: ['google', 'outlook', 'both'].includes(String(src.quickCalendarProvider || 'both'))
+                ? String(src.quickCalendarProvider)
+                : defaults.quickCalendarProvider,
+            quickGcalOffsetMinutes: pickOneOf(Number(src.quickGcalOffsetMinutes), CONFIG.QUICK_CALENDAR_OFFSET_OPTIONS, defaults.quickGcalOffsetMinutes),
             quickGcalAutoOpenEnabled: Boolean(src.quickGcalAutoOpenEnabled),
-            quickGcalAutoOpenStage
+            quickGcalAutoOpenStage: ['off', 'interval', 'return', 'exit', 'any'].includes(String(src.quickGcalAutoOpenStage || 'off'))
+                ? String(src.quickGcalAutoOpenStage)
+                : defaults.quickGcalAutoOpenStage
         };
     }
 
@@ -3380,55 +3395,37 @@
         return writeLoggerAlarmConfig(merged);
     }
 
+    const LOGGER_ALARM_MODE_LABELS = {
+        interval: 'Intervalo',
+        complete: 'Completo'
+    };
+
+    const GUIDANCE_STAGE_LABELS = {
+        interval: 'Intervalo (saída do 1º turno)',
+        return: 'Retorno do intervalo',
+        exit: 'Saída do dia',
+        entry: 'Entrada',
+        done: 'Jornada encerrada'
+    };
+
+    const QUICK_CALENDAR_PROVIDER_LABELS = {
+        google: 'Google Calendar',
+        outlook: 'Outlook'
+    };
+
     function getLoggerAlarmModeLabel(mode) {
 
-        if (mode === 'interval') {
-            return 'Intervalo';
-        }
-
-        if (mode === 'complete') {
-            return 'Completo';
-        }
-
-        return '10h';
+        return LOGGER_ALARM_MODE_LABELS[mode] || '10h';
     }
 
     function getGuidanceStageLabel(stage) {
 
-        if (stage === 'interval') {
-            return 'Intervalo (saída do 1º turno)';
-        }
-
-        if (stage === 'return') {
-            return 'Retorno do intervalo';
-        }
-
-        if (stage === 'exit') {
-            return 'Saída do dia';
-        }
-
-        if (stage === 'entry') {
-            return 'Entrada';
-        }
-
-        if (stage === 'done') {
-            return 'Jornada encerrada';
-        }
-
-        return 'Fase atual';
+        return GUIDANCE_STAGE_LABELS[stage] || 'Fase atual';
     }
 
     function getQuickCalendarProviderLabel(provider) {
 
-        if (provider === 'google') {
-            return 'Google Calendar';
-        }
-
-        if (provider === 'outlook') {
-            return 'Outlook';
-        }
-
-        return 'Google + Outlook';
+        return QUICK_CALENDAR_PROVIDER_LABELS[provider] || 'Google + Outlook';
     }
 
     function readLoggerGcalAutoOpenState() {
@@ -3519,6 +3516,42 @@
         );
     }
 
+    const ALARM_BEEP = {
+        COUNT_BY_REPEAT: { loop: 8, triple: 3, once: 1 },
+        SPACING_S: 0.42,
+        ATTACK_S: 0.02,
+        DECAY_S: 0.28,
+        DURATION_S: 0.3,
+        HIGH_FREQ_HZ: 880,
+        LOW_FREQ_HZ: 740,
+        PEAK_GAIN: 0.05,
+        SILENT_GAIN: 0.0001,
+        SLOT_MS: 450,
+        CLOSE_SLACK_MS: 700
+    };
+
+    // Um beep senoidal com envelope de ataque/decaimento, alternando 880/740 Hz.
+    function scheduleAlarmBeep(context, beepIndex) {
+
+        const startAt = context.currentTime + (beepIndex * ALARM_BEEP.SPACING_S);
+        const osc = context.createOscillator();
+        const gain = context.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.value = beepIndex % 2 === 0 ? ALARM_BEEP.HIGH_FREQ_HZ : ALARM_BEEP.LOW_FREQ_HZ;
+        gain.gain.value = ALARM_BEEP.SILENT_GAIN;
+
+        osc.connect(gain);
+        gain.connect(context.destination);
+
+        gain.gain.setValueAtTime(ALARM_BEEP.SILENT_GAIN, startAt);
+        gain.gain.exponentialRampToValueAtTime(ALARM_BEEP.PEAK_GAIN, startAt + ALARM_BEEP.ATTACK_S);
+        gain.gain.exponentialRampToValueAtTime(ALARM_BEEP.SILENT_GAIN, startAt + ALARM_BEEP.DECAY_S);
+
+        osc.start(startAt);
+        osc.stop(startAt + ALARM_BEEP.DURATION_S);
+    }
+
     function playLoggerAlarmSound(repeatMode) {
 
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -3535,34 +3568,13 @@
             return;
         }
 
-        const totalBeeps = repeatMode === 'loop'
-            ? 8
-            : repeatMode === 'triple'
-                ? 3
-                : 1;
+        const totalBeeps = ALARM_BEEP.COUNT_BY_REPEAT[repeatMode] || ALARM_BEEP.COUNT_BY_REPEAT.once;
 
         for (let i = 0; i < totalBeeps; i += 1) {
-
-            const startAt = context.currentTime + (i * 0.42);
-            const osc = context.createOscillator();
-            const gain = context.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.value = i % 2 === 0 ? 880 : 740;
-            gain.gain.value = 0.0001;
-
-            osc.connect(gain);
-            gain.connect(context.destination);
-
-            gain.gain.setValueAtTime(0.0001, startAt);
-            gain.gain.exponentialRampToValueAtTime(0.05, startAt + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.28);
-
-            osc.start(startAt);
-            osc.stop(startAt + 0.3);
+            scheduleAlarmBeep(context, i);
         }
 
-        const closeAfter = (totalBeeps * 450) + 700;
+        const closeAfter = (totalBeeps * ALARM_BEEP.SLOT_MS) + ALARM_BEEP.CLOSE_SLACK_MS;
 
         setTimeout(() => {
             if (context && typeof context.close === 'function') {
@@ -3624,6 +3636,52 @@
         return targets;
     }
 
+    // Dispara notificação/som/toast para um alvo de alarme já dentro da janela.
+    function notifyLoggerAlarmTarget(target, alarmConfig, token, minutesLeft) {
+
+        if (alarmConfig.channels.desktop) {
+            notif(
+                `logger-alarm-${token}`,
+                `⏰ ${target.label}`,
+                `Previsto para ${fmtHour(target.minute)}. Faltam ~${Math.max(minutesLeft, 0)} min.`,
+                target.urgent
+            );
+        }
+
+        if (alarmConfig.channels.sound) {
+            try {
+                playLoggerAlarmSound(alarmConfig.soundRepeat);
+            } catch (_) {
+                if (!_loggerAlarmSoundWarned) {
+                    _loggerAlarmSoundWarned = true;
+                    showLoggerToast('Som bloqueado pelo navegador. Interaja com a página e tente novamente.');
+                }
+            }
+        }
+
+        showLoggerToast(`Alarme: ${target.label} às ${fmtHour(target.minute)}.`);
+    }
+
+    // Dispara o alvo no máximo uma vez por dia, quando falta ~leadMinutes para ele.
+    function maybeFireLoggerAlarm(target, alarmConfig, todayKey, now) {
+
+        const lead = alarmConfig.leadMinutes;
+        const token = `${todayKey}:${target.id}:${target.minute}:${lead}`;
+
+        if (hasLoggerAlarmFired(todayKey, token)) {
+            return;
+        }
+
+        const minutesLeft = target.minute - now;
+
+        if (minutesLeft < Math.max(0, lead - 1) || minutesLeft > lead + 1) {
+            return;
+        }
+
+        markLoggerAlarmFired(todayKey, token);
+        notifyLoggerAlarmTarget(target, alarmConfig, token, minutesLeft);
+    }
+
     function evaluateLoggerAlarms() {
 
         const nowTs = Date.now();
@@ -3642,24 +3700,14 @@
 
         const sharedTruth = readSharedTruth();
         const { todayKey, startMs, endMs } = getTodayBounds();
-
-        const {
-            mirrorPunches
-        } = getMirrorTodayContext(sharedTruth, todayKey);
+        const { mirrorPunches } = getMirrorTodayContext(sharedTruth, todayKey);
 
         const saldoSemanaAnt = Number(
             sharedTruth.weekBalance ?? gmGetValue(STORAGE_KEYS.WEEK_BALANCE_CACHE, '0')
         );
 
-        const history = parseJson(
-            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
-            []
-        );
-
-        const {
-            combinedPunches
-        } = buildLoggerPunchTimeline(
-            history,
+        const { combinedPunches } = buildLoggerPunchTimeline(
+            readPunchHistory(),
             mirrorPunches,
             startMs,
             endMs
@@ -3667,54 +3715,9 @@
 
         const guidance = buildPunchGuidance(combinedPunches, saldoSemanaAnt);
         const targets = buildLoggerAlarmTargets(guidance, alarmConfig.mode);
-
-        if (!targets.length) {
-            return;
-        }
-
-        const lead = alarmConfig.leadMinutes;
         const now = nowMin();
 
-        targets.forEach(target => {
-
-            const token = `${todayKey}:${target.id}:${target.minute}:${lead}`;
-
-            if (hasLoggerAlarmFired(todayKey, token)) {
-                return;
-            }
-
-            const diff = target.minute - now;
-            const minWindow = Math.max(0, lead - 1);
-            const maxWindow = lead + 1;
-
-            if (diff < minWindow || diff > maxWindow) {
-                return;
-            }
-
-            markLoggerAlarmFired(todayKey, token);
-
-            if (alarmConfig.channels.desktop) {
-                notif(
-                    `logger-alarm-${token}`,
-                    `⏰ ${target.label}`,
-                    `Previsto para ${fmtHour(target.minute)}. Faltam ~${Math.max(diff, 0)} min.`,
-                    target.urgent
-                );
-            }
-
-            if (alarmConfig.channels.sound) {
-                try {
-                    playLoggerAlarmSound(alarmConfig.soundRepeat);
-                } catch (_) {
-                    if (!_loggerAlarmSoundWarned) {
-                        _loggerAlarmSoundWarned = true;
-                        showLoggerToast('Som bloqueado pelo navegador. Interaja com a página e tente novamente.');
-                    }
-                }
-            }
-
-            showLoggerToast(`Alarme: ${target.label} às ${fmtHour(target.minute)}.`);
-        });
+        targets.forEach(target => maybeFireLoggerAlarm(target, alarmConfig, todayKey, now));
     }
 
     function copyText(text) {
@@ -3750,10 +3753,7 @@
         const fallbackDate = new Date(normalizedTimestamp).toLocaleDateString('pt-BR');
         const normalizedDate = String(date || fallbackDate).trim() || fallbackDate;
 
-        const history = parseJson(
-            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
-            []
-        );
+        const history = readPunchHistory();
 
         const hasDuplicate = history.some(entry =>
             normalizePunchTime(entry?.time) === normalizedTime &&
@@ -3774,10 +3774,7 @@
             history.shift();
         }
 
-        gmSetValue(
-            STORAGE_KEYS.PUNCH_HISTORY,
-            JSON.stringify(history)
-        );
+        writePunchHistory(history);
 
         renderUILogger();
 
@@ -3786,10 +3783,7 @@
 
     function deleteLastSavedPunch() {
 
-        const history = parseJson(
-            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
-            []
-        );
+        const history = readPunchHistory();
 
         if (!history.length) {
             showLoggerToast('Nenhuma batida local para excluir.');
@@ -3809,12 +3803,15 @@
 
         history.pop();
 
-        gmSetValue(
-            STORAGE_KEYS.PUNCH_HISTORY,
-            JSON.stringify(history)
-        );
+        writePunchHistory(history);
 
         showLoggerToast('Última batida local removida.');
+        refreshLoggerAndPanel();
+    }
+
+    // Re-renderiza logger e, se presente, o painel do mirror.
+    function refreshLoggerAndPanel() {
+
         renderUILogger();
 
         if (document.getElementById('ahg-panel')) {
@@ -3828,65 +3825,34 @@
         const to = normalizePunchTime(newTime);
 
         if (!from || !to) {
-            return {
-                ok: false,
-                message: 'Horário inválido para ajuste.'
-            };
+            return { ok: false, message: 'Horário inválido para ajuste.' };
         }
 
-        const history = parseJson(
-            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
-            []
-        );
-
-        const isToday = entry => {
-            const ts = Number(entry?.timestamp);
-            return Number.isFinite(ts) && ts >= startMs && ts < endMs;
-        };
-
-        const targetIndex = history.findIndex(entry =>
-            isToday(entry) && normalizePunchTime(entry?.time) === from
-        );
+        const history = readPunchHistory();
+        const targetIndex = findTodayPunchIndex(history, from, startMs, endMs);
 
         if (targetIndex < 0) {
-            return {
-                ok: false,
-                message: `Batida ${from} não encontrada no histórico local de hoje.`
-            };
+            return { ok: false, message: `Batida ${from} não encontrada no histórico local de hoje.` };
         }
 
         const hasConflict = history.some((entry, idx) =>
             idx !== targetIndex &&
-            isToday(entry) &&
+            isEntryInRange(entry, startMs, endMs) &&
             normalizePunchTime(entry?.time) === to
         );
 
         if (hasConflict) {
-            return {
-                ok: false,
-                message: `Já existe batida local ${to} hoje.`
-            };
+            return { ok: false, message: `Já existe batida local ${to} hoje.` };
         }
 
         history[targetIndex].time = to;
         history[targetIndex].timestamp = startMs + (toMin(to) * MS_PER_MINUTE);
         history[targetIndex].date = new Date(startMs).toLocaleDateString('pt-BR');
 
-        gmSetValue(
-            STORAGE_KEYS.PUNCH_HISTORY,
-            JSON.stringify(history)
-        );
+        writePunchHistory(history);
+        refreshLoggerAndPanel();
 
-        renderUILogger();
-
-        if (document.getElementById('ahg-panel')) {
-            render();
-        }
-
-        return {
-            ok: true,
-            message: `Batida local ajustada: ${from} → ${to}.`
-        };
+        return { ok: true, message: `Batida local ajustada: ${from} → ${to}.` };
     }
 
     function removeTodayLocalPunch(time, startMs, endMs) {
@@ -3894,50 +3860,22 @@
         const target = normalizePunchTime(time);
 
         if (!target) {
-            return {
-                ok: false,
-                message: 'Selecione um horário válido para remover.'
-            };
+            return { ok: false, message: 'Selecione um horário válido para remover.' };
         }
 
-        const history = parseJson(
-            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
-            []
-        );
-
-        const isToday = entry => {
-            const ts = Number(entry?.timestamp);
-            return Number.isFinite(ts) && ts >= startMs && ts < endMs;
-        };
-
-        const targetIndex = history.findIndex(entry =>
-            isToday(entry) && normalizePunchTime(entry?.time) === target
-        );
+        const history = readPunchHistory();
+        const targetIndex = findTodayPunchIndex(history, target, startMs, endMs);
 
         if (targetIndex < 0) {
-            return {
-                ok: false,
-                message: `Batida ${target} não encontrada no histórico local de hoje.`
-            };
+            return { ok: false, message: `Batida ${target} não encontrada no histórico local de hoje.` };
         }
 
         history.splice(targetIndex, 1);
 
-        gmSetValue(
-            STORAGE_KEYS.PUNCH_HISTORY,
-            JSON.stringify(history)
-        );
+        writePunchHistory(history);
+        refreshLoggerAndPanel();
 
-        renderUILogger();
-
-        if (document.getElementById('ahg-panel')) {
-            render();
-        }
-
-        return {
-            ok: true,
-            message: `Batida local ${target} removida.`
-        };
+        return { ok: true, message: `Batida local ${target} removida.` };
     }
 
     function reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, todayStartMs, todayEndMs) {
@@ -4216,10 +4154,7 @@
             sharedTruth.weekBalance ?? gmGetValue(STORAGE_KEYS.WEEK_BALANCE_CACHE, '0')
         );
 
-        const history = parseJson(
-            gmGetValue(STORAGE_KEYS.PUNCH_HISTORY, '[]'),
-            []
-        );
+        const history = readPunchHistory();
 
         const {
             reconciled,
