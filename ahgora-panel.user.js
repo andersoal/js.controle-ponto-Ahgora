@@ -1359,6 +1359,22 @@
                         </span>
                     </div>
 
+                <hr class="a-div">
+
+                <div class="a-sec">
+                    Relatórios
+                </div>
+
+                <div class="a-row infos clickable" id="ahg-export-csv">
+                    <span class="a-lbl">
+                        📥 Exportar CSV
+                    </span>
+
+                    <span class="a-val neu">
+                        ${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}
+                    </span>
+                </div>
+
             </div>
 
             <div class="a-foot">
@@ -1381,6 +1397,10 @@
                 });
             document.getElementById('ahg-open-details')?.addEventListener('click', () => {
                 abrirDetalhes(r);
+            });
+
+            document.getElementById('ahg-export-csv')?.addEventListener('click', () => {
+                exportarCSV(r);
             });
 
             renderTotaisCalendario(r);
@@ -1648,6 +1668,107 @@
             `${CONFIG.BATIDA_URL}?defaultDevice=${encodeURIComponent(defaultDevice)}`;
 
         return url;
+    }
+
+    /* =========================================================
+       EXPORTAR CSV
+    ========================================================= */
+
+    function exportarCSV(r) {
+
+        const diasSemana = [
+            'Domingo',
+            'Segunda',
+            'Terça',
+            'Quarta',
+            'Quinta',
+            'Sexta',
+            'Sábado'
+        ];
+
+        const hoje = new Date();
+        const ano  = hoje.getFullYear();
+        const mes  = String(hoje.getMonth() + 1).padStart(2, '0');
+
+        const cabecalho = [
+            'Data',
+            'Dia da Semana',
+            'Batida 1',
+            'Batida 2',
+            'Batida 3',
+            'Batida 4',
+            '1º Turno',
+            '2º Turno',
+            'Intervalo',
+            'Total',
+            'Saldo'
+        ];
+
+        const linhas = r.dias
+            .filter(x => !x.isFuture)
+            .sort((a, b) => a.data - b.data)
+            .map(d => {
+
+                const b = d.batidas;
+
+                const turno1 =
+                    b[0] && b[1]
+                        ? fmtMin(toMin(b[1]) - toMin(b[0]))
+                        : '';
+
+                const turno2 =
+                    b[2] && b[3]
+                        ? fmtMin(toMin(b[3]) - toMin(b[2]))
+                        : '';
+
+                const intervalo =
+                    b[1] && b[2]
+                        ? fmtMin(toMin(b[2]) - toMin(b[1]))
+                        : '';
+
+                const total =
+                    d.batidas.length > 0
+                        ? fmtMin(d.trabalhado)
+                        : '';
+
+                const saldo =
+                    d.isBusinessDay && d.batidas.length > 0
+                        ? fmtMin(d.saldo)
+                        : '';
+
+                return [
+                    d.data.toLocaleDateString('pt-BR'),
+                    diasSemana[d.data.getDay()],
+                    b[0] || '',
+                    b[1] || '',
+                    b[2] || '',
+                    b[3] || '',
+                    turno1,
+                    turno2,
+                    intervalo,
+                    total,
+                    saldo
+                ].map(v => `"${v}"`).join(';');
+            });
+
+        const conteudo = [
+            cabecalho.map(v => `"${v}"`).join(';'),
+            ...linhas
+        ].join('\r\n');
+
+        const bom    = '\uFEFF';
+        const blob   = new Blob([bom + conteudo], { type: 'text/csv;charset=utf-8;' });
+        const url    = URL.createObjectURL(blob);
+        const link   = document.createElement('a');
+
+        link.href     = url;
+        link.download = `Ahgora_${ano}-${mes}.csv`;
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     function renderTotaisCalendario(r) {
