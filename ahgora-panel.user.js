@@ -172,26 +172,34 @@
 
         // Lê o mês/ano visível no cabeçalho do calendário da Ahgora
         getPeriodoVisivel() {
-            // Seletor primário: botão do calendário da Ahgora com texto "Junho/2026"
-            // HTML: <button class="v-btn ..."><div class="v-btn__content">Junho/2026...</div></button>
-            const elBotao = document.querySelector('.v-menu__activator .v-btn__content');
-            if (elBotao) {
-                const texto = elBotao.firstChild?.textContent?.trim()
-                    || elBotao.textContent.trim();
+            // 1. Seletor mais específico: botão "Junho/2026" dentro da toolbar do espelho
+            //    HTML: .layout.espelho > ... > .v-menu.v-menu--inline .v-btn__content
+            const elEspelhoMenu = document.querySelector(
+                '.espelho .v-menu--inline .v-btn__content, ' +
+                '.layout.espelho .v-menu--inline .v-btn__content'
+            );
+            if (elEspelhoMenu) {
+                // firstChild pega só o texto, ignorando o <i> do ícone
+                const texto = elEspelhoMenu.firstChild?.textContent?.trim()
+                    || elEspelhoMenu.textContent.replace(/keyboard_arrow_down/g, '').trim();
                 const resultado = this._parsePeriodoTexto(texto);
                 if (resultado) return resultado;
             }
 
-            // Fallbacks genéricos caso o HTML da Ahgora mude
-            const seletores = [
-                '.v-toolbar__title',
-                '.v-date-picker-header__value button',
-                '.v-toolbar__content button'
-            ];
-            for (const sel of seletores) {
-                const el = document.querySelector(sel);
-                if (el && /\d{4}/.test(el.textContent)) {
-                    const resultado = this._parsePeriodoTexto(el.textContent.trim());
+            // 2. Painel lateral do resumo do dia: contém "JUNHO 2026" como texto puro
+            //    HTML: .espelho-resumo-dia ... > "JUNHO 2026"
+            const elResumo = document.querySelector('.espelho-resumo-dia .layout.row.fill-height .layout.column');
+            if (elResumo) {
+                const resultado = this._parsePeriodoTexto(elResumo.textContent.trim());
+                if (resultado) return resultado;
+            }
+
+            // 3. Qualquer .v-menu__activator que contenha ano de 4 dígitos
+            const todosMenus = [...document.querySelectorAll('.v-menu__activator .v-btn__content')];
+            for (const el of todosMenus) {
+                const texto = el.textContent.replace(/keyboard_arrow_down/g, '').trim();
+                if (/\d{4}/.test(texto)) {
+                    const resultado = this._parsePeriodoTexto(texto);
                     if (resultado) return resultado;
                 }
             }
@@ -816,7 +824,11 @@
         },
 
         renderRelatorios(ctx) {
+            const { periodo } = ctx;
             const itens = `
+                <div class="a-row" style="background:rgba(255,255,255,.02);border-left:3px solid #333355;padding:4px 8px;">
+                    ${Template.label(`📅 Período: ${periodo.descricao}`)}
+                </div>
                 ${Template.botao('ahg-open-details-menu', 'Detalhamento mensal', '📋')}
                 ${Template.botao('ahg-export-csv', 'Exportar CSV', '📥')}
                 ${Template.botao('ahg-test-notif', 'Testar notificação', '🧪')}
