@@ -172,54 +172,53 @@
 
         // Lê o mês/ano visível no cabeçalho do calendário da Ahgora
         getPeriodoVisivel() {
+            // Seletor primário: botão do calendário da Ahgora com texto "Junho/2026"
+            // HTML: <button class="v-btn ..."><div class="v-btn__content">Junho/2026...</div></button>
+            const elBotao = document.querySelector('.v-menu__activator .v-btn__content');
+            if (elBotao) {
+                const texto = elBotao.firstChild?.textContent?.trim()
+                    || elBotao.textContent.trim();
+                const resultado = this._parsePeriodoTexto(texto);
+                if (resultado) return resultado;
+            }
+
+            // Fallbacks genéricos caso o HTML da Ahgora mude
             const seletores = [
                 '.v-toolbar__title',
                 '.v-date-picker-header__value button',
-                '.v-date-picker-title__date',
-                '[data-v-calendar-header]'
+                '.v-toolbar__content button'
             ];
-
-            let texto = null;
             for (const sel of seletores) {
                 const el = document.querySelector(sel);
                 if (el && /\d{4}/.test(el.textContent)) {
-                    texto = el.textContent.trim();
-                    break;
-                }
-            }
-
-            // Fallback: varre cabeçalhos e títulos visíveis
-            if (!texto) {
-                const candidates = [...document.querySelectorAll('h1,h2,h3,.v-toolbar__content')];
-                for (const el of candidates) {
-                    if (/\d{4}/.test(el.textContent)) {
-                        texto = el.textContent.trim();
-                        break;
-                    }
-                }
-            }
-
-            if (texto) {
-                const anoMatch = texto.match(/\d{4}/);
-                if (anoMatch) {
-                    const ano   = parseInt(anoMatch[0], 10);
-                    const lower = texto.toLowerCase()
-                        .normalize('NFD')
-                        .replace(/[\u0300-\u036f]/g, '');
-                    const nomes = this.MESES.map(m =>
-                        m.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-                    );
-                    for (let i = 0; i < nomes.length; i++) {
-                        if (lower.includes(nomes[i].slice(0, 3))) {
-                            return { ano, mes: i };
-                        }
-                    }
+                    const resultado = this._parsePeriodoTexto(el.textContent.trim());
+                    if (resultado) return resultado;
                 }
             }
 
             // Último fallback: mês atual
             const hoje = new Date();
             return { ano: hoje.getFullYear(), mes: hoje.getMonth() };
+        },
+
+        // Extrai { ano, mes } de textos como "Junho/2026" ou "junho de 2026"
+        _parsePeriodoTexto(texto) {
+            if (!texto) return null;
+            const anoMatch = texto.match(/\d{4}/);
+            if (!anoMatch) return null;
+            const ano   = parseInt(anoMatch[0], 10);
+            const lower = texto.toLowerCase()
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '');
+            const nomes = this.MESES.map(m =>
+                m.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            );
+            for (let i = 0; i < nomes.length; i++) {
+                if (lower.includes(nomes[i].slice(0, 3))) {
+                    return { ano, mes: i };
+                }
+            }
+            return null;
         },
 
         fmtData(date) {
@@ -820,6 +819,7 @@
             const itens = `
                 ${Template.botao('ahg-open-details-menu', 'Detalhamento mensal', '📋')}
                 ${Template.botao('ahg-export-csv', 'Exportar CSV', '📥')}
+                ${Template.botao('ahg-test-notif', 'Testar notificação', '🧪')}
             `;
             return Template.menu('ahg-relatorios', 'Relatórios', '📁', STATE.menuRelatorios, itens);
         },
@@ -836,13 +836,22 @@
             });
 
             document.getElementById('ahg-relatorios-toggle')?.addEventListener('click', () => {
-                STATE.menuRelatorios = !STATE.menuRelatorios;
-                const body = document.getElementById('ahg-relatorios-body');
-                const toggle = document.getElementById('ahg-relatorios-toggle');
-                if (body) body.style.display = STATE.menuRelatorios ? 'flex' : 'none';
-                if (toggle) {
-                    const lbl = toggle.querySelector('.a-lbl');
-                    if (lbl) lbl.textContent = `${STATE.menuRelatorios ? '▼' : '▶'} 📁 Relatórios`;
+                const abrindo = !STATE.menuRelatorios;
+                STATE.menuRelatorios = abrindo;
+
+                if (abrindo) {
+                    // Ao abrir: recalcula com o período atual do calendário e re-renderiza
+                    render();
+                } else {
+                    // Ao fechar: apenas recolhe sem re-renderizar
+                    const body   = document.getElementById('ahg-relatorios-body');
+                    const toggle = document.getElementById('ahg-relatorios-toggle');
+                    if (body) body.style.display = 'none';
+                    if (toggle) {
+                        const lbl = toggle.querySelector('.a-lbl');
+                        if (lbl) lbl.textContent = '▶ 📁 Relatórios';
+                    }
+                    STATE.menuRelatorios = false;
                 }
             });
 
@@ -852,6 +861,16 @@
 
             document.getElementById('ahg-export-csv')?.addEventListener('click', () => {
                 Exportador.csv(ctx.relatorio);
+            });
+
+            document.getElementById('ahg-test-notif')?.addEventListener('click', () => {
+                notif(
+                    `teste-manual-${Date.now()}`,
+                    '🧪 Teste de Notificação',
+                    'Notificação disparada pelo painel Ahgora.',
+                    false,
+                    0
+                );
             });
         }
     };
