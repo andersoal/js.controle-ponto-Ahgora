@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ahgora — Painel Inteligente Local
 // @namespace    https://github.com/jonathanfiss
-// @version      2.0.0
+// @version      2.0.1
 // @description  Painel inteligente local para Ahgora
 // @author       Jonathan Fiss
 
