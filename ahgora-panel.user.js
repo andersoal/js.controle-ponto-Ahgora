@@ -713,10 +713,12 @@
         },
 
         buildPanel(ctx) {
-            const { resumo, relatorio } = ctx;
-            return `
-                ${Template.titulo('⏱', 'Painel Inteligente')}
-                <div class="a-body">
+            const { resumo, relatorio, periodo } = ctx;
+
+            const hoje       = new Date();
+            const ehMesAtual = periodo.ano === hoje.getFullYear() && periodo.mes === hoje.getMonth();
+
+            const secaoOperacional = ehMesAtual ? `
                     ${this.renderStatus(ctx)}
                     ${Template.divisor()}
                     ${this.renderHoje(ctx)}
@@ -726,6 +728,17 @@
                     ${Template.divisor()}
                     ${this.renderSemanal(ctx)}
                     ${Template.divisor()}
+            ` : `
+                    <div class="a-row infos" style="opacity:0.5;">
+                        ${Template.label(`📅 Visualizando ${periodo.descricao}`)}
+                    </div>
+                    ${Template.divisor()}
+            `;
+
+            return `
+                ${Template.titulo('⏱', 'Painel Inteligente')}
+                <div class="a-body">
+                    ${secaoOperacional}
                     ${this.renderMensal(ctx)}
                     ${Template.divisor()}
                     ${this.renderRelatorios(ctx)}
