@@ -843,7 +843,7 @@
                         <small>${resumo.diasFuturos} úteis restantes</small>
                     </span>
                 </div>
-                <div class="a-row infos clickable" id="ahg-open-details">
+                <div class="a-row infos">
                     ${Template.label('📊 Horas realizadas')}
                     <span class="a-val neu">${Hora.fmtMin(resumo.totalMes)}</span>
                 </div>
@@ -869,10 +869,6 @@
                 document.getElementById('ahg-panel').style.display = 'none';
                 document.getElementById('ahg-fab').style.display = 'flex';
                 STATE.panelMinimized = true;
-            });
-
-            document.getElementById('ahg-open-details')?.addEventListener('click', () => {
-                Modal.abrir(ctx.relatorio);
             });
 
             document.getElementById('ahg-relatorios-toggle')?.addEventListener('click', () => {
