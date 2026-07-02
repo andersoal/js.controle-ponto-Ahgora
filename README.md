@@ -1,311 +1,283 @@
-# Ahgora — Painel Inteligente Local
+# Ahgora Smart Panel
 
-Painel inteligente para o Ahgora desenvolvido com Tampermonkey.
-
-O script utiliza apenas as informações carregadas no DOM da página, sem realizar requisições HTTP, APIs externas ou leitura de saldo pronta do sistema.
-
-Todo o cálculo é feito localmente a partir das batidas exibidas no calendário.
+Um userscript para **Tampermonkey** que adiciona um painel inteligente ao espelho de ponto da **Ahgora**, oferecendo cálculos em tempo real da jornada de trabalho, previsões de saída, notificações inteligentes, relatórios detalhados e exportação de dados.
 
 ---
 
-# Funcionalidades
+## Objetivo
 
-## Painel Inteligente
+Transformar o espelho de ponto da Ahgora em um painel inteligente capaz de auxiliar o colaborador durante toda a jornada, fornecendo informações em tempo real e automatizando cálculos que normalmente precisariam ser feitos manualmente.
 
-* Modal flutuante
-* Inicialização minimizada
-* Arrastar pela tela
-* Atualização automática
-* Atualização sincronizada na virada do minuto
-* Scroll automático quando necessário
-* Recarregamento automático da página
+Todo o processamento é local. O script **não utiliza APIs externas** e **não armazena cálculos da jornada**, operando exclusivamente com as informações presentes na própria página.
 
 ---
 
-# Cálculos Automáticos
+## Funcionalidades
 
-## Jornada diária
+### 📊 Painel Inteligente
 
-* Carga horária diária configurável
-* Limite máximo por turno
-* Limite máximo diário
-* Intervalo mínimo entre turnos
-* Intervalo máximo entre turnos
-* Intervalo intrajornada de 11h
+O painel exibe em tempo real:
+
+- Situação atual da jornada
+- Primeiro e segundo turno com tempo realizado em destaque
+- Horas trabalhadas no dia
+- Saldo diário
+- Saldo semanal (com tolerância aplicada)
+- Saldo mensal (com tolerância aplicada)
+- Horário ideal de saída
+- Limites de 6h, 8h e 10h
+- Intervalo obrigatório e retorno máximo
+- Descanso obrigatório de 11 horas
+- Última atualização, próximo recarregamento e versão
+
+Quando o calendário estiver exibindo um **mês histórico**, as seções operacionais (status, turnos, saídas, semanal) são ocultadas automaticamente. O painel mostra apenas o resumo e os relatórios do mês selecionado.
 
 ---
 
-# Turnos
+### 🕒 Controle dos Turnos
 
-O painel separa automaticamente:
+Para cada turno são exibidos:
 
-* 1º turno
-* 2º turno
+- Horário de entrada
+- Horário de saída (ou "Agora" quando aberto)
+- **Tempo realizado em destaque**
+- Indicação de turno em andamento
 
-Mostrando:
+O segundo turno só aparece após o registro da terceira batida.
 
-* horário inicial
-* horário final
-* duração do turno
-* turno em andamento
+Cada turno possui indicação visual por cores:
 
-Exemplo:
+🟢 Normal  
+🟡 Próximo do limite  
+🔴 Limite excedido  
 
-```text
-1º turno
-09:00 → 12:08
-03:08
+As cores consideram simultaneamente o limite de 6h por turno e o limite de 10h diárias.
 
-2º turno
-13:18 → agora
-04:53 · em andamento
+---
+
+### ⚖️ Tolerância de Jornada
+
+O sistema aplica uma tolerância configurável (padrão: **±10 minutos**) ao calcular saldos.
+
+- Dias com saldo dentro da tolerância contribuem com **zero** nos totais semanais e mensais.
+- A **saída ideal** também respeita a tolerância — minutos dentro do intervalo não são descontados nem creditados.
+- No modal de detalhamento, dias em tolerância são exibidos com opacidade reduzida, ícone ⚪ e tooltip explicativo ao passar o mouse.
+
+Configuração: `CONFIG.TOLERANCIA` (em minutos).
+
+---
+
+### 📅 Período Ativo
+
+O painel detecta automaticamente qual mês está sendo visualizado no calendário da Ahgora, sem depender do mês atual do sistema.
+
+- Ao navegar para um mês diferente, relatório, CSV e modal se atualizam automaticamente.
+- O período ativo é exibido diretamente no botão do menu Relatórios.
+- Um `MutationObserver` detecta mudanças de mês sem necessidade de interação.
+
+---
+
+### 📅 Melhorias no Calendário
+
+O calendário exibe o total de horas trabalhadas diretamente em cada dia concluído com batidas pareadas.
+
+---
+
+### 📈 Relatório Mensal
+
+Detalhamento completo da jornada agrupado por semana.
+
+Cada linha exibe:
+
+- Data e dia da semana
+- Horas trabalhadas
+- Saldo diário (bruto)
+- Indicação visual de tolerância
+
+Cada semana exibe totais calculados com tolerância aplicada.
+
+---
+
+### 📄 Exportação CSV
+
+Exporta o mês exibido no calendário.
+
+Nome do arquivo:
+
+```
+Ahgora_YYYY-MM.csv
 ```
 
----
+O arquivo contém um **resumo do período** seguido do **detalhamento diário** com:
 
-# Status Visual Inteligente
-
-Os cards mudam automaticamente de cor:
-
-| Situação                | Cor      |
-| ----------------------- | -------- |
-| Normal                  | Azul     |
-| Próximo de 6h contínuas | Amarelo  |
-| Acima de 6h contínuas   | Vermelho |
-| Próximo de 10h diárias  | Amarelo  |
-| Acima de 10h diárias    | Vermelho |
+- Data, dia da semana, semana
+- Dia útil, feriado, estado
+- Batidas (até 4)
+- 1º turno, 2º turno, intervalo
+- Horas trabalhadas
+- Saldo dia, saldo semana, saldo mês
 
 ---
 
-# Status Atual
+### 🔔 Notificações Inteligentes
 
-O painel identifica automaticamente:
+Notificações são enviadas para:
 
-* Não iniciado
-* Primeiro turno
-* Intervalo
-* Segundo turno
-* Encerrado
+- Limite do turno (6h)
+- Meta diária (8h)
+- Limite diário (10h)
+- Saída ideal — **somente quando diferente do horário de meta de 8h**
 
----
+Momentos de aviso: 10, 5, 4, 3, 2 e 1 minuto antes.
 
-# Cálculo de Saídas
+Cada notificação inclui atalho direto para registrar o ponto.
 
-O script calcula automaticamente:
-
-* Saída 6h contínuas
-* Meta diária 8h
-* Limite diário 10h
-* Saída ideal baseada no saldo semanal
-
-Os cálculos consideram:
-
-* intervalos
-* múltiplos turnos
-* saldo anterior da semana
+Como o script roda dentro de um **iframe**, as notificações são enviadas via `postMessage` para a janela principal, que realiza o disparo — contornando a restrição de navegadores que bloqueiam `Notification` em iframes.
 
 ---
 
-# Intervalos
+### 🔄 Atualização Automática
 
-## Intervalo entre turnos
+O painel é atualizado a cada minuto. Um recarregamento completo da página ocorre após o tempo configurado em `CONFIG.AUTO_REFRESH_MIN` para manter a sessão ativa.
 
-Quando o primeiro turno é encerrado:
+O rodapé exibe a última atualização, o próximo recarregamento e a versão do script.
 
-```text
-Retorno mínimo
-Retorno máximo
+---
+
+## Arquitetura
+
+O projeto segue arquitetura modular com responsabilidade única por módulo.
+
+| Módulo | Responsabilidade |
+|--------|-----------------|
+| `CONFIG` | Todas as constantes — sem magic numbers |
+| `STATE` | Estado de runtime centralizado |
+| `Hora` | Formatação e conversão de tempo |
+| `DataHelper` | Semanas, períodos, datas, detecção do mês visível |
+| `Jornada` | Regras de negócio — calcula turnos, saídas, alertas. Nunca gera HTML |
+| `DOM` | Extração de dados do calendário e localStorage |
+| `Relatorio` | Monta registros, semanas e resumo com tolerância aplicada. Nunca gera HTML |
+| `Exportador` | Gera Blob e faz download do CSV |
+| `Template` | Componentes HTML reutilizáveis. Nunca calcula |
+| `UI` | Renderização do painel. Todos os eventos em `registrarEventos()` |
+| `Calendario` | Renderiza totais no calendário |
+| `Modal` | Detalhamento mensal com semanas, totais e indicadores de tolerância |
+
+---
+
+## Princípios do Projeto
+
+- Responsabilidade única por módulo
+- Nenhuma função calcula e renderiza ao mesmo tempo
+- O DOM é lido apenas na função `render()` e em `DOM.extrairDias()`
+- `localStorage` é usado somente para código da empresa e preferências de UI — jamais para cálculos
+- Todos os eventos DOM registrados exclusivamente em `UI.registrarEventos()`
+- Sem duplicação de HTML, lógica ou cálculos
+
+---
+
+## Instalação
+
+### 1. Instale o Tampermonkey
+
+Disponível para os principais navegadores.
+
+### 2. Instale o script
+
+Acesse:
+
+```
+https://github.com/jonathanfiss/js.controle-ponto-Ahgora/raw/refs/heads/master/ahgora-panel.user.js
 ```
 
-são exibidos automaticamente.
+O Tampermonkey exibirá automaticamente a tela de instalação.
 
 ---
 
-## Intervalo intrajornada (11h)
+## Configuração
 
-Após encerrar o dia:
+As principais configurações estão em `CONFIG` no início do script:
 
-```text
-🛌 Próximo retorno
-```
-
-é calculado automaticamente.
-
-Exemplo:
-
-```text
-Saída: 23:00
-Próximo retorno: 10:00
-```
+| Chave | Padrão | Descrição |
+|-------|--------|-----------|
+| `CARGA_DIARIA` | `480` min | Jornada diária em minutos |
+| `MAX_HORAS_DIA` | `600` min | Limite máximo diário |
+| `MAX_HORAS_TURNO` | `360` min | Limite máximo por turno |
+| `TOLERANCIA` | `10` min | Saldo ignorado dentro desse intervalo |
+| `INTERVALO_MINIMO` | `30` min | Intervalo mínimo entre turnos |
+| `INTERVALO_MAXIMO` | `180` min | Intervalo máximo entre turnos |
+| `DESCANSO_MINIMO` | `660` min | Descanso obrigatório entre dias |
+| `AUTO_REFRESH_MIN` | `15` min | Intervalo para reload completo da página |
 
 ---
 
-# Saldos
+## Atualizações Automáticas
 
-## Diário
+O script suporta atualização automática via Tampermonkey.
 
-Calculado automaticamente:
-
-* positivo
-* negativo
-
----
-
-## Semanal
-
-O saldo semanal:
-
-* NÃO utiliza saldo do sistema
-* é recalculado pelo DOM
-
-O saldo:
-
-* zera automaticamente a cada semana
-* não carrega saldo de semanas anteriores
+- Instale a partir da URL RAW do GitHub
+- Mantenha a atualização automática habilitada
+- Toda nova versão atualiza o campo `@version`
 
 ---
 
-## Mensal
+## Tecnologias
 
-O saldo mensal:
+- JavaScript ES2020+
+- Tampermonkey
+- HTML / CSS
+- MutationObserver
+- Browser Notifications API
+- postMessage (comunicação iframe → top window)
+- LocalStorage
 
-* também é calculado localmente
-* não utiliza valores do Ahgora
-
----
-
-# Fins de Semana
-
-Sábados e domingos:
-
-* entram no cálculo
-* aparecem no relatório
-* entram no saldo
-
-somente se existirem batidas no dia.
+Nenhuma biblioteca externa é utilizada.
 
 ---
 
-# Relatório Mensal
+## Roadmap
 
-Ao clicar em:
+### Implementado
 
-```text
-📊 Horas realizadas
-```
+- Painel inteligente em tempo real
+- Turnos com tempo realizado em destaque
+- Horário ideal de saída
+- Saldo diário, semanal e mensal
+- Tolerância de jornada configurável
+- Período ativo via detecção automática do calendário
+- Totais no calendário
+- Relatório mensal com agrupamento por semana
+- Indicadores visuais de tolerância no modal
+- Exportação CSV
+- Notificações inteligentes via postMessage
+- Atualização automática
+- Menu de relatórios com período exibido no toggle
+- Arquitetura modular
 
-abre um modal detalhado contendo:
+### Próximas Funcionalidades
 
-* dia da semana
-* data
-* horas trabalhadas
-* saldo do dia
-
-Além disso:
-
-* agrupamento semanal
-* total semanal
-* saldo semanal
-
-são exibidos automaticamente.
-
----
-
-# Notificações
-
-O script utiliza notificações nativas do navegador.
-
-Alertas:
-
-* Próximo das 6h
-* Meta diária 8h
-* Limite diário 10h
-* Saída ideal
-* Recarregamento automático da página
+- Exportação para Excel
+- Exportação para PDF
+- Painel de estatísticas
+- Configurações via interface
+- Internacionalização
 
 ---
 
-# Atualização Automática
+## Contribuindo
 
-O painel:
+Contribuições são bem-vindas.
 
-* recalcula automaticamente
-* sincroniza com a virada do minuto
+Antes de enviar alterações:
 
-Exemplo:
-
-```text
-18:32:00
-18:33:00
-18:34:00
-```
+- Mantenha funções pequenas e com responsabilidade única
+- Não misture cálculos com renderização
+- Reutilize os módulos existentes
+- Preserve a arquitetura do projeto
+- Evite duplicação de HTML e lógica
 
 ---
 
-# Recarregamento Automático
+## Licença
 
-Para evitar expiração de sessão:
-
-* a página pode ser recarregada automaticamente
-* o contador é exibido no rodapé do painel
-
-Exemplo:
-
-```text
-Atualizado 18:32 · Reload em 12m 00s
-```
-
----
-
-# Requisitos
-
-* Tampermonkey
-* Google Chrome / Edge / Firefox
-* Ahgora carregando o calendário mensal
-
----
-
-# Importante
-
-O script:
-
-* NÃO faz requisições externas
-* NÃO utiliza APIs
-* NÃO acessa banco de dados
-* NÃO depende do saldo exibido pelo Ahgora
-* NÃO utiliza localStorage para armazenar saldos
-
-Toda a lógica é baseada apenas nas batidas carregadas na tela.
-
----
-
-# Compatibilidade
-
-Desenvolvido para:
-
-```text
-https://mirror.app.ahgora.com.br/*
-```
-
----
-
-# Tecnologias
-
-* JavaScript
-* Tampermonkey
-* DOM parsing local
-* Notifications API
-
----
-
-# Objetivo
-
-O objetivo do script é fornecer:
-
-* acompanhamento em tempo real
-* previsibilidade de saída
-* controle de jornada
-* compensação semanal
-* validação operacional
-
-diretamente dentro do Ahgora.
+Este projeto é distribuído sob a licença MIT.
