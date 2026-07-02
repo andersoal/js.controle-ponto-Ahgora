@@ -831,8 +831,9 @@
                 </div>
                 ${Template.botao('ahg-open-details-menu', 'Detalhamento mensal', '📋')}
                 ${Template.botao('ahg-export-csv', 'Exportar CSV', '📥')}
-                ${Template.botao('ahg-test-notif', 'Testar notificação', '🧪')}
             `;
+            //degug notificação
+            // itens += `${Template.botao('ahg-test-notif', 'Testar notificação', '🧪')}`;
             return Template.menu('ahg-relatorios', 'Relatórios', '📁', STATE.menuRelatorios, itens);
         },
 
