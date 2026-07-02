@@ -852,16 +852,21 @@
 
         renderRelatorios(ctx) {
             const { periodo } = ctx;
-            const itens = `
-                <div class="a-row" style="background:rgba(255,255,255,.02);border-left:3px solid #333355;padding:4px 8px;">
-                    ${Template.label(`📅 Período: ${periodo.descricao}`)}
-                </div>
+            const seta   = STATE.menuRelatorios ? '▼' : '▶';
+            const itens  = `
                 ${Template.botao('ahg-open-details-menu', 'Detalhamento mensal', '📋')}
                 ${Template.botao('ahg-export-csv', 'Exportar CSV', '📥')}
             `;
-            //degug notificação
-            // itens += `${Template.botao('ahg-test-notif', 'Testar notificação', '🧪')}`;
-            return Template.menu('ahg-relatorios', 'Relatórios', '📁', STATE.menuRelatorios, itens);
+            return `
+            <div class="a-menu">
+                <div class="a-row infos clickable a-menu-toggle" id="ahg-relatorios-toggle">
+                    ${Template.label(`${seta} 📁 Relatórios`)}
+                    <span class="a-val neu" style="font-size:11px;opacity:0.7;">${periodo.descricao}</span>
+                </div>
+                <div class="a-menu-body" id="ahg-relatorios-body" style="display:${STATE.menuRelatorios ? 'flex' : 'none'};flex-direction:column;gap:4px;padding-top:4px;">
+                    ${itens}
+                </div>
+            </div>`;
         },
 
         registrarEventos(ctx) {
@@ -875,32 +880,23 @@
                 const abrindo = !STATE.menuRelatorios;
                 STATE.menuRelatorios = abrindo;
 
-                if (abrindo) {
-                    // Lê o período diretamente do DOM neste instante — sem chamar render()
-                    const periodoAtual = DataHelper.getPeriodoVisivel();
-                    const periodoObj   = DataHelper.getPeriodoObj(periodoAtual.ano, periodoAtual.mes);
+                // Lê o período do DOM neste instante
+                const periodoAtual = DataHelper.getPeriodoVisivel();
+                const periodoObj   = DataHelper.getPeriodoObj(periodoAtual.ano, periodoAtual.mes);
 
-                    // Atualiza o label do período dentro do menu sem reconstruir o painel
-                    const labelEl = document.querySelector('#ahg-relatorios-body .a-lbl');
-                    if (labelEl) labelEl.textContent = `📅 Período: ${periodoObj.descricao}`;
+                const body   = document.getElementById('ahg-relatorios-body');
+                const toggle = document.getElementById('ahg-relatorios-toggle');
 
-                    const body   = document.getElementById('ahg-relatorios-body');
-                    const toggle = document.getElementById('ahg-relatorios-toggle');
-                    if (body)   body.style.display = 'flex';
-                    if (toggle) {
-                        const lbl = toggle.querySelector('.a-lbl');
-                        if (lbl) lbl.textContent = `▼ 📁 Relatórios`;
-                    }
-                } else {
-                    const body   = document.getElementById('ahg-relatorios-body');
-                    const toggle = document.getElementById('ahg-relatorios-toggle');
-                    if (body)   body.style.display = 'none';
-                    if (toggle) {
-                        const lbl = toggle.querySelector('.a-lbl');
-                        if (lbl) lbl.textContent = '▶ 📁 Relatórios';
-                    }
-                    STATE.menuRelatorios = false;
+                if (body)   body.style.display = abrindo ? 'flex' : 'none';
+                if (toggle) {
+                    const lbl   = toggle.querySelector('.a-lbl');
+                    const valEl = toggle.querySelector('.a-val');
+                    const seta  = abrindo ? '▼' : '▶';
+                    if (lbl)   lbl.textContent  = `${seta} 📁 Relatórios`;
+                    if (valEl) valEl.textContent = periodoObj.descricao;
                 }
+
+                if (!abrindo) STATE.menuRelatorios = false;
             });
 
             document.getElementById('ahg-open-details-menu')?.addEventListener('click', () => {
