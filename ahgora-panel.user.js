@@ -430,14 +430,25 @@
             const diaHoje      = dias.find(x => x.isToday) || null;
 
             // Saldo semanal sem hoje — usado para cálculo de saída ideal
+            // Aplica tolerância: dias dentro de ±TOLERANCIA contribuem com zero
             const saldoSemana = dias
                 .filter(x => DataHelper.sameWeek(x.data, hoje) && !x.isFuture && !x.isToday && x.isBusinessDay)
-                .reduce((a, b) => a + b.saldo, 0);
+                .reduce((a, b) => {
+                    const saldoBruto   = b.saldo;
+                    const efetivo      = (b.batidas.length > 0 && Math.abs(saldoBruto) <= CONFIG.TOLERANCIA)
+                        ? 0 : saldoBruto;
+                    return a + efetivo;
+                }, 0);
 
-            // Saldo semanal com hoje — exibição no painel
+            // Saldo semanal com hoje — exibição no painel (também com tolerância)
             const saldoSemanaComHoje = dias
                 .filter(x => DataHelper.sameWeek(x.data, hoje) && !x.isFuture && x.isBusinessDay)
-                .reduce((a, b) => a + b.saldo, 0);
+                .reduce((a, b) => {
+                    const saldoBruto   = b.saldo;
+                    const efetivo      = (b.batidas.length > 0 && Math.abs(saldoBruto) <= CONFIG.TOLERANCIA)
+                        ? 0 : saldoBruto;
+                    return a + efetivo;
+                }, 0);
 
             // Filtra apenas os dias do período selecionado
             const diasDoPeriodo = dias.filter(x =>
@@ -669,11 +680,14 @@
         turno(numero, turno) {
             if (!turno) return '';
             const saidaLabel = turno.aberto ? '<em>Agora</em>' : turno.saida;
-            const andamento  = turno.aberto ? '· em andamento' : '';
+            const statusLabel = turno.aberto ? '· em andamento' : '';
             return `
             <div class="a-row ${turno.classe}">
-                ${this.label(`${numero}º turno`)}
-                ${this.valor(`${turno.entrada} → ${saidaLabel}<small>${Hora.fmtMin(turno.total)} ${andamento}</small>`)}
+                <span class="a-lbl">
+                    ${numero}º turno
+                    <small style="display:block;margin-top:2px;">${turno.entrada} → ${saidaLabel} ${statusLabel}</small>
+                </span>
+                <span class="a-val neu">${Hora.fmtMin(turno.total)}</span>
             </div>`;
         },
 
@@ -1130,7 +1144,12 @@
         chk(saidas.h6,         'h6',    '6h atingidas',    'Você completou o mínimo de 6h.', true);
         chk(saidas.h8,         'h8',    'Meta diária',      'Você completou as 8h.',          false);
         chk(saidas.h10,        'h10',   'Limite diário',    '⚠ Limite diário atingido.',      true);
-        chk(saidas.saidaIdeal, 'ideal', 'Saída ideal',      'Saldo semanal compensado.',      false);
+
+        // Notifica saída ideal apenas quando ela difere da meta de 8h
+        // (se forem iguais, a notificação de h8 já cobre)
+        if (saidas.saidaIdeal !== null && saidas.saidaIdeal !== saidas.h8) {
+            chk(saidas.saidaIdeal, 'ideal', 'Saída ideal', 'Saldo semanal compensado.', false);
+        }
     }
 
     /* =========================================================
