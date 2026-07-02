@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ahgora — Painel Inteligente Local
 // @namespace    https://github.com/jonathanfiss
-// @version      1.0.1
+// @version      2.0.0
 // @description  Painel inteligente local para Ahgora
 // @author       Jonathan Fiss
 
@@ -20,790 +20,1024 @@
     'use strict';
 
     /* =========================================================
-       CONFIG
+       CONFIG — todas as constantes, sem magic numbers
     ========================================================= */
 
     const CONFIG = {
-
-        // Jornada
-        CARGA_DIARIA: 8 * 60,
-
-        // Limites
-        MAX_HORAS_DIA: 10 * 60,
-        MAX_HORAS_TURNO: 6 * 60,
-
-        // Intervalo entre turnos
-        INTERVALO_MINIMO: 30,
-        INTERVALO_MAXIMO: 3 * 60,
-
-        // Atualização
-        UPDATE_INTERVAL: 1 * 1000,
-
-        // Notificações
+        CARGA_DIARIA:       8 * 60,
+        MAX_HORAS_DIA:      10 * 60,
+        MAX_HORAS_TURNO:    6 * 60,
+        AVISO_TURNO:        30,
+        AVISO_DIA:          30,
+        INTERVALO_MINIMO:   30,
+        INTERVALO_MAXIMO:   3 * 60,
+        DESCANSO_MINIMO:    11 * 60,
+        UPDATE_INTERVAL:    1 * 1000,
+        AUTO_REFRESH_MIN:   15,
+        VERSAO:             '2.0.0',
+        URL_REFRESH:        'https://app.ahgora.com.br/externo/mirror',
+        BATIDA_URL:         'https://app.ahgora.com.br/novabatidaonline/',
         NOTIFICACOES: {
-            h6: [10, 5, 4, 3, 2, 1],
-            h8: [10, 5, 4, 3, 2, 1],
-            h10: [10, 5, 4, 3, 2, 1],
+            h6:    [10, 5, 4, 3, 2, 1],
+            h8:    [10, 5, 4, 3, 2, 1],
+            h10:   [10, 5, 4, 3, 2, 1],
             ideal: [5, 1]
+        }
+    };
+
+    /* =========================================================
+       STATE — estado de runtime centralizado
+    ========================================================= */
+
+    const STATE = {
+        menuRelatorios:   false,
+        nextRefresh:      Date.now() + CONFIG.AUTO_REFRESH_MIN * 60 * 1000,
+        dragging:         false,
+        dragOX:           0,
+        dragOY:           0,
+        panelMinimized:   false,
+        notificationsFired: new Map(),
+        // Período visível no calendário (pode diferir do mês atual)
+        periodoSelecionado: { ano: null, mes: null }
+    };
+
+    /* =========================================================
+       Hora — formatação e conversão de tempo
+    ========================================================= */
+
+    const Hora = {
+
+        toMin(s) {
+            if (!s) return null;
+            s = String(s).trim();
+            const neg = s.startsWith('-');
+            const [h, m] = s.replace(/[^0-9:]/g, '').split(':').map(Number);
+            if (isNaN(h)) return null;
+            return neg ? -(h * 60 + (m || 0)) : h * 60 + (m || 0);
         },
 
-        AUTO_REFRESH_MINUTES: 15,
-        URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
-        BATIDA_URL: 'https://app.ahgora.com.br/novabatidaonline/'
+        fmtMin(m) {
+            if (m === null || m === undefined) return '--:--';
+            const neg = m < 0;
+            const abs = Math.abs(Math.round(m));
+            return `${neg ? '-' : ''}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+        },
 
+        fmtHour(m) {
+            if (m === null || m === undefined) return '--:--';
+            const n = ((Math.round(m) % 1440) + 1440) % 1440;
+            return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+        },
+
+        fmtCountdown(ms) {
+            const totalSec = Math.max(0, Math.floor(ms / 1000));
+            const min = Math.floor(totalSec / 60);
+            const sec = totalSec % 60;
+            return `${min}m ${String(sec).padStart(2, '0')}s`;
+        },
+
+        nowMin() {
+            const d = new Date();
+            return d.getHours() * 60 + d.getMinutes();
+        },
+
+        now() {
+            return new Date();
+        }
     };
-
-    let NEXT_REFRESH = Date.now() + (CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
 
     /* =========================================================
-       UTILS
+       DataHelper — semana, feriados, dias úteis, período
     ========================================================= */
 
-    function agendarRenderMinuto() {
+    const DataHelper = {
 
-        const agora =
-            new Date();
+        DIAS_SEMANA: ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'],
+        DIAS_SEMANA_CURTO: ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'],
+        MESES: ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'],
 
-        const msAteProximoMinuto =
-            (60 - agora.getSeconds()) * 1000
-            - agora.getMilliseconds();
+        getWeekNumber(date) {
+            const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+            d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+            const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+            return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+        },
 
-        setTimeout(() => {
+        sameWeek(a, b) {
+            const startOfWeek = d => {
+                const date = new Date(d);
+                const day = date.getDay();
+                const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+                return new Date(date.setDate(diff));
+            };
+            const wa = startOfWeek(a);
+            const wb = startOfWeek(b);
+            return wa.getFullYear() === wb.getFullYear()
+                && wa.getMonth() === wb.getMonth()
+                && wa.getDate() === wb.getDate();
+        },
 
-            if (
-                document.visibilityState === 'visible'
-            ) {
+        isWeekend(date) {
+            const d = date.getDay();
+            return d === 0 || d === 6;
+        },
 
-                render();
+        getPeriodo() {
+            const hoje = new Date();
+            const ano  = hoje.getFullYear();
+            const mes  = hoje.getMonth();
+            const mesStr = String(mes + 1).padStart(2, '0');
+            return {
+                ano,
+                mes,
+                descricao: `${this.MESES[mes]} ${ano}`,
+                arquivo:   `Ahgora_${ano}-${mesStr}`,
+                inicio:    new Date(ano, mes, 1),
+                fim:       new Date(ano, mes + 1, 0)
+            };
+        },
+
+        // Constrói objeto período a partir de ano/mês explícitos (0-based)
+        getPeriodoObj(ano, mes) {
+            const mesStr = String(mes + 1).padStart(2, '0');
+            return {
+                ano,
+                mes,
+                descricao: `${this.MESES[mes]} ${ano}`,
+                arquivo:   `Ahgora_${ano}-${mesStr}`,
+                inicio:    new Date(ano, mes, 1),
+                fim:       new Date(ano, mes + 1, 0)
+            };
+        },
+
+        // Lê o mês/ano visível no cabeçalho do calendário da Ahgora
+        getPeriodoVisivel() {
+            const seletores = [
+                '.v-toolbar__title',
+                '.v-date-picker-header__value button',
+                '.v-date-picker-title__date',
+                '[data-v-calendar-header]'
+            ];
+
+            let texto = null;
+            for (const sel of seletores) {
+                const el = document.querySelector(sel);
+                if (el && /\d{4}/.test(el.textContent)) {
+                    texto = el.textContent.trim();
+                    break;
+                }
             }
 
-            agendarRenderMinuto();
-
-        }, msAteProximoMinuto);
-    }
-
-    const toMin = s => {
-
-        if (!s) return null;
-
-        s = String(s).trim();
-
-        const neg = s.startsWith('-');
-
-        const [h, m] =
-            s.replace(/[^0-9:]/g, '')
-                .split(':')
-                .map(Number);
-
-        if (isNaN(h)) return null;
-
-        return neg
-            ? -(h * 60 + (m || 0))
-            : h * 60 + (m || 0);
-    };
-
-    const fmtMin = m => {
-
-        if (m === null || m === undefined) {
-            return '--:--';
-        }
-
-        const neg = m < 0;
-
-        const abs = Math.abs(Math.round(m));
-
-        return `${neg ? '-' : ''}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-    };
-
-    const fmtHour = m => {
-
-        if (m === null || m === undefined) {
-            return '--:--';
-        }
-
-        const n =
-            ((Math.round(m) % 1440) + 1440) % 1440;
-
-        return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
-    };
-
-    const nowMin = () => {
-
-        const d = new Date();
-
-        return d.getHours() * 60 + d.getMinutes();
-    };
-
-    function sameWeek(a, b) {
-
-        const startOfWeek = d => {
-
-            const date = new Date(d);
-
-            const day = date.getDay();
-
-            const diff =
-                date.getDate() - day + (day === 0 ? -6 : 1);
-
-            return new Date(date.setDate(diff));
-        };
-
-        const wa = startOfWeek(a);
-        const wb = startOfWeek(b);
-
-        return (
-            wa.getFullYear() === wb.getFullYear() &&
-            wa.getMonth() === wb.getMonth() &&
-            wa.getDate() === wb.getDate()
-        );
-    }
-
-    function getWeekNumber(date) {
-
-        const d = new Date(
-            Date.UTC(
-                date.getFullYear(),
-                date.getMonth(),
-                date.getDate()
-            )
-        );
-
-        d.setUTCDate(
-            d.getUTCDate() + 4 - (d.getUTCDay() || 7)
-        );
-
-        const yearStart =
-            new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-
-        return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-    }
-
-    function calcularTrabalhado(batidas) {
-
-        let total = 0;
-
-        for (let i = 0; i < batidas.length; i += 2) {
-
-            const entrada =
-                toMin(batidas[i]);
-
-            let saida;
-
-            if (batidas[i + 1]) {
-
-                saida =
-                    toMin(batidas[i + 1]);
-
-            } else {
-
-                saida = nowMin();
+            // Fallback: varre cabeçalhos e títulos visíveis
+            if (!texto) {
+                const candidates = [...document.querySelectorAll('h1,h2,h3,.v-toolbar__content')];
+                for (const el of candidates) {
+                    if (/\d{4}/.test(el.textContent)) {
+                        texto = el.textContent.trim();
+                        break;
+                    }
+                }
             }
 
-            total += (saida - entrada);
+            if (texto) {
+                const anoMatch = texto.match(/\d{4}/);
+                if (anoMatch) {
+                    const ano   = parseInt(anoMatch[0], 10);
+                    const lower = texto.toLowerCase()
+                        .normalize('NFD')
+                        .replace(/[\u0300-\u036f]/g, '');
+                    const nomes = this.MESES.map(m =>
+                        m.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                    );
+                    for (let i = 0; i < nomes.length; i++) {
+                        if (lower.includes(nomes[i].slice(0, 3))) {
+                            return { ano, mes: i };
+                        }
+                    }
+                }
+            }
+
+            // Último fallback: mês atual
+            const hoje = new Date();
+            return { ano: hoje.getFullYear(), mes: hoje.getMonth() };
+        },
+
+        fmtData(date) {
+            return date.toLocaleDateString('pt-BR');
         }
+    };
 
-        return total;
-    }
-
-    function fmtCountdown(ms) {
-
-        const totalSec =
-            Math.max(0, Math.floor(ms / 1000));
-
-        const min =
-            Math.floor(totalSec / 60);
-
-        const sec =
-            totalSec % 60;
-
-        return `${min}m ${String(sec).padStart(2, '0')}s`;
-    }
     /* =========================================================
-       NOTIFICAÇÕES
+       Jornada — regras de negócio, sem HTML
     ========================================================= */
 
-    const _fired = new Map();
+    const Jornada = {
+
+        calcularTurno(entrada, saida, trabalhadoTotal) {
+            const e = Hora.toMin(entrada);
+            const s = saida ? Hora.toMin(saida) : Hora.nowMin();
+            const total = s - e;
+            const aberto = !saida;
+            const excedeTurno  = total >= CONFIG.MAX_HORAS_TURNO;
+            const proximoTurno = total >= (CONFIG.MAX_HORAS_TURNO - CONFIG.AVISO_TURNO);
+            const excedeDia    = trabalhadoTotal >= CONFIG.MAX_HORAS_DIA;
+            const proximoDia   = trabalhadoTotal >= (CONFIG.MAX_HORAS_DIA - CONFIG.AVISO_DIA);
+            const classe = (excedeTurno || excedeDia) ? 'danger'
+                         : (proximoTurno || proximoDia) ? 'warn'
+                         : 'infos';
+            return { entrada, saida: saida || null, aberto, total, classe };
+        },
+
+        calcularTrabalhado(batidas) {
+            let total = 0;
+            for (let i = 0; i < batidas.length; i += 2) {
+                const e = Hora.toMin(batidas[i]);
+                const s = batidas[i + 1] ? Hora.toMin(batidas[i + 1]) : Hora.nowMin();
+                total += s - e;
+            }
+            return total;
+        },
+
+        calcularSaidas(batidas, saldoSemana) {
+            let h6 = null, h8 = null, h10 = null;
+
+            if (batidas.length >= 3) {
+                h6 = Hora.toMin(batidas[2]) + CONFIG.MAX_HORAS_TURNO;
+            } else if (batidas.length >= 1) {
+                h6 = Hora.toMin(batidas[0]) + CONFIG.MAX_HORAS_TURNO;
+            }
+
+            if (batidas.length >= 2) {
+                const e1 = Hora.toMin(batidas[0]);
+                const s1 = Hora.toMin(batidas[1]);
+                const t1 = s1 - e1;
+                const e2 = batidas[2] ? Hora.toMin(batidas[2]) : Hora.nowMin();
+                h8  = e2 + (CONFIG.CARGA_DIARIA  - t1);
+                h10 = e2 + (CONFIG.MAX_HORAS_DIA - t1);
+            } else if (batidas.length >= 1) {
+                const e1 = Hora.toMin(batidas[0]);
+                h8  = e1 + CONFIG.CARGA_DIARIA;
+                h10 = e1 + CONFIG.MAX_HORAS_DIA;
+            }
+
+            const saidaIdeal = h8 !== null ? h8 - saldoSemana : null;
+            return { h6, h8, h10, saidaIdeal };
+        },
+
+        calcularIntervalo(batidas) {
+            if (batidas.length !== 2) return { retornoMinimo: null, retornoMaximo: null };
+            const s1 = Hora.toMin(batidas[1]);
+            return {
+                retornoMinimo: s1 + CONFIG.INTERVALO_MINIMO,
+                retornoMaximo: s1 + CONFIG.INTERVALO_MAXIMO
+            };
+        },
+
+        calcularDescanso(batidas) {
+            if (batidas.length < 4) return null;
+            return Hora.toMin(batidas[3]) + CONFIG.DESCANSO_MINIMO;
+        },
+
+        resolverEstado(batidas) {
+            const qtd = batidas.length;
+            if (qtd === 0) return { codigo: 'SEM_BATIDA',    label: '🛬 Não iniciado'  };
+            if (qtd === 1) return { codigo: 'TURNO_1',       label: '🥇 Primeiro turno' };
+            if (qtd === 2) return { codigo: 'INTERVALO',     label: '⏸ Intervalo'       };
+            if (qtd === 3) return { codigo: 'TURNO_2',       label: '🥈 Segundo turno'  };
+            return             { codigo: 'ENCERRADO',    label: '🛫 Encerrado'       };
+        },
+
+        resolverAlerta(batidas, trabalhado) {
+            if (trabalhado > CONFIG.MAX_HORAS_DIA) return '⚠️ Limite diário excedido';
+            if (batidas.length >= 2) {
+                const t1 = Hora.toMin(batidas[1]) - Hora.toMin(batidas[0]);
+                if (t1 > CONFIG.MAX_HORAS_TURNO) return '⚠️ Primeiro turno excedeu 6h';
+            }
+            return null;
+        },
+
+        calcularDia(diaData, saldoSemana) {
+            const { batidas, trabalhado, isBusinessDay } = diaData;
+            const estado    = this.resolverEstado(batidas);
+            const alerta    = this.resolverAlerta(batidas, trabalhado);
+            const saidas    = this.calcularSaidas(batidas, saldoSemana);
+            const intervalo = this.calcularIntervalo(batidas);
+            const retorno11h = this.calcularDescanso(batidas);
+
+            const turno1 = batidas.length >= 1
+                ? this.calcularTurno(batidas[0], batidas[1] || null, trabalhado)
+                : null;
+            const turno2 = batidas.length >= 3
+                ? this.calcularTurno(batidas[2], batidas[3] || null, trabalhado)
+                : null;
+
+            return { estado, alerta, saidas, intervalo, retorno11h, turno1, turno2 };
+        }
+    };
+
+    /* =========================================================
+       DOM — extração de dados do calendário
+    ========================================================= */
+
+    const DOM = {
+
+        extrairDias(periodo) {
+            // periodo = { ano, mes } — mês 0-based
+            const ano = periodo ? periodo.ano : new Date().getFullYear();
+            const mes = periodo ? periodo.mes : new Date().getMonth();
+            const resultado = [];
+
+            document.querySelectorAll('.v-calendar-weekly__day').forEach(day => {
+                if (day.classList.contains('v-outside')) return;
+
+                const label = day.querySelector('.v-calendar-weekly__day-label');
+                if (!label) return;
+
+                const numeroDia = Number(label.textContent.trim());
+                if (!numeroDia) return;
+
+                const isToday   = day.classList.contains('v-present');
+                const isFuture  = day.classList.contains('v-future');
+                const isHoliday = [...day.querySelectorAll('.material-icons')]
+                    .some(x => x.textContent.trim() === 'star');
+
+                // Usa o ano/mês do período ativo, não necessariamente hoje
+                const data    = new Date(ano, mes, numeroDia);
+                const weekDay = data.getDay();
+
+                const batidas = [...day.querySelectorAll('.batida')]
+                    .filter(x => !x.classList.contains('prevista'))
+                    .map(x => x.textContent.trim());
+
+                const possuiBatidas  = batidas.length > 0;
+                const isBusinessDay  = (weekDay !== 0 && weekDay !== 6 && !isHoliday) || possuiBatidas;
+                const trabalhado     = possuiBatidas ? Jornada.calcularTrabalhado(batidas) : 0;
+                const saldo          = isBusinessDay ? trabalhado - CONFIG.CARGA_DIARIA : 0;
+
+                resultado.push({
+                    elemento: day,
+                    data,
+                    isToday,
+                    isFuture,
+                    isHoliday,
+                    isBusinessDay,
+                    isWeekend: DataHelper.isWeekend(data),
+                    semana: DataHelper.getWeekNumber(data),
+                    diaSemana: DataHelper.DIAS_SEMANA[data.getDay()],
+                    batidas,
+                    trabalhado,
+                    saldo
+                });
+            });
+
+            return resultado;
+        },
+
+        getCompanyCode() {
+            return localStorage.getItem('@batidaOnline/companyCodeDefault')?.trim() || null;
+        },
+
+        getBatidaUrl() {
+            const code = this.getCompanyCode();
+            if (!code) return null;
+            return `${CONFIG.BATIDA_URL}?defaultDevice=${encodeURIComponent(code)}`;
+        }
+    };
+
+    /* =========================================================
+       Relatorio — organiza dados, sem HTML nem Blob
+    ========================================================= */
+
+    const Relatorio = {
+
+        gerarMensal(dias, periodo) {
+            const hoje = new Date();
+            // periodo pode vir do calendário visível ou ser o mês atual
+            const p = periodo || DataHelper.getPeriodoObj(hoje.getFullYear(), hoje.getMonth());
+
+            const diasFuturos  = dias.filter(x => x.isFuture && x.isBusinessDay);
+            const diaHoje      = dias.find(x => x.isToday) || null;
+
+            // Saldo semanal sem hoje — usado para cálculo de saída ideal
+            const saldoSemana = dias
+                .filter(x => DataHelper.sameWeek(x.data, hoje) && !x.isFuture && !x.isToday && x.isBusinessDay)
+                .reduce((a, b) => a + b.saldo, 0);
+
+            // Saldo semanal com hoje — exibição no painel
+            const saldoSemanaComHoje = dias
+                .filter(x => DataHelper.sameWeek(x.data, hoje) && !x.isFuture && x.isBusinessDay)
+                .reduce((a, b) => a + b.saldo, 0);
+
+            // Filtra apenas os dias do período selecionado
+            const diasDoPeriodo = dias.filter(x =>
+                x.data.getFullYear() === p.ano &&
+                x.data.getMonth()    === p.mes
+            );
+
+            const registros = this.gerarRegistros(diasDoPeriodo);
+            const semanas   = this.montarSemanas(registros);
+            const resumo    = this.montarResumo(registros, diasFuturos.length, saldoSemanaComHoje, p);
+
+            return { registros, semanas, resumo, periodo: p, saldoSemana, saldoSemanaComHoje, diaHoje };
+        },
+
+        gerarRegistros(dias) {
+            let saldoMesAcum   = 0;
+            let saldoSemAcum   = 0;
+            let semanaAnterior = null;
+
+            return dias
+                .filter(x => !x.isFuture)
+                .sort((a, b) => a.data - b.data)
+                .map(d => {
+                    const semana = d.semana;
+                    if (semana !== semanaAnterior) {
+                        saldoSemAcum  = 0;
+                        semanaAnterior = semana;
+                    }
+
+                    const b = d.batidas;
+                    const turno1Min = (b[0] && b[1]) ? Hora.toMin(b[1]) - Hora.toMin(b[0]) : null;
+                    const turno2Min = (b[2] && b[3]) ? Hora.toMin(b[3]) - Hora.toMin(b[2]) : null;
+                    const intervMin = (b[1] && b[2]) ? Hora.toMin(b[2]) - Hora.toMin(b[1]) : null;
+
+                    if (d.isBusinessDay) {
+                        saldoMesAcum += d.saldo;
+                        saldoSemAcum += d.saldo;
+                    }
+
+                    return {
+                        data:         d.data,
+                        diaSemana:    d.diaSemana,
+                        semana,
+                        isBusinessDay: d.isBusinessDay,
+                        isHoliday:    d.isHoliday,
+                        isWeekend:    d.isWeekend,
+                        isToday:      d.isToday,
+                        estado:       Jornada.resolverEstado(b).codigo,
+                        batidas:      [...b],
+                        turno1:       turno1Min,
+                        turno2:       turno2Min,
+                        intervalo:    intervMin,
+                        trabalhado:   d.trabalhado,
+                        saldoDia:     d.isBusinessDay ? d.saldo : 0,
+                        saldoSemana:  saldoSemAcum,
+                        saldoMes:     saldoMesAcum
+                    };
+                });
+        },
+
+        montarSemanas(registros) {
+            const mapa = new Map();
+            registros.forEach(r => {
+                if (!mapa.has(r.semana)) mapa.set(r.semana, []);
+                mapa.get(r.semana).push(r);
+            });
+            return [...mapa.entries()].map(([semana, itens]) => ({
+                semana,
+                itens,
+                totalTrabalhado: itens.reduce((a, b) => a + b.trabalhado, 0),
+                totalSaldo:      itens.filter(x => x.isBusinessDay).reduce((a, b) => a + b.saldoDia, 0)
+            }));
+        },
+
+        montarResumo(registros, diasFuturos, saldoSemana, periodo) {
+            const comBatidas = registros.filter(x => x.batidas.length > 0);
+            const uteis      = registros.filter(x => x.isBusinessDay);
+            const fds        = registros.filter(x => x.isWeekend && x.batidas.length > 0);
+            const totalMes   = registros.filter(x => x.isBusinessDay).reduce((a, b) => a + b.trabalhado, 0);
+            const saldoMes   = uteis.reduce((a, b) => a + b.saldoDia, 0);
+            const media      = comBatidas.length > 0 ? totalMes / comBatidas.length : 0;
+            const trabalhos  = comBatidas.map(x => x.trabalhado);
+            const maior      = trabalhos.length ? Math.max(...trabalhos) : 0;
+            const menor      = trabalhos.length ? Math.min(...trabalhos) : 0;
+            // periodo vem do argumento — pode ser mês diferente do atual
+            const p = periodo || DataHelper.getPeriodo();
+
+            return {
+                periodo:         p,
+                totalMes,
+                saldoMes,
+                saldoSemana,
+                diasRegistrados: comBatidas.length,
+                diasUteis:       uteis.length,
+                diasFds:         fds.length,
+                diasFuturos,
+                media,
+                maior,
+                menor
+            };
+        },
+
+        gerarLinhasCSV(registros) {
+            return registros.map(r => {
+                const b = r.batidas;
+                return [
+                    DataHelper.fmtData(r.data),
+                    r.diaSemana,
+                    r.semana,
+                    r.isBusinessDay ? 'Sim' : 'Não',
+                    r.isHoliday     ? 'Sim' : 'Não',
+                    r.estado,
+                    b[0] || '', b[1] || '', b[2] || '', b[3] || '',
+                    r.turno1    !== null ? Hora.fmtMin(r.turno1)    : '',
+                    r.turno2    !== null ? Hora.fmtMin(r.turno2)    : '',
+                    r.intervalo !== null ? Hora.fmtMin(r.intervalo) : '',
+                    r.batidas.length > 0 ? Hora.fmtMin(r.trabalhado) : '',
+                    r.isBusinessDay ? Hora.fmtMin(r.saldoDia)    : '',
+                    Hora.fmtMin(r.saldoSemana),
+                    Hora.fmtMin(r.saldoMes)
+                ];
+            });
+        }
+    };
+
+    /* =========================================================
+       Exportador — apenas exporta, não calcula
+    ========================================================= */
+
+    const Exportador = {
+
+        download(conteudo, nomeArquivo, tipo) {
+            const bom  = tipo.includes('csv') ? '\uFEFF' : '';
+            const blob = new Blob([bom + conteudo], { type: tipo });
+            const url  = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href     = url;
+            link.download = nomeArquivo;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+        },
+
+        csv(relatorio) {
+            const { resumo, periodo } = relatorio;
+            const sep = ';';
+
+            const cabecalhoResumo = [
+                ['Período',            periodo.descricao],
+                ['Gerado em',          new Date().toLocaleString('pt-BR')],
+                ['Carga diária',       Hora.fmtMin(CONFIG.CARGA_DIARIA)],
+                ['Máx. turno',         Hora.fmtMin(CONFIG.MAX_HORAS_TURNO)],
+                ['Máx. dia',           Hora.fmtMin(CONFIG.MAX_HORAS_DIA)],
+                ['Horas realizadas',   Hora.fmtMin(resumo.totalMes)],
+                ['Saldo mensal',       Hora.fmtMin(resumo.saldoMes)],
+                ['Dias registrados',   resumo.diasRegistrados],
+                ['Dias úteis',         resumo.diasUteis],
+                ['Média diária',       Hora.fmtMin(resumo.media)],
+                ['Maior jornada',      Hora.fmtMin(resumo.maior)],
+                ['Menor jornada',      Hora.fmtMin(resumo.menor)]
+            ].map(([k, v]) => `"${k}"${sep}"${v}"`);
+
+            const cabecalhoDados = [
+                'Data','Dia','Semana','Útil','Feriado','Estado',
+                'Batida 1','Batida 2','Batida 3','Batida 4',
+                '1º Turno','2º Turno','Intervalo',
+                'Trabalhado','Saldo dia','Saldo semana','Saldo mês'
+            ].map(v => `"${v}"`).join(sep);
+
+            const linhas = Relatorio.gerarLinhasCSV(relatorio.registros)
+                .map(cols => cols.map(v => `"${v}"`).join(sep));
+
+            const conteudo = [
+                ...cabecalhoResumo,
+                '',
+                cabecalhoDados,
+                ...linhas
+            ].join('\r\n');
+
+            this.download(conteudo, `${periodo.arquivo}.csv`, 'text/csv;charset=utf-8;');
+        }
+    };
+
+    /* =========================================================
+       Template — apenas HTML reutilizável, sem lógica
+    ========================================================= */
+
+    const Template = {
+
+        linha(lbl, val, classe = 'infos', extra = '') {
+            return `<div class="a-row ${classe} ${extra}"><span class="a-lbl">${lbl}</span><span class="a-val">${val}</span></div>`;
+        },
+
+        label(txt) {
+            return `<span class="a-lbl">${txt}</span>`;
+        },
+
+        valor(txt, cor = 'neu') {
+            return `<span class="a-val ${cor}">${txt}</span>`;
+        },
+
+        secao(txt) {
+            return `<div class="a-sec">${txt}</div>`;
+        },
+
+        divisor() {
+            return `<hr class="a-div">`;
+        },
+
+        badge(txt, cor) {
+            return `<span class="a-badge a-badge--${cor}">${txt}</span>`;
+        },
+
+        botao(id, lbl, icone = '') {
+            return `<div class="a-row infos clickable" id="${id}">${this.label(`${icone} ${lbl}`)}</div>`;
+        },
+
+        turno(numero, turno) {
+            if (!turno) return '';
+            const saidaLabel = turno.aberto ? '<em>Agora</em>' : turno.saida;
+            const andamento  = turno.aberto ? '· em andamento' : '';
+            return `
+            <div class="a-row ${turno.classe}">
+                ${this.label(`${numero}º turno`)}
+                ${this.valor(`${turno.entrada} → ${saidaLabel}<small>${Hora.fmtMin(turno.total)} ${andamento}</small>`)}
+            </div>`;
+        },
+
+        titulo(icone, txt) {
+            return `<div class="a-tit">${icone} ${txt}<span class="a-x" id="ahg-min">–</span></div>`;
+        },
+
+        rodape(atualizado, nextRefresh, versao) {
+            return `<div class="a-foot">Atualizado ${atualizado} · Reload em ${Hora.fmtCountdown(nextRefresh - Date.now())} · v${versao}</div>`;
+        },
+
+        menu(id, lbl, icone, aberto, conteudo) {
+            const seta = aberto ? '▼' : '▶';
+            return `
+            <div class="a-menu">
+                <div class="a-row infos clickable a-menu-toggle" id="${id}-toggle">
+                    ${this.label(`${seta} ${icone} ${lbl}`)}
+                </div>
+                <div class="a-menu-body" id="${id}-body" style="display:${aberto ? 'flex' : 'none'};flex-direction:column;gap:4px;padding-top:4px;">
+                    ${conteudo}
+                </div>
+            </div>`;
+        }
+    };
+
+    /* =========================================================
+       UI — apenas renderização, sem cálculos
+    ========================================================= */
+
+    const UI = {
+
+        render(ctx) {
+            const p = document.getElementById('ahg-panel');
+            if (!p) return;
+            p.innerHTML = this.buildPanel(ctx);
+            this.registrarEventos(ctx);
+        },
+
+        buildPanel(ctx) {
+            const { resumo, relatorio } = ctx;
+            return `
+                ${Template.titulo('⏱', 'Painel Inteligente')}
+                <div class="a-body">
+                    ${this.renderStatus(ctx)}
+                    ${Template.divisor()}
+                    ${this.renderHoje(ctx)}
+                    ${Template.divisor()}
+                    ${this.renderSaidas(ctx)}
+                    ${this.renderIntervalo(ctx)}
+                    ${Template.divisor()}
+                    ${this.renderSemanal(ctx)}
+                    ${Template.divisor()}
+                    ${this.renderMensal(ctx)}
+                    ${Template.divisor()}
+                    ${this.renderRelatorios(ctx)}
+                </div>
+                ${Template.rodape(Hora.fmtHour(Hora.nowMin()), STATE.nextRefresh, CONFIG.VERSAO)}
+            `;
+        },
+
+        renderStatus(ctx) {
+            const { jornadaHoje } = ctx;
+            const alertaHtml = jornadaHoje.alerta
+                ? Template.linha('Alerta', `<span class="a-val neg">${jornadaHoje.alerta}</span>`, 'danger')
+                : '';
+            return `
+                ${Template.secao('Status atual')}
+                ${Template.linha('Situação', `<span class="a-val neu">${jornadaHoje.estado.label}</span>`, 'infos')}
+                ${alertaHtml}
+            `;
+        },
+
+        renderHoje(ctx) {
+            const { jornadaHoje, resumo } = ctx;
+            const hoje = resumo.diaHoje;
+            if (!hoje) return '';
+
+            const corSaldo = hoje.trabalhado >= CONFIG.CARGA_DIARIA ? 'pos' : 'warn';
+            const corSaldoDia = hoje.saldo >= 0 ? 'pos' : 'neg';
+
+            return `
+                ${Template.secao('Hoje')}
+                ${Template.turno(1, jornadaHoje.turno1)}
+                ${Template.turno(2, jornadaHoje.turno2)}
+                ${Template.linha('Trabalhado', `<span class="a-val ${corSaldo}">${Hora.fmtMin(hoje.trabalhado)}</span>`, 'infos')}
+                ${Template.linha('Saldo do dia', `<span class="a-val ${corSaldoDia}">${Hora.fmtMin(hoje.saldo)}</span>`, 'infos')}
+            `;
+        },
+
+        renderSaidas(ctx) {
+            const { jornadaHoje } = ctx;
+            const s = jornadaHoje.saidas;
+            return `
+                ${Template.secao('Saídas previstas')}
+                ${Template.linha('⚠️ 6h (limite turno)',  `<span class="a-val warn">${Hora.fmtHour(s.h6)}</span>`,         'warn')}
+                ${Template.linha('✅ 8h (meta diária)',   `<span class="a-val pos">${Hora.fmtHour(s.h8)}</span>`,          'ok')}
+                ${Template.linha('⛔️ 10h (limite dia)',  `<span class="a-val neg">${Hora.fmtHour(s.h10)}</span>`,         'danger')}
+                ${Template.linha('🏆 Saída ideal',        `<span class="a-val neu">${Hora.fmtHour(s.saidaIdeal)}</span>`,  'infos')}
+            `;
+        },
+
+        renderIntervalo(ctx) {
+            const { jornadaHoje } = ctx;
+            const { retornoMinimo, retornoMaximo } = jornadaHoje.intervalo;
+            const retorno11h = jornadaHoje.retorno11h;
+
+            if (!retornoMinimo && !retorno11h) return '';
+
+            const blocoIntervalo = retornoMinimo ? `
+                ${Template.divisor()}
+                ${Template.secao('Intervalo')}
+                ${Template.linha('⏳ Retorno mínimo', `<span class="a-val neu">${Hora.fmtHour(retornoMinimo)}</span>`,  'infos')}
+                ${Template.linha('⚠️ Retorno máximo', `<span class="a-val warn">${Hora.fmtHour(retornoMaximo)}</span>`, 'warn')}
+            ` : '';
+
+            const blocoDescanso = retorno11h ? `
+                ${Template.linha('🛌 Retorne após (11h)', `<span class="a-val neu">${Hora.fmtHour(retorno11h)}</span>`, 'infos')}
+            ` : '';
+
+            return blocoIntervalo + blocoDescanso;
+        },
+
+        renderSemanal(ctx) {
+            const { resumo } = ctx;
+            const cor = resumo.saldoSemanaComHoje >= 0 ? 'ok' : 'warn';
+            const corVal = resumo.saldoSemanaComHoje >= 0 ? 'pos' : 'neg';
+            const semana = DataHelper.getWeekNumber(new Date());
+            return `
+                ${Template.secao(`Semanal — sem. ${semana}`)}
+                <div class="a-row ${cor}">
+                    ${Template.label('Saldo semanal')}
+                    <span class="a-val ${corVal}">
+                        ${Hora.fmtMin(resumo.saldoSemanaComHoje)}
+                        <small>${resumo.diasRegistrados} dias registrados</small>
+                    </span>
+                </div>
+            `;
+        },
+
+        renderMensal(ctx) {
+            const { resumo, periodo } = ctx;
+            const cor    = resumo.saldoMes >= 0 ? 'ok' : 'warn';
+            const corVal = resumo.saldoMes >= 0 ? 'pos' : 'neg';
+            // Indica quando o calendário exibe mês diferente do atual
+            const hoje         = new Date();
+            const ehMesAtual   = periodo.ano === hoje.getFullYear() && periodo.mes === hoje.getMonth();
+            const labelPeriodo = ehMesAtual ? 'Mensal' : `Mensal — ${periodo.descricao}`;
+            return `
+                ${Template.secao(labelPeriodo)}
+                <div class="a-row ${cor}">
+                    ${Template.label('Saldo mensal')}
+                    <span class="a-val ${corVal}">
+                        ${Hora.fmtMin(resumo.saldoMes)}
+                        <small>${resumo.diasFuturos} úteis restantes</small>
+                    </span>
+                </div>
+                <div class="a-row infos clickable" id="ahg-open-details">
+                    ${Template.label('📊 Horas realizadas')}
+                    <span class="a-val neu">${Hora.fmtMin(resumo.totalMes)}</span>
+                </div>
+            `;
+        },
+
+        renderRelatorios(ctx) {
+            const itens = `
+                ${Template.botao('ahg-open-details-menu', 'Detalhamento mensal', '📋')}
+                ${Template.botao('ahg-export-csv', 'Exportar CSV', '📥')}
+            `;
+            return Template.menu('ahg-relatorios', 'Relatórios', '📁', STATE.menuRelatorios, itens);
+        },
+
+        registrarEventos(ctx) {
+            document.getElementById('ahg-min')?.addEventListener('click', () => {
+                document.getElementById('ahg-panel').style.display = 'none';
+                document.getElementById('ahg-fab').style.display = 'flex';
+                STATE.panelMinimized = true;
+            });
+
+            document.getElementById('ahg-open-details')?.addEventListener('click', () => {
+                Modal.abrir(ctx.relatorio);
+            });
+
+            document.getElementById('ahg-relatorios-toggle')?.addEventListener('click', () => {
+                STATE.menuRelatorios = !STATE.menuRelatorios;
+                const body = document.getElementById('ahg-relatorios-body');
+                const toggle = document.getElementById('ahg-relatorios-toggle');
+                if (body) body.style.display = STATE.menuRelatorios ? 'flex' : 'none';
+                if (toggle) {
+                    const lbl = toggle.querySelector('.a-lbl');
+                    if (lbl) lbl.textContent = `${STATE.menuRelatorios ? '▼' : '▶'} 📁 Relatórios`;
+                }
+            });
+
+            document.getElementById('ahg-open-details-menu')?.addEventListener('click', () => {
+                Modal.abrir(ctx.relatorio);
+            });
+
+            document.getElementById('ahg-export-csv')?.addEventListener('click', () => {
+                Exportador.csv(ctx.relatorio);
+            });
+        }
+    };
+
+    /* =========================================================
+       Calendario — renderização no calendário, sem cálculos
+    ========================================================= */
+
+    const Calendario = {
+
+        render(dias) {
+            this.renderTotais(dias);
+        },
+
+        renderTotais(dias) {
+            dias.forEach(d => {
+                d.elemento?.querySelector('.ahg-total-dia')?.remove();
+
+                const exibir = !d.isToday
+                    && !d.isFuture
+                    && d.batidas.length > 0
+                    && d.batidas.length % 2 === 0;
+
+                if (!exibir) return;
+
+                const el = document.createElement('div');
+                el.className   = 'ahg-total-dia';
+                el.textContent = Hora.fmtMin(d.trabalhado);
+                d.elemento.appendChild(el);
+            });
+        }
+    };
+
+    /* =========================================================
+       Modal — detalhamento mensal com scroll e semanas
+    ========================================================= */
+
+    const Modal = {
+
+        abrir(relatorio) {
+            document.getElementById('ahg-details')?.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'ahg-details';
+            modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999999;display:flex;align-items:center;justify-content:center;';
+
+            const box = document.createElement('div');
+            box.style.cssText = 'width:min(900px,95vw);max-height:90vh;overflow-y:auto;overflow-x:auto;background:#111827;border-radius:14px;padding:20px;color:#dde;font-family:Segoe UI,sans-serif;';
+            box.innerHTML = this.buildConteudo(relatorio);
+
+            modal.appendChild(box);
+            document.body.appendChild(modal);
+
+            document.getElementById('ahg-close-details').onclick = () => modal.remove();
+            modal.onclick = e => { if (e.target === modal) modal.remove(); };
+        },
+
+        buildConteudo(relatorio) {
+            const { semanas, resumo } = relatorio;
+            let html = `
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+                    <h2 style="margin:0;">📊 Detalhamento — ${resumo.periodo.descricao}</h2>
+                    <button id="ahg-close-details">Fechar</button>
+                </div>
+                <p style="color:#7880aa;font-size:12px;margin:0 0 16px;">
+                    Realizado: <strong>${Hora.fmtMin(resumo.totalMes)}</strong> &nbsp;|&nbsp;
+                    Saldo: <strong>${Hora.fmtMin(resumo.saldoMes)}</strong> &nbsp;|&nbsp;
+                    Dias: <strong>${resumo.diasRegistrados}</strong>
+                </p>
+            `;
+
+            semanas.forEach(sem => {
+                html += `
+                    <h3 style="color:#b9a9ff;margin:12px 0 6px;">Semana ${sem.semana}</h3>
+                    <table style="width:100%;border-collapse:collapse;margin-bottom:4px;">
+                        <thead>
+                            <tr style="color:#7880aa;font-size:11px;">
+                                <th style="text-align:left;padding:5px 4px;">Dia</th>
+                                <th style="text-align:left;padding:5px 4px;">Data</th>
+                                <th style="text-align:right;padding:5px 4px;">Trabalhado</th>
+                                <th style="text-align:right;padding:5px 4px;">Saldo dia</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+
+                sem.itens.forEach(r => {
+                    const corSaldo = r.saldoDia >= 0 ? '#3ddc84' : '#ff6b6b';
+                    html += `
+                        <tr>
+                            <td style="padding:4px;">${DataHelper.DIAS_SEMANA_CURTO[r.data.getDay()]}</td>
+                            <td style="padding:4px;">${DataHelper.fmtData(r.data)}</td>
+                            <td style="text-align:right;padding:4px;">${r.batidas.length > 0 ? Hora.fmtMin(r.trabalhado) : '—'}</td>
+                            <td style="text-align:right;padding:4px;color:${corSaldo};">${r.isBusinessDay && r.batidas.length > 0 ? Hora.fmtMin(r.saldoDia) : '—'}</td>
+                        </tr>
+                    `;
+                });
+
+                html += `
+                        <tr style="background:#1f2937;font-weight:bold;">
+                            <td colspan="2" style="padding:5px 4px;">Total semana ${sem.semana}</td>
+                            <td style="text-align:right;padding:5px 4px;">${Hora.fmtMin(sem.totalTrabalhado)}</td>
+                            <td style="text-align:right;padding:5px 4px;color:${sem.totalSaldo >= 0 ? '#3ddc84' : '#ff6b6b'};">${Hora.fmtMin(sem.totalSaldo)}</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                    <div style="height:14px;"></div>
+                `;
+            });
+
+            return html;
+        }
+    };
+
+    /* =========================================================
+       Notificações
+    ========================================================= */
 
     async function pedirNotif() {
-
-        if (
-            'Notification' in window &&
-            Notification.permission === 'default'
-        ) {
-
-            await Notification
-                .requestPermission()
-                .catch(() => { });
+        if ('Notification' in window && Notification.permission === 'default') {
+            await Notification.requestPermission().catch(() => {});
         }
     }
 
-    function notif(
-        id,
-        title,
-        body,
-        urgente = false,
-        ttlMs = 60 * 1000
-    ) {
+    function notif(id, title, body, urgente = false, ttlMs = 60 * 1000) {
         const agora = Date.now();
+        const ultima = STATE.notificationsFired.get(id);
+        if (ultima && (agora - ultima) < ttlMs) return;
+        STATE.notificationsFired.set(id, agora);
 
-        const ultima =
-            _fired.get(id);
-
-        if (
-            ultima &&
-            (agora - ultima) < ttlMs
-        ) {
+        // Dentro de um iframe, delega para a top window via postMessage
+        if (window.top !== window) {
+            try {
+                window.top.postMessage(
+                    { type: 'AHG_NOTIF', id, title, body, urgente, ttlMs },
+                    '*'
+                );
+            } catch (e) {
+                console.warn('[AHGORA PANEL] postMessage falhou:', e);
+            }
             return;
         }
 
-        _fired.set(
-            id,
-            agora
-        );
-
-        if (
-            !('Notification' in window) ||
-            Notification.permission !== 'granted'
-        ) {
-            return;
-        }
+        if (!('Notification' in window) || Notification.permission !== 'granted') return;
 
         try {
-
-            const url = getBatidaUrl();
-
-            const n =
-                new Notification(
-                    title,
-                    {
-                        body:
-                            url
-                                ? `${body}\nClique para registrar o ponto.`
-                                : body,
-                        requireInteraction:
-                            urgente,
-                        tag:
-                            `${id}-${agora}`
-                    }
-                );
-
+            const url = DOM.getBatidaUrl();
+            const n = new Notification(title, {
+                body: url ? `${body}\nClique para registrar o ponto.` : body,
+                requireInteraction: urgente,
+                tag: `${id}-${agora}`
+            });
             if (url) {
-
-                n.onclick = () => {
-
-                    window.open(
-                        url,
-                        '_blank',
-                        'noopener'
-                    );
-
-                    n.close();
-                };
+                n.onclick = () => { window.open(url, '_blank', 'noopener'); n.close(); };
             }
-
         } catch (e) {
-
             console.error(e);
         }
     }
 
-    function checarNotifs(resumo) {
+    function checarNotifs(ctx) {
+        const { jornadaHoje } = ctx;
+        const saidas = jornadaHoje.saidas;
+        const now    = Hora.nowMin();
 
-        const now = nowMin();
-
-        const chk = (
-            h,
-            id,
-            tit,
-            msg,
-            urgente
-        ) => {
-
-            if (h === null) {
-                return;
-            }
-
-            const faltam =
-                h - now;
-
-            const minutos =
-                CONFIG.NOTIFICACOES[id] ?? [];
+        const chk = (h, id, tit, msg, urgente) => {
+            if (h === null) return;
+            const faltam = h - now;
+            const minutos = CONFIG.NOTIFICACOES[id] ?? [];
 
             minutos.forEach(min => {
-
-                if (faltam !== min) {
-                    return;
-                }
-
-                const chave =
-                    `${id}-${min}-${new Date()
-                        .toISOString()
-                        .slice(0, 16)}`;
-
-                notif(
-                    chave,
-                    `⏰ ${tit}`,
-                    `${msg}\nFaltam ${min} minuto${min > 1 ? 's' : ''}.`,
-                    urgente,
-                    0
-                );
+                if (faltam !== min) return;
+                const chave = `${id}-${min}-${new Date().toISOString().slice(0, 16)}`;
+                notif(chave, `⏰ ${tit}`, `${msg}\nFaltam ${min} minuto${min > 1 ? 's' : ''}.`, urgente, 0);
             });
 
             if (faltam === 0) {
-
-                const chave =
-                    `${id}-atingido-${new Date()
-                        .toISOString()
-                        .slice(0, 16)}`;
-
-                notif(
-                    chave,
-                    `✅ ${tit}`,
-                    msg,
-                    urgente,
-                    0
-                );
+                const chave = `${id}-atingido-${new Date().toISOString().slice(0, 16)}`;
+                notif(chave, `✅ ${tit}`, msg, urgente, 0);
             }
         };
 
-        chk(
-            resumo.h6,
-            'h6',
-            '6h atingidas',
-            'Você completou o mínimo de 6h.',
-            true
-        );
-
-        chk(
-            resumo.h8,
-            'h8',
-            'Meta diária',
-            'Você completou as 8h.',
-            false
-        );
-
-        chk(
-            resumo.h10,
-            'h10',
-            'Limite diário',
-            '⚠ Limite diário atingido.',
-            true
-        );
-
-        chk(
-            resumo.saidaIdeal,
-            'ideal',
-            'Saída ideal',
-            'Saldo semanal compensado.',
-            false
-        );
-    }
-
-    /* =========================================================
-       EXTRAÇÃO DOM
-    ========================================================= */
-
-    function extrairDados() {
-
-        const dias =
-            [...document.querySelectorAll('.v-calendar-weekly__day')];
-
-        const hoje = new Date();
-
-        const resultado = [];
-
-        dias.forEach(day => {
-
-            if (day.classList.contains('v-outside')) {
-                return;
-            }
-
-            const label =
-                day.querySelector('.v-calendar-weekly__day-label');
-
-            if (!label) return;
-
-            const numeroDia =
-                Number(label.textContent.trim());
-
-            if (!numeroDia) return;
-
-            const isToday =
-                day.classList.contains('v-present');
-
-            const isFuture =
-                day.classList.contains('v-future');
-
-            const isHoliday =
-                [...day.querySelectorAll('.material-icons')]
-                    .some(x =>
-                        x.textContent.trim() === 'star'
-                    );
-
-            const data =
-                new Date(
-                    hoje.getFullYear(),
-                    hoje.getMonth(),
-                    numeroDia
-                );
-
-            const weekDay =
-                data.getDay();
-
-            const batidas =
-                [...day.querySelectorAll('.batida')]
-                    .filter(x =>
-                        !x.classList.contains('prevista')
-                    )
-                    .map(x =>
-                        x.textContent.trim()
-                    );
-
-            const possuiBatidas = batidas.length > 0;
-
-            const isBusinessDay =
-                (
-                    weekDay !== 0 &&
-                    weekDay !== 6 &&
-                    !isHoliday
-                )
-                || possuiBatidas;
-
-            const trabalhado =
-                batidas.length > 0
-                    ? calcularTrabalhado(batidas)
-                    : 0;
-
-            const saldo =
-                isBusinessDay
-                    ? trabalhado - CONFIG.CARGA_DIARIA
-                    : 0;
-
-            resultado.push({
-                elemento: day,
-                data,
-                isToday,
-                isFuture,
-                isHoliday,
-                isBusinessDay,
-                batidas,
-                trabalhado,
-                saldo
-            });
-        });
-
-        return resultado;
-    }
-
-    /* =========================================================
-       RESUMO
-    ========================================================= */
-
-    function calcularResumo() {
-
-        const dias =
-            extrairDados();
-
-        const hoje =
-            dias.find(x => x.isToday);
-
-        if (!hoje) {
-            return null;
-        }
-
-        const saldoSemana = dias.filter(x =>
-            sameWeek(x.data, new Date()) &&
-            !x.isFuture &&
-            !x.isToday &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + b.saldo, 0);
-
-        const saldoMes =
-            dias
-                .filter(x =>
-                    x.data.getMonth() === new Date().getMonth() &&
-                    !x.isFuture &&
-                    x.isBusinessDay
-                )
-                .reduce((a, b) => a + b.saldo, 0);
-
-        const totalMes = dias.filter(x =>
-            x.data.getMonth() === new Date().getMonth() &&
-            !x.isFuture &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + b.trabalhado, 0);
-
-        const diasRestantesMes =
-            dias.filter(x =>
-                x.isFuture &&
-                x.isBusinessDay
-            ).length;
-
-        const diasRegistrados =
-            dias.filter(x =>
-                x.batidas.length > 0 &&
-                !x.isFuture
-            ).length;
-
-        const entrada =
-            hoje.batidas[0]
-                ? toMin(hoje.batidas[0])
-                : null;
-
-        const ultimaBatida =
-            hoje.batidas.length >= 4
-                ? toMin(hoje.batidas[3])
-                : null;
-
-        const retorno11h =
-            ultimaBatida !== null
-                ? ultimaBatida + (11 * 60)
-                : null;
-
-        let h6 = null;
-        let h8 = null;
-        let h10 = null;
-
-        if (hoje.batidas.length >= 3) {
-
-            // SEGUNDO TURNO
-
-            const inicioTurno2 =
-                toMin(hoje.batidas[2]);
-
-            h6 =
-                inicioTurno2 +
-                CONFIG.MAX_HORAS_TURNO;
-
-        } else if (hoje.batidas.length >= 1) {
-
-            // PRIMEIRO TURNO
-
-            const inicioTurno1 =
-                toMin(hoje.batidas[0]);
-
-            h6 =
-                inicioTurno1 +
-                CONFIG.MAX_HORAS_TURNO;
-        }
-
-        if (hoje.batidas.length >= 2) {
-
-            const entrada1 =
-                toMin(hoje.batidas[0]);
-
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            const trabalhadoTurno1 =
-                saida1 - entrada1;
-
-            const inicioTurno2 =
-                hoje.batidas[2]
-                    ? toMin(hoje.batidas[2])
-                    : nowMin();
-
-            h8 =
-                inicioTurno2 +
-                (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
-
-            h10 =
-                inicioTurno2 +
-                (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
-
-        } else if (entrada !== null) {
-
-            h8 =
-                entrada + CONFIG.CARGA_DIARIA;
-
-            h10 =
-                entrada + CONFIG.MAX_HORAS_DIA;
-        }
-
-        const saidaIdeal =
-            h8 !== null
-                ? h8 - saldoSemana
-                : null;
-
-        let turno1 = null;
-        let turno2 = null;
-
-        /* =====================================================
-           PRIMEIRO TURNO
-        ===================================================== */
-
-        if (hoje.batidas.length >= 1) {
-
-            const e1 =
-                toMin(hoje.batidas[0]);
-
-            const s1 =
-                hoje.batidas[1]
-                    ? toMin(hoje.batidas[1])
-                    : nowMin();
-
-            turno1 = {
-
-                entrada: hoje.batidas[0],
-
-                saida: hoje.batidas[1] || 'agora',
-
-                aberto: !hoje.batidas[1],
-
-                total: s1 - e1,
-
-                limite: CONFIG.MAX_HORAS_TURNO,
-
-                classe:
-                    (
-                        (s1 - e1) >= CONFIG.MAX_HORAS_TURNO ||
-                        hoje.trabalhado >= CONFIG.MAX_HORAS_DIA
-                    )
-                        ? 'danger'
-                        : (
-                            (s1 - e1) >= (CONFIG.MAX_HORAS_TURNO - 30) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)
-                        )
-                            ? 'warn'
-                            : 'infos',
-            };
-        }
-
-        /* =====================================================
-           SEGUNDO TURNO
-        ===================================================== */
-
-        if (hoje.batidas.length >= 3) {
-
-            const e2 =
-                toMin(hoje.batidas[2]);
-
-            const s2 =
-                hoje.batidas[3]
-                    ? toMin(hoje.batidas[3])
-                    : nowMin();
-
-            turno2 = {
-
-                entrada: hoje.batidas[2],
-
-                saida: hoje.batidas[3] || 'agora',
-
-                aberto: !hoje.batidas[3],
-
-                total: s2 - e2,
-
-                limite: CONFIG.MAX_HORAS_TURNO,
-
-                classe:
-                    (
-                        (s2 - e2) >= CONFIG.MAX_HORAS_TURNO ||
-                        hoje.trabalhado >= CONFIG.MAX_HORAS_DIA
-                    )
-                        ? 'danger'
-
-                        : (
-                            (s2 - e2) >= (CONFIG.MAX_HORAS_TURNO - 30) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)
-                        )
-                            ? 'warn'
-                            : 'infos',
-            };
-        }
-
-        const status =
-            (() => {
-
-                const qtd =
-                    hoje.batidas.length;
-
-                if (qtd === 0) {
-                    return '🛬 Não iniciado';
-                }
-
-                if (qtd === 1) {
-                    return '🥇 Primeiro turno';
-                }
-
-                if (qtd === 2) {
-                    return '⏸ Intervalo';
-                }
-
-                if (qtd === 3) {
-                    return '🥈 Segundo turno';
-                }
-
-                if (qtd >= 4) {
-                    return '🛫 Encerrado';
-                }
-
-                return '--';
-            })();
-
-        let retornoMinimo = null;
-        let retornoMaximo = null;
-
-        if (hoje.batidas.length === 2) {
-
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            retornoMinimo =
-                saida1 + CONFIG.INTERVALO_MINIMO;
-
-            retornoMaximo =
-                saida1 + CONFIG.INTERVALO_MAXIMO;
-        }
-
-        let alerta = null;
-
-        if (hoje.batidas.length >= 2) {
-
-            const entrada1 =
-                toMin(hoje.batidas[0]);
-
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            const turno1 =
-                saida1 - entrada1;
-
-            if (turno1 > CONFIG.MAX_HORAS_TURNO) {
-
-                alerta =
-                    '⚠️ Primeiro turno excedeu 6h';
-            }
-        }
-
-        if (hoje.trabalhado > CONFIG.MAX_HORAS_DIA) {
-
-            alerta =
-                '⚠️ Limite diário excedido';
-        }
-
-        return {
-            hoje,
-            saldoSemana,
-            saldoMes,
-            totalMes,
-            dias,
-            diasRestantesMes,
-            diasRegistrados,
-            entrada,
-            turno1,
-            turno2,
-            retorno11h,
-            h6,
-            h8,
-            h10,
-            saidaIdeal,
-            status,
-            retornoMinimo,
-            retornoMaximo,
-            alerta
-        };
+        chk(saidas.h6,         'h6',    '6h atingidas',    'Você completou o mínimo de 6h.', true);
+        chk(saidas.h8,         'h8',    'Meta diária',      'Você completou as 8h.',          false);
+        chk(saidas.h10,        'h10',   'Limite diário',    '⚠ Limite diário atingido.',      true);
+        chk(saidas.saidaIdeal, 'ideal', 'Saída ideal',      'Saldo semanal compensado.',      false);
     }
 
     /* =========================================================
@@ -811,995 +1045,169 @@
     ========================================================= */
 
     function injectCSS() {
-
-        if (document.getElementById('ahg-css-v5')) {
-            return;
-        }
-
-        const style =
-            document.createElement('style');
-
-        style.id = 'ahg-css-v5';
-
+        if (document.getElementById('ahg-css-v6')) return;
+        const style = document.createElement('style');
+        style.id = 'ahg-css-v6';
         style.textContent = `
         #ahg-fab{
-            position:fixed;
-            bottom:20px;
-            right:20px;
-            left: auto;
-            z-index:99999;
-            width:48px;
-            height:48px;
-            border-radius:50%;
+            position:fixed;bottom:20px;right:20px;left:auto;z-index:99999;
+            width:48px;height:48px;border-radius:50%;
             background:linear-gradient(135deg,#3b2d82,#1e1b4b);
-            border:2px solid #4a3faf;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            font-size:22px;
-            cursor:pointer;
-            color:white;
+            border:2px solid #4a3faf;display:flex;align-items:center;
+            justify-content:center;font-size:22px;cursor:pointer;color:white;
         }
-
         #ahg-panel{
-            position:fixed;
-            bottom:20px;
-            right:20px;
-            left: auto;
-            z-index:99999;
-            background:#0f0f1e;
-            border:1px solid #252545;
-            border-radius:14px;
-            min-width:260px;
-            max-width:290px;
-            font-family:'Segoe UI',sans-serif;
-            color:#dde;
-            box-shadow:0 8px 40px rgba(0,0,0,.7);
-            max-height: calc(100vh - 40px);
-            overflow: hidden;
-            display:flex;
-            flex-direction:column;
+            position:fixed;bottom:20px;right:20px;left:auto;z-index:99999;
+            background:#0f0f1e;border:1px solid #252545;border-radius:14px;
+            min-width:260px;max-width:295px;font-family:'Segoe UI',sans-serif;
+            color:#dde;box-shadow:0 8px 40px rgba(0,0,0,.7);
+            max-height:calc(100vh - 40px);overflow:hidden;display:flex;flex-direction:column;
         }
-
         .a-tit{
-            background:linear-gradient(135deg,#3b2d82,#1e1b4b);
-            color:#b9a9ff;
-            font-weight:700;
-            font-size:11px;
-            letter-spacing:1.4px;
-            text-transform:uppercase;
-            padding:10px 14px 8px;
-            border-radius:14px 14px 0 0;
-            display:flex;
-            align-items:center;
-            gap:6px;
-            cursor:grab;
+            background:linear-gradient(135deg,#3b2d82,#1e1b4b);color:#b9a9ff;
+            font-weight:700;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;
+            padding:10px 14px 8px;border-radius:14px 14px 0 0;
+            display:flex;align-items:center;gap:6px;cursor:grab;
         }
-
-        .a-x{
-            margin-left:auto;
-            cursor:pointer;
-            opacity:.6;
-            font-size:18px;
-        }
-
+        .a-x{margin-left:auto;cursor:pointer;opacity:.6;font-size:18px;}
         .a-body{
-            padding:10px 12px 12px;
-            display:flex;
-            flex-direction:column;
-            gap:5px;
-            overflow-y:auto;
-            overflow-x:hidden;
-            flex:1;
+            padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px;
+            overflow-y:auto;overflow-x:hidden;flex:1;
         }
-
         .a-row{
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            padding:5px 8px;
-            border-radius:7px;
-            background:rgba(255,255,255,.04);
-            border-left:3px solid transparent;
+            display:flex;justify-content:space-between;align-items:center;
+            padding:5px 8px;border-radius:7px;
+            background:rgba(255,255,255,.04);border-left:3px solid transparent;
         }
-
-        .a-row.ok{
-            background:rgba(61,220,132,.1);
-            border-color:#3ddc84;
-        }
-
-        .a-row.warn{
-            background:rgba(255,165,0,.12);
-            border-color:orange;
-        }
-
-        .a-row.danger{
-            background:rgba(255,60,60,.14);
-            border-color:#ff4444;
-        }
-
-        .a-row.infos{
-            background:rgba(100,100,255,.1);
-            border-color:#7878ff;
-        }
-
-        .a-lbl{
-            color:#7880aa;
-            font-size:11.5px;
-        }
-
-        .a-val{
-            font-weight:700;
-            font-size:14px;
-            text-align:right;
-        }
-
-        .a-val.pos{color:#3ddc84;}
-        .a-val.neg{color:#ff6b6b;}
-        .a-val.warn{color:orange;}
-        .a-val.neu{color:#b9a9ff;}
-
-        .a-val small{
-            font-size:11px;
-            font-weight:800;
-            color:#555880;
-            display:block;
-        }
-
-        .a-div{
-            border:none;
-            border-top:1px solid rgba(255,255,255,.07);
-            margin:3px 0;
-        }
-
+        .a-row.ok    {background:rgba(61,220,132,.1); border-color:#3ddc84;}
+        .a-row.warn  {background:rgba(255,165,0,.12); border-color:orange;}
+        .a-row.danger{background:rgba(255,60,60,.14); border-color:#ff4444;}
+        .a-row.infos {background:rgba(100,100,255,.1);border-color:#7878ff;}
+        .a-lbl{color:#7880aa;font-size:11.5px;}
+        .a-val{font-weight:700;font-size:14px;text-align:right;}
+        .a-val.pos  {color:#3ddc84;}
+        .a-val.neg  {color:#ff6b6b;}
+        .a-val.warn {color:orange;}
+        .a-val.neu  {color:#b9a9ff;}
+        .a-val small{font-size:11px;font-weight:800;color:#555880;display:block;}
+        .a-div{border:none;border-top:1px solid rgba(255,255,255,.07);margin:3px 0;}
         .a-sec{
-            font-size:10px;
-            letter-spacing:1px;
-            text-transform:uppercase;
-            color:#444466;
-            padding:3px 0 1px;
-            font-weight:700;
+            font-size:10px;letter-spacing:1px;text-transform:uppercase;
+            color:#444466;padding:3px 0 1px;font-weight:700;
         }
-
         .a-foot{
-            font-size:10px;
-            font-weight:800;
-            color:#333355;
-            text-align:right;
-            padding:2px 14px 8px;
+            font-size:10px;font-weight:800;color:#333355;
+            text-align:right;padding:2px 14px 8px;
         }
-
-        .a-row.clickable{
-            cursor:pointer;
-            transition:.15s;
+        .a-row.clickable{cursor:pointer;transition:.15s;}
+        .a-row.clickable:hover{transform:translateX(2px);background:rgba(255,255,255,.08);}
+        .a-body::-webkit-scrollbar,#ahg-details *::-webkit-scrollbar{width:8px;height:8px;}
+        .a-body::-webkit-scrollbar-thumb,#ahg-details *::-webkit-scrollbar-thumb{background:#444466;border-radius:10px;}
+        .a-body::-webkit-scrollbar-track,#ahg-details *::-webkit-scrollbar-track{background:transparent;}
+        .v-calendar-weekly__day{position:relative;}
+        .ahg-total-dia{
+            position:absolute;bottom:2px;right:4px;
+            font-size:14px;font-weight:700;color:#78788f;
+            padding:1px 4px;border-radius:6px;pointer-events:none;
         }
-
-        .a-row.clickable:hover{
-            transform:translateX(2px);
-            background:rgba(255,255,255,.08);
-        }
-
-        .a-body::-webkit-scrollbar,
-        #ahg-details *::-webkit-scrollbar{
-            width:8px;
-            height:8px;
-        }
-
-        .a-body::-webkit-scrollbar-thumb,
-        #ahg-details *::-webkit-scrollbar-thumb{
-            background:#444466;
-            border-radius:10px;
-        }
-
-        .a-body::-webkit-scrollbar-track,
-        #ahg-details *::-webkit-scrollbar-track{
-            background:transparent;
-        }
-
-        .v-calendar-weekly__day {
-    position: relative;
-}
-
-.ahg-total-dia {
-    position: absolute;
-    bottom: 2px;
-    right: 4px;
-
-    font-size: 14px;
-    font-weight: 700;
-
-    color: #78788f;
-
-    padding: 1px 4px;
-    border-radius: 6px;
-
-    pointer-events: none;
-}
         `;
-
         document.head.appendChild(style);
     }
 
     /* =========================================================
-       ESTRUTURA
+       Estrutura do painel (FAB + painel drag)
     ========================================================= */
 
     function criarEstrutura() {
+        if (document.getElementById('ahg-panel')) return;
 
-        if (document.getElementById('ahg-panel')) {
-            return;
-        }
-
-        const fab =
-            document.createElement('div');
-
+        const fab = document.createElement('div');
         fab.id = 'ahg-fab';
-
         fab.innerHTML = '⏱';
-
         fab.onclick = () => {
-
-            document.getElementById('ahg-panel')
-                .style.display = '';
-
+            document.getElementById('ahg-panel').style.display = '';
             fab.style.display = 'none';
+            STATE.panelMinimized = false;
         };
-
         document.body.appendChild(fab);
 
-        const panel =
-            document.createElement('div');
-
+        const panel = document.createElement('div');
         panel.id = 'ahg-panel';
-
         panel.style.display = 'none';
-
-        panel.innerHTML =
-            `<div class="a-tit">⏱ Carregando...</div>`;
-
+        panel.innerHTML = `<div class="a-tit">⏱ Carregando...</div>`;
         document.body.appendChild(panel);
 
-        let drag = false;
-        let ox = 0;
-        let oy = 0;
-
         panel.addEventListener('mousedown', e => {
-
-            if (!e.target.closest('.a-tit')) {
-                return;
-            }
-
-            drag = true;
-
-            const r =
-                panel.getBoundingClientRect();
-
-            ox = e.clientX - r.left;
-            oy = e.clientY - r.top;
+            if (!e.target.closest('.a-tit')) return;
+            STATE.dragging = true;
+            const r = panel.getBoundingClientRect();
+            STATE.dragOX = e.clientX - r.left;
+            STATE.dragOY = e.clientY - r.top;
         });
 
         document.addEventListener('mousemove', e => {
-
-            if (!drag) return;
-
-            panel.style.left =
-                `${e.clientX - ox}px`;
-
-            panel.style.top =
-                `${e.clientY - oy}px`;
-
+            if (!STATE.dragging) return;
+            panel.style.left   = `${e.clientX - STATE.dragOX}px`;
+            panel.style.top    = `${e.clientY - STATE.dragOY}px`;
             panel.style.bottom = 'auto';
         });
 
-        document.addEventListener('mouseup', () => {
-            drag = false;
-        });
+        document.addEventListener('mouseup', () => { STATE.dragging = false; });
     }
 
     /* =========================================================
-       RENDER
+       Agendamento de render por minuto
+    ========================================================= */
+
+    function agendarRenderMinuto() {
+        const agora = new Date();
+        const msAte = (60 - agora.getSeconds()) * 1000 - agora.getMilliseconds();
+
+        setTimeout(() => {
+            if (document.visibilityState === 'visible') render();
+            agendarRenderMinuto();
+        }, msAte);
+    }
+
+    /* =========================================================
+       render — monta o contexto e despacha para UI
     ========================================================= */
 
     function render() {
-
         try {
-
-            const r =
-                calcularResumo();
-
-            if (!r) {
-                return;
-            }
-
-            checarNotifs(r);
-
-            const p =
-                document.getElementById('ahg-panel');
-
-            if (!p) {
-                return;
-            }
-
-            p.innerHTML = `
-            <div class="a-tit">
-                ⏱ Painel Inteligente
-                <span class="a-x" id="ahg-min">–</span>
-            </div>
-
-            <div class="a-body">
-
-                <div class="a-sec">
-                    Status atual
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Situação
-                    </span>
-
-                    <span class="a-val neu">
-                        ${r.status}
-                    </span>
-                </div>
-
-                ${r.alerta ? `
-                <div class="a-row danger">
-                    <span class="a-lbl">
-                        Alerta
-                    </span>
-
-                    <span class="a-val neg">
-                        ${r.alerta}
-                    </span>
-                </div>
-                ` : ''}
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Hoje
-                </div>
-
-                ${r.turno1 ? `
-                <div class="a-row ${r.turno1.classe}">
-
-                    <span class="a-lbl">
-                        1º turno
-                    </span>
-
-                    <span class="a-val neu">
-
-                        ${r.turno1.entrada}
-                        →
-                        ${r.turno1.saida}
-
-                        <small>
-                            ${fmtMin(r.turno1.total)}
-                            ${r.turno1.aberto ? '· em andamento' : ''}
-                        </small>
-
-                    </span>
-
-                </div>
-                ` : ''}
-
-                ${r.turno2 ? `
-                <div class="a-row ${r.turno2.classe}">
-
-                    <span class="a-lbl">
-                        2º turno
-                    </span>
-
-                    <span class="a-val neu">
-
-                        ${r.turno2.entrada}
-                        →
-                        ${r.turno2.saida}
-
-                        <small>
-                            ${fmtMin(r.turno2.total)}
-                            ${r.turno2.aberto ? '· em andamento' : ''}
-                        </small>
-
-                    </span>
-
-                </div>
-                ` : ''}
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Trabalhado
-                    </span>
-
-                    <span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'warn'}">
-                        ${fmtMin(r.hoje.trabalhado)}
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Saldo do dia
-                    </span>
-
-                    <span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'neg'}">
-                        ${fmtMin(r.hoje.saldo)}
-                    </span>
-                </div>
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Saídas
-                </div>
-
-                <div class="a-row warn" >
-                    <span class="a-lbl">
-                        ⚠️ 6h
-                    </span>
-
-                    <span class="a-val warn">
-                        ${fmtHour(r.h6)}
-                    </span>
-                </div>
-
-                <div class="a-row ok">
-                    <span class="a-lbl">
-                        ✅ 8h
-                    </span>
-
-                    <span class="a-val pos">
-                        ${fmtHour(r.h8)}
-                    </span>
-                </div>
-
-                <div class="a-row danger">
-                    <span class="a-lbl">
-                      ⛔️ 10h
-                    </span>
-
-                    <span class="a-val neg">
-                        ${fmtHour(r.h10)}
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        🏆 Saída ideal
-                    </span>
-
-                    <span class="a-val neu">
-                        ${fmtHour(r.saidaIdeal)}
-                    </span>
-                </div>
-
-                ${r.retornoMinimo ? `
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Intervalo
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        ⏳ Retorno mínimo
-                    </span>
-
-                    <span class="a-val neu">
-                        ${fmtHour(r.retornoMinimo)}
-                    </span>
-                </div>
-
-                <div class="a-row warn">
-                    <span class="a-lbl">
-                        ⚠️ Retorno máximo
-                    </span>
-
-                    <span class="a-val warn">
-                        ${fmtHour(r.retornoMaximo)}
-                    </span>
-                </div>
-                ` : ''}
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        🛌 Retorne depois das
-                    </span>
-
-                    <span class="a-val neu">
-                        ${fmtHour(r.retorno11h)}
-                    </span>
-                </div>
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Semanal — sem. ${getWeekNumber(new Date())}
-                </div>
-
-                <div class="a-row ${r.saldoSemana >= 0 ? 'ok' : 'warn'}">
-                    <span class="a-lbl">
-                        Saldo semanal
-                    </span>
-
-                    <span class="a-val ${r.saldoSemana >= 0 ? 'pos' : 'neg'}">
-                        ${fmtMin(r.saldoSemana)}
-
-                        <small>
-                            ${r.diasRegistrados} dias registrados
-                        </small>
-                    </span>
-                </div>
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Mensal
-                </div>
-
-                <div class="a-row ${r.saldoMes >= 0 ? 'ok' : 'warn'}">
-                    <span class="a-lbl">
-                        Saldo mensal
-                    </span>
-
-                    <span class="a-val ${r.saldoMes >= 0 ? 'pos' : 'neg'}">
-                        ${fmtMin(r.saldoMes)}
-
-                        <small>
-                            ${r.diasRestantesMes} úteis restantes
-                        </small>
-                    </span>
-                </div>
-                <div class="a-row infos clickable" id="ahg-open-details">
-                        <span class="a-lbl">
-                            📊 Horas realizadas
-                        </span>
-
-                        <span class="a-val neu">
-                            ${fmtMin(r.totalMes)}
-                        </span>
-                    </div>
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Relatórios
-                </div>
-
-                <div class="a-row infos clickable" id="ahg-export-csv">
-                    <span class="a-lbl">
-                        📥 Exportar CSV
-                    </span>
-
-                    <span class="a-val neu">
-                        ${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}
-                    </span>
-                </div>
-
-            </div>
-
-            <div class="a-foot">
-                Atualizado ${fmtHour(nowMin())}
-    ·
-    Reload em ${fmtCountdown(
-                NEXT_REFRESH - Date.now()
-            )}
-            </div>
-            `;
-
-            document.getElementById('ahg-min')
-                ?.addEventListener('click', () => {
-
-                    p.style.display = 'none';
-
-                    document
-                        .getElementById('ahg-fab')
-                        .style.display = 'flex';
-                });
-            document.getElementById('ahg-open-details')?.addEventListener('click', () => {
-                abrirDetalhes(r);
-            });
-
-            document.getElementById('ahg-export-csv')?.addEventListener('click', () => {
-                exportarCSV(r);
-            });
-
-            renderTotaisCalendario(r);
+            // Período visível no calendário (pode ser mês diferente do atual)
+            const periodoVisivel = DataHelper.getPeriodoVisivel();
+            STATE.periodoSelecionado = periodoVisivel;
+
+            const periodo   = DataHelper.getPeriodoObj(periodoVisivel.ano, periodoVisivel.mes);
+            const dias      = DOM.extrairDias(periodoVisivel);
+            const relatorio = Relatorio.gerarMensal(dias, periodo);
+            const diaHoje   = relatorio.diaHoje;
+
+            if (!diaHoje) return;
+
+            // Contexto operacional: sempre o dia atual
+            const jornadaHoje = Jornada.calcularDia(diaHoje, relatorio.saldoSemana);
+
+            const ctx = {
+                dias,
+                periodo,
+                relatorio,
+                resumo: relatorio.resumo,
+                jornadaHoje
+            };
+
+            checarNotifs(ctx);
+
+            const p = document.getElementById('ahg-panel');
+            if (!p) return;
+
+            UI.render(ctx);
+            Calendario.render(dias);
 
         } catch (e) {
-
-            console.error(
-                '[AHGORA PANEL]',
-                e
-            );
+            console.error('[AHGORA PANEL]', e);
         }
-    }
-
-    function abrirDetalhes(r) {
-
-        const antigo =
-            document.getElementById('ahg-details');
-
-        if (antigo) {
-            antigo.remove();
-        }
-
-        const modal =
-            document.createElement('div');
-
-        modal.id = 'ahg-details';
-
-        modal.style = `
-        position:fixed;
-        inset:0;
-        background:rgba(0,0,0,.7);
-        z-index:999999;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-    `;
-
-        const box =
-            document.createElement('div');
-
-        box.style = `
-            width:min(900px,95vw);
-            max-height:90vh;
-
-            overflow-y:auto;
-            overflow-x:auto;
-
-            background:#111827;
-
-            border-radius:14px;
-
-            padding:20px;
-
-            color:#dde;
-
-            font-family:Segoe UI,sans-serif;
-`;
-
-        const diasSemana = [
-            'Dom',
-            'Seg',
-            'Ter',
-            'Qua',
-            'Qui',
-            'Sex',
-            'Sáb'
-        ];
-
-        let html = `
-        <div style="
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            margin-bottom:16px;
-        ">
-            <h2 style="margin:0;">
-                📊 Detalhamento Mensal
-            </h2>
-
-            <button id="ahg-close-details">
-                Fechar
-            </button>
-        </div>
-    `;
-
-        let semanaAtual = null;
-        let totalSemana = 0;
-        let saldoSemana = 0;
-
-        r.dias
-            .filter(x =>
-                !x.isFuture &&
-                x.isBusinessDay
-            )
-            .sort((a, b) => a.data - b.data)
-            .forEach((d, idx, arr) => {
-
-                const semana =
-                    getWeekNumber(d.data);
-
-                if (
-                    semanaAtual !== null &&
-                    semana !== semanaAtual
-                ) {
-
-                    /* html += `
-                         <tr style="
-                             background:#1f2937;
-                             font-weight:bold;
-                         ">
-                             <td colspan="2">
-                                 TOTAL SEMANA
-                             </td>
-                             <td>
-                                 ${fmtMin(totalSemana)}
-                             </td>
-                             <td>
-                                 ${fmtMin(saldoSemana)}
-                             </td>
-                         </tr>
-                         <tr>
-                             <td colspan="4" style="height:18px"></td>
-                         </tr>
-                     `; */
-
-                    totalSemana = 0;
-                    saldoSemana = 0;
-                }
-
-                if (semana !== semanaAtual) {
-
-                    html += `
-                    <h3>
-                        Semana ${semana}
-                    </h3>
-
-                    <table style="
-                        width:100%;
-                        border-collapse:collapse;
-                        margin-bottom:12px;
-                    ">
-                        <thead>
-                            <tr>
-                                <th style="text-align:left;padding:6px 4px;">
-                                    Dia
-                                </th>
-
-                                <th style="text-align:left;padding:6px 4px;">
-                                    Data
-                                </th>
-
-                                <th style="text-align:right;padding:6px 4px;">
-                                    Horas
-                                </th>
-
-                                <th style="text-align:right;padding:6px 4px;">
-                                    Saldo
-                                </th>
-                            </tr>
-                        </thead>
-
-                        <tbody>
-                `;
-
-                    semanaAtual = semana;
-                }
-
-                totalSemana += d.trabalhado;
-                saldoSemana += d.saldo;
-
-                html += `
-                <tr>
-                    <td>
-                        ${diasSemana[d.data.getDay()]}
-                    </td>
-
-                    <td>
-                        ${d.data.toLocaleDateString('pt-BR')}
-                    </td>
-
-                    <td align="right">
-                        ${fmtMin(d.trabalhado)}
-                    </td>
-
-                    <td align="right">
-                        ${fmtMin(d.saldo)}
-                    </td>
-                </tr>
-            `;
-
-                const next = arr[idx + 1];
-
-                if (
-                    !next ||
-                    getWeekNumber(next.data) !== semana
-                ) {
-
-                    html += `
-                    <tr style="
-                        background:#1f2937;
-                        font-weight:bold;
-                    ">
-                        <td colspan="2">
-                            TOTAL SEMANA
-                        </td>
-
-                        <td align="right">
-                            ${fmtMin(totalSemana)}
-                        </td>
-
-                        <td align="right">
-                            ${fmtMin(saldoSemana)}
-                        </td>
-                    </tr>
-
-                    </tbody>
-                    </table>
-                `;
-                }
-            });
-
-        box.innerHTML = html;
-
-        modal.appendChild(box);
-
-        document.body.appendChild(modal);
-
-        document
-            .getElementById('ahg-close-details')
-            .onclick = () => modal.remove();
-
-        modal.onclick = e => {
-
-            if (e.target === modal) {
-                modal.remove();
-            }
-        };
-    }
-
-    function getDefaultDevice() {
-
-        const device =
-            localStorage.getItem(
-                '@batidaOnline/companyCodeDefault'
-            );
-
-        return device?.trim() || null;
-    }
-
-    function getBatidaUrl() {
-
-        const defaultDevice =
-            getDefaultDevice();
-
-        if (!defaultDevice) {
-
-            console.warn(
-                '[AHGORA PANEL] defaultDevice não encontrado'
-            );
-
-            return null;
-        }
-
-        const url =
-            `${CONFIG.BATIDA_URL}?defaultDevice=${encodeURIComponent(defaultDevice)}`;
-
-        return url;
-    }
-
-    /* =========================================================
-       EXPORTAR CSV
-    ========================================================= */
-
-    function exportarCSV(r) {
-
-        const diasSemana = [
-            'Domingo',
-            'Segunda',
-            'Terça',
-            'Quarta',
-            'Quinta',
-            'Sexta',
-            'Sábado'
-        ];
-
-        const hoje = new Date();
-        const ano  = hoje.getFullYear();
-        const mes  = String(hoje.getMonth() + 1).padStart(2, '0');
-
-        const cabecalho = [
-            'Data',
-            'Dia da Semana',
-            'Batida 1',
-            'Batida 2',
-            'Batida 3',
-            'Batida 4',
-            '1º Turno',
-            '2º Turno',
-            'Intervalo',
-            'Total',
-            'Saldo'
-        ];
-
-        const linhas = r.dias
-            .filter(x => !x.isFuture)
-            .sort((a, b) => a.data - b.data)
-            .map(d => {
-
-                const b = d.batidas;
-
-                const turno1 =
-                    b[0] && b[1]
-                        ? fmtMin(toMin(b[1]) - toMin(b[0]))
-                        : '';
-
-                const turno2 =
-                    b[2] && b[3]
-                        ? fmtMin(toMin(b[3]) - toMin(b[2]))
-                        : '';
-
-                const intervalo =
-                    b[1] && b[2]
-                        ? fmtMin(toMin(b[2]) - toMin(b[1]))
-                        : '';
-
-                const total =
-                    d.batidas.length > 0
-                        ? fmtMin(d.trabalhado)
-                        : '';
-
-                const saldo =
-                    d.isBusinessDay && d.batidas.length > 0
-                        ? fmtMin(d.saldo)
-                        : '';
-
-                return [
-                    d.data.toLocaleDateString('pt-BR'),
-                    diasSemana[d.data.getDay()],
-                    b[0] || '',
-                    b[1] || '',
-                    b[2] || '',
-                    b[3] || '',
-                    turno1,
-                    turno2,
-                    intervalo,
-                    total,
-                    saldo
-                ].map(v => `"${v}"`).join(';');
-            });
-
-        const conteudo = [
-            cabecalho.map(v => `"${v}"`).join(';'),
-            ...linhas
-        ].join('\r\n');
-
-        const bom    = '\uFEFF';
-        const blob   = new Blob([bom + conteudo], { type: 'text/csv;charset=utf-8;' });
-        const url    = URL.createObjectURL(blob);
-        const link   = document.createElement('a');
-
-        link.href     = url;
-        link.download = `Ahgora_${ano}-${mes}.csv`;
-
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-    }
-
-    function renderTotaisCalendario(r) {
-
-        r.dias.forEach(dia => {
-
-            dia.elemento
-                ?.querySelector('.ahg-total-dia')
-                ?.remove();
-
-            const mostrar =
-                !dia.isToday &&
-                !dia.isFuture &&
-                dia.batidas.length > 0 &&
-                dia.batidas.length % 2 === 0;
-
-            if (!mostrar) {
-                return;
-            }
-
-            const total =
-                document.createElement('div');
-
-            total.className =
-                'ahg-total-dia';
-
-            total.textContent =
-                fmtMin(dia.trabalhado);
-
-            dia.elemento.appendChild(total);
-        });
     }
 
     /* =========================================================
@@ -1807,147 +1215,105 @@
     ========================================================= */
 
     function start() {
-
         injectCSS();
-
         criarEstrutura();
-
         render();
-
         agendarRenderMinuto();
+
+        // MutationObserver: recalcula quando o calendário mudar de mês
+        const calendario = document.querySelector('.v-calendar-weekly');
+        if (calendario) {
+            const observer = new MutationObserver(() => {
+                // Pequeno debounce para aguardar o DOM estabilizar
+                clearTimeout(START._obsTimer);
+                START._obsTimer = setTimeout(() => {
+                    const novoPeriodo = DataHelper.getPeriodoVisivel();
+                    const anterior    = STATE.periodoSelecionado;
+                    if (novoPeriodo.ano !== anterior.ano || novoPeriodo.mes !== anterior.mes) {
+                        console.log('[AHGORA PANEL] mês alterado →', novoPeriodo);
+                        render();
+                    }
+                }, 300);
+            });
+            observer.observe(calendario, { childList: true, subtree: true, characterData: true });
+        }
 
         setTimeout(() => {
             console.log('[AHGORA PANEL] recarregando página...');
-            console.log(CONFIG.URL_REFRESH);
             window.top.location = CONFIG.URL_REFRESH;
-        }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
+        }, CONFIG.AUTO_REFRESH_MIN * 60 * 1000);
     }
 
+    // Namespace auxiliar para o timer do observer
+    const START = {};
+
     /* =========================================================
-       WAIT CALENDAR
+       Aguarda calendário e inicia
     ========================================================= */
 
     const initInterval = setInterval(() => {
-
-        const calendar =
-            document.querySelector('.v-calendar-weekly');
-
-        if (calendar) {
-
+        if (document.querySelector('.v-calendar-weekly')) {
             clearInterval(initInterval);
-
             start();
         }
-
     }, 1000);
 
+    /* =========================================================
+       Funções de teste expostas no console
+    ========================================================= */
+
     window.ahgTestNotif = function () {
-
-        notif(
-            `teste-${Date.now()}`,
-            '🧪 Teste Ahgora',
-            'Esta é uma notificação de teste.',
-            false,
-            0
-        );
-
+        notif(`teste-${Date.now()}`, '🧪 Teste Ahgora', 'Notificação de teste.', false, 0);
     };
 
     window.ahgTestBatida = function () {
-
-        const url =
-            getBatidaUrl();
-
-        console.log(
-            '[AHGORA PANEL] TEST URL:',
-            url
-        );
-
-        notif(
-            `batida-${Date.now()}`,
-            '🧪 Teste de Batida',
-            'Clique para abrir a tela de registro de ponto.',
-            true,
-            0
-        );
+        const url = DOM.getBatidaUrl();
+        console.log('[AHGORA PANEL] TEST URL:', url);
+        notif(`batida-${Date.now()}`, '🧪 Teste de Batida', 'Clique para abrir a tela de registro.', true, 0);
     };
 
-    window.ahgTestAlertas = function (
-        tipo = 'h8'
-    ) {
-
-        const minutos =
-            CONFIG.NOTIFICACOES[tipo] ?? [];
-
-        if (!minutos) {
-            return;
-        }
-
+    window.ahgTestAlertas = function (tipo = 'h8') {
+        const minutos = CONFIG.NOTIFICACOES[tipo] ?? [];
         minutos.forEach((min, idx) => {
-
             setTimeout(() => {
-
-                notif(
-                    `teste-${tipo}-${min}-${Date.now()}`,
-                    `🧪 Teste ${tipo}`,
-                    `Faltam ${min} minuto${min > 1 ? 's' : ''}.`,
-                    min <= 3,
-                    0
-                );
-
+                notif(`teste-${tipo}-${min}-${Date.now()}`, `🧪 Teste ${tipo}`,
+                    `Faltam ${min} minuto${min > 1 ? 's' : ''}.`, min <= 3, 0);
             }, idx * 2000);
-
         });
-
         setTimeout(() => {
-
-            notif(
-                `teste-${tipo}-atingido-${Date.now()}`,
-                `✅ Teste ${tipo}`,
-                'Limite atingido.',
-                true,
-                0
-            );
-
+            notif(`teste-${tipo}-atingido-${Date.now()}`, `✅ Teste ${tipo}`, 'Limite atingido.', true, 0);
         }, minutos.length * 2000);
     };
 
     window.ahgTestTudo = function () {
-
-        Object.keys(
-            CONFIG.NOTIFICACOES ?? []
-        ).forEach((tipo, idx) => {
-
-            setTimeout(() => {
-
-                ahgTestAlertas(tipo);
-
-            }, idx * 15000);
-
+        Object.keys(CONFIG.NOTIFICACOES).forEach((tipo, idx) => {
+            setTimeout(() => window.ahgTestAlertas(tipo), idx * 15000);
         });
     };
+
+    /* =========================================================
+       Top window — recebe mensagens do iframe e dispara notificações
+    ========================================================= */
 
     pedirNotif();
 
     const IS_TOP = window.top === window;
     if (IS_TOP) {
-
-        console.log(
-            '[AHGORA PANEL] TOP WINDOW'
-        );
-
+        console.log('[AHGORA PANEL] TOP WINDOW');
         pedirNotif();
 
+        // Recebe pedidos de notificação vindos do iframe
+        window.addEventListener('message', e => {
+            if (!e.data || e.data.type !== 'AHG_NOTIF') return;
+
+            const { id, title, body, urgente, ttlMs } = e.data;
+            notif(id, title, body, urgente, ttlMs ?? 60 * 1000);
+        });
+
         setInterval(() => {
-
-            console.log(
-                '[AHGORA PANEL] reload top'
-            );
-
+            console.log('[AHGORA PANEL] reload top');
             location.reload();
-
-        }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
-
+        }, CONFIG.AUTO_REFRESH_MIN * 60 * 1000);
         return;
     }
 
