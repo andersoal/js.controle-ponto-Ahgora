@@ -354,6 +354,12 @@
             const mes = periodo ? periodo.mes : new Date().getMonth();
             const resultado = [];
 
+            // Data de hoje para comparação por data quando v-present não existe
+            const hoje      = new Date();
+            const hojeAno   = hoje.getFullYear();
+            const hojeMes   = hoje.getMonth();
+            const hojeDia   = hoje.getDate();
+
             document.querySelectorAll('.v-calendar-weekly__day').forEach(day => {
                 if (day.classList.contains('v-outside')) return;
 
@@ -363,14 +369,18 @@
                 const numeroDia = Number(label.textContent.trim());
                 if (!numeroDia) return;
 
-                const isToday   = day.classList.contains('v-present');
-                const isFuture  = day.classList.contains('v-future');
-                const isHoliday = [...day.querySelectorAll('.material-icons')]
+                const isPresentClass = day.classList.contains('v-present');
+                const isFuture       = day.classList.contains('v-future');
+                const isHoliday      = [...day.querySelectorAll('.material-icons')]
                     .some(x => x.textContent.trim() === 'star');
 
                 // Usa o ano/mês do período ativo, não necessariamente hoje
                 const data    = new Date(ano, mes, numeroDia);
                 const weekDay = data.getDay();
+
+                // isToday: v-present quando no mês atual, ou comparação de data em outros meses
+                const isToday = isPresentClass
+                    || (ano === hojeAno && mes === hojeMes && numeroDia === hojeDia);
 
                 const batidas = [...day.querySelectorAll('.batida')]
                     .filter(x => !x.classList.contains('prevista'))
@@ -1207,25 +1217,74 @@
 
     function render() {
         try {
-            // Período visível no calendário (pode ser mês diferente do atual)
             const periodoVisivel = DataHelper.getPeriodoVisivel();
             STATE.periodoSelecionado = periodoVisivel;
 
-            const periodo   = DataHelper.getPeriodoObj(periodoVisivel.ano, periodoVisivel.mes);
-            const dias      = DOM.extrairDias(periodoVisivel);
+            const periodo      = DataHelper.getPeriodoObj(periodoVisivel.ano, periodoVisivel.mes);
+            const periodoAtual = DataHelper.getPeriodoObj(new Date().getFullYear(), new Date().getMonth());
+            const ehMesAtual   = periodoVisivel.ano === periodoAtual.ano
+                              && periodoVisivel.mes === periodoAtual.mes;
+
+            // Dias do período visível: usados para relatório, CSV, modal e calendário
+            const dias = DOM.extrairDias(periodoVisivel);
+
+            // Dia de hoje: quando estamos no mês atual, está em `dias` (v-present)
+            // Quando estamos em mês diferente, buscamos o v-present diretamente do DOM
+            // sem depender do período — o v-present sempre aponta para hoje
+            let diaHoje = dias.find(x => x.isToday) || null;
+
+            if (!diaHoje) {
+                // DOM tem o mês histórico; v-present não aparece nesses dias.
+                // Lemos o v-present diretamente, construindo um objeto mínimo a partir do DOM.
+                const elHoje = document.querySelector('.v-calendar-weekly__day.v-present');
+                if (elHoje) {
+                    const labelHoje = elHoje.querySelector('.v-calendar-weekly__day-label');
+                    const numHoje   = labelHoje ? Number(labelHoje.textContent.trim()) : 0;
+                    if (numHoje) {
+                        const dataHoje = new Date(periodoAtual.ano, periodoAtual.mes, numHoje);
+                        const batidas  = [...elHoje.querySelectorAll('.batida')]
+                            .filter(x => !x.classList.contains('prevista'))
+                            .map(x => x.textContent.trim());
+                        const trabalhado    = batidas.length > 0 ? Jornada.calcularTrabalhado(batidas) : 0;
+                        const isBusinessDay = dataHoje.getDay() !== 0 && dataHoje.getDay() !== 6;
+                        diaHoje = {
+                            elemento:    elHoje,
+                            data:        dataHoje,
+                            isToday:     true,
+                            isFuture:    false,
+                            isHoliday:   false,
+                            isBusinessDay,
+                            isWeekend:   DataHelper.isWeekend(dataHoje),
+                            semana:      DataHelper.getWeekNumber(dataHoje),
+                            diaSemana:   DataHelper.DIAS_SEMANA[dataHoje.getDay()],
+                            batidas,
+                            trabalhado,
+                            saldo:       isBusinessDay ? trabalhado - CONFIG.CARGA_DIARIA : 0
+                        };
+                    }
+                }
+            }
+
+            if (!diaHoje) return; // calendário ainda não carregou
+
             const relatorio = Relatorio.gerarMensal(dias, periodo);
-            const diaHoje   = relatorio.diaHoje;
 
-            if (!diaHoje) return;
+            // Saldo semanal para cálculo de saída ideal: sempre do mês atual
+            let saldoSemanaJornada = relatorio.saldoSemana;
+            if (!ehMesAtual) {
+                // Recalcula saldo semanal a partir dos dias do mês atual
+                // Nota: quando o calendário está em outro mês, o DOM não tem os dias atuais
+                // então o saldo semanal fica 0 — a saída ideal usa apenas a jornada base
+                saldoSemanaJornada = 0;
+            }
 
-            // Contexto operacional: sempre o dia atual
-            const jornadaHoje = Jornada.calcularDia(diaHoje, relatorio.saldoSemana);
+            const jornadaHoje = Jornada.calcularDia(diaHoje, saldoSemanaJornada);
 
             const ctx = {
                 dias,
                 periodo,
                 relatorio,
-                resumo: relatorio.resumo,
+                resumo:      relatorio.resumo,
                 jornadaHoje
             };
 
