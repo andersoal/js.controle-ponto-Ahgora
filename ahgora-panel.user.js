@@ -32,6 +32,7 @@
         INTERVALO_MINIMO:   30,
         INTERVALO_MAXIMO:   3 * 60,
         DESCANSO_MINIMO:    11 * 60,
+        TOLERANCIA:         10,        // minutos — saldo dentro desse intervalo é zerado
         UPDATE_INTERVAL:    1 * 1000,
         AUTO_REFRESH_MIN:   15,
         VERSAO:             '2.0.0',
@@ -471,28 +472,37 @@
                     const turno2Min = (b[2] && b[3]) ? Hora.toMin(b[3]) - Hora.toMin(b[2]) : null;
                     const intervMin = (b[1] && b[2]) ? Hora.toMin(b[2]) - Hora.toMin(b[1]) : null;
 
+                    // Tolerância: saldo dentro do intervalo [-TOLERANCIA, +TOLERANCIA] é zerado
+                    const saldoBruto    = d.isBusinessDay ? d.saldo : 0;
+                    const emTolerancia  = d.isBusinessDay
+                        && d.batidas.length > 0
+                        && Math.abs(saldoBruto) <= CONFIG.TOLERANCIA;
+                    const saldoEfetivo  = emTolerancia ? 0 : saldoBruto;
+
                     if (d.isBusinessDay) {
-                        saldoMesAcum += d.saldo;
-                        saldoSemAcum += d.saldo;
+                        saldoMesAcum += saldoEfetivo;
+                        saldoSemAcum += saldoEfetivo;
                     }
 
                     return {
-                        data:         d.data,
-                        diaSemana:    d.diaSemana,
+                        data:          d.data,
+                        diaSemana:     d.diaSemana,
                         semana,
                         isBusinessDay: d.isBusinessDay,
-                        isHoliday:    d.isHoliday,
-                        isWeekend:    d.isWeekend,
-                        isToday:      d.isToday,
-                        estado:       Jornada.resolverEstado(b).codigo,
-                        batidas:      [...b],
-                        turno1:       turno1Min,
-                        turno2:       turno2Min,
-                        intervalo:    intervMin,
-                        trabalhado:   d.trabalhado,
-                        saldoDia:     d.isBusinessDay ? d.saldo : 0,
-                        saldoSemana:  saldoSemAcum,
-                        saldoMes:     saldoMesAcum
+                        isHoliday:     d.isHoliday,
+                        isWeekend:     d.isWeekend,
+                        isToday:       d.isToday,
+                        estado:        Jornada.resolverEstado(b).codigo,
+                        batidas:       [...b],
+                        turno1:        turno1Min,
+                        turno2:        turno2Min,
+                        intervalo:     intervMin,
+                        trabalhado:    d.trabalhado,
+                        saldoDia:      saldoBruto,      // saldo real sem tolerância (para exibição)
+                        saldoEfetivo,                   // saldo com tolerância aplicada (para totais)
+                        emTolerancia,                   // flag para highlight no modal
+                        saldoSemana:   saldoSemAcum,
+                        saldoMes:      saldoMesAcum
                     };
                 });
         },
@@ -507,7 +517,8 @@
                 semana,
                 itens,
                 totalTrabalhado: itens.reduce((a, b) => a + b.trabalhado, 0),
-                totalSaldo:      itens.filter(x => x.isBusinessDay).reduce((a, b) => a + b.saldoDia, 0)
+                // totais usam saldoEfetivo — tolerância já aplicada
+                totalSaldo: itens.filter(x => x.isBusinessDay).reduce((a, b) => a + b.saldoEfetivo, 0)
             }));
         },
 
@@ -515,14 +526,14 @@
             const comBatidas = registros.filter(x => x.batidas.length > 0);
             const uteis      = registros.filter(x => x.isBusinessDay);
             const fds        = registros.filter(x => x.isWeekend && x.batidas.length > 0);
+            // totalMes e saldoMes usam saldoEfetivo
             const totalMes   = registros.filter(x => x.isBusinessDay).reduce((a, b) => a + b.trabalhado, 0);
-            const saldoMes   = uteis.reduce((a, b) => a + b.saldoDia, 0);
+            const saldoMes   = uteis.reduce((a, b) => a + b.saldoEfetivo, 0);
             const media      = comBatidas.length > 0 ? totalMes / comBatidas.length : 0;
             const trabalhos  = comBatidas.map(x => x.trabalhado);
             const maior      = trabalhos.length ? Math.max(...trabalhos) : 0;
             const menor      = trabalhos.length ? Math.min(...trabalhos) : 0;
-            // periodo vem do argumento — pode ser mês diferente do atual
-            const p = periodo || DataHelper.getPeriodo();
+            const p          = periodo || DataHelper.getPeriodo();
 
             return {
                 periodo:         p,
@@ -973,10 +984,13 @@
                     <h2 style="margin:0;">📊 Detalhamento — ${resumo.periodo.descricao}</h2>
                     <button id="ahg-close-details">Fechar</button>
                 </div>
-                <p style="color:#7880aa;font-size:12px;margin:0 0 16px;">
+                <p style="color:#7880aa;font-size:12px;margin:0 0 8px;">
                     Realizado: <strong>${Hora.fmtMin(resumo.totalMes)}</strong> &nbsp;|&nbsp;
                     Saldo: <strong>${Hora.fmtMin(resumo.saldoMes)}</strong> &nbsp;|&nbsp;
                     Dias: <strong>${resumo.diasRegistrados}</strong>
+                </p>
+                <p style="color:#555880;font-size:11px;margin:0 0 16px;">
+                    ⚪ Tolerância de ±${CONFIG.TOLERANCIA}min — saldo dentro desse intervalo não é contabilizado
                 </p>
             `;
 
@@ -996,15 +1010,32 @@
                 `;
 
                 sem.itens.forEach(r => {
-                    const corSaldo = r.saldoDia >= 0 ? '#3ddc84' : '#ff6b6b';
-                    html += `
-                        <tr>
-                            <td style="padding:4px;">${DataHelper.DIAS_SEMANA_CURTO[r.data.getDay()]}</td>
-                            <td style="padding:4px;">${DataHelper.fmtData(r.data)}</td>
-                            <td style="text-align:right;padding:4px;">${r.batidas.length > 0 ? Hora.fmtMin(r.trabalhado) : '—'}</td>
-                            <td style="text-align:right;padding:4px;color:${corSaldo};">${r.isBusinessDay && r.batidas.length > 0 ? Hora.fmtMin(r.saldoDia) : '—'}</td>
-                        </tr>
-                    `;
+                    if (r.emTolerancia) {
+                        // Linha com tolerância: cor neutra, tooltip explicativo
+                        const minutos = Math.abs(r.saldoDia);
+                        const sentido = r.saldoDia >= 0 ? `+${Hora.fmtMin(r.saldoDia)}` : Hora.fmtMin(r.saldoDia);
+                        html += `
+                            <tr title="Tolerância: ${sentido} (${minutos}min dentro do limite de ${CONFIG.TOLERANCIA}min — não contabilizado)"
+                                style="opacity:0.6;cursor:help;">
+                                <td style="padding:4px;">${DataHelper.DIAS_SEMANA_CURTO[r.data.getDay()]}</td>
+                                <td style="padding:4px;">${DataHelper.fmtData(r.data)}</td>
+                                <td style="text-align:right;padding:4px;">${Hora.fmtMin(r.trabalhado)}</td>
+                                <td style="text-align:right;padding:4px;color:#555880;">
+                                    ${sentido} <span style="font-size:10px;">⚪</span>
+                                </td>
+                            </tr>
+                        `;
+                    } else {
+                        const corSaldo = r.saldoDia >= 0 ? '#3ddc84' : '#ff6b6b';
+                        html += `
+                            <tr>
+                                <td style="padding:4px;">${DataHelper.DIAS_SEMANA_CURTO[r.data.getDay()]}</td>
+                                <td style="padding:4px;">${DataHelper.fmtData(r.data)}</td>
+                                <td style="text-align:right;padding:4px;">${r.batidas.length > 0 ? Hora.fmtMin(r.trabalhado) : '—'}</td>
+                                <td style="text-align:right;padding:4px;color:${corSaldo};">${r.isBusinessDay && r.batidas.length > 0 ? Hora.fmtMin(r.saldoDia) : '—'}</td>
+                            </tr>
+                        `;
+                    }
                 });
 
                 html += `
