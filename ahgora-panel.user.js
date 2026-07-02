@@ -172,36 +172,29 @@
 
         // Lê o mês/ano visível no cabeçalho do calendário da Ahgora
         getPeriodoVisivel() {
-            // 1. Seletor mais específico: botão "Junho/2026" dentro da toolbar do espelho
-            //    HTML: .layout.espelho > ... > .v-menu.v-menu--inline .v-btn__content
-            const elEspelhoMenu = document.querySelector(
-                '.espelho .v-menu--inline .v-btn__content, ' +
-                '.layout.espelho .v-menu--inline .v-btn__content'
+            // Seletor preciso: botão "Abril/2026" na toolbar do espelho.
+            // Exclui .v-menu.escala (menu de escala no painel lateral) e
+            // .v-menu__content (dropdown aberto) usando :not().
+            // O botão correto fica em: .layout.espelho > .card > .layout.row > .v-menu.v-menu--inline
+            const elBotao = document.querySelector(
+                '.layout.espelho > .card .v-menu.v-menu--inline:not(.escala) .v-menu__activator .v-btn__content'
             );
-            if (elEspelhoMenu) {
-                // firstChild pega só o texto, ignorando o <i> do ícone
-                const texto = elEspelhoMenu.firstChild?.textContent?.trim()
-                    || elEspelhoMenu.textContent.replace(/keyboard_arrow_down/g, '').trim();
+            if (elBotao) {
+                // firstChild = nó de texto "Abril/2026", ignora o <i>keyboard_arrow_down</i>
+                const texto = elBotao.firstChild?.nodeType === Node.TEXT_NODE
+                    ? elBotao.firstChild.textContent.trim()
+                    : elBotao.textContent.replace(/keyboard_arrow_down/gi, '').trim();
                 const resultado = this._parsePeriodoTexto(texto);
                 if (resultado) return resultado;
             }
 
-            // 2. Painel lateral do resumo do dia: contém "JUNHO 2026" como texto puro
-            //    HTML: .espelho-resumo-dia ... > "JUNHO 2026"
-            const elResumo = document.querySelector('.espelho-resumo-dia .layout.row.fill-height .layout.column');
+            // Fallback: painel lateral .espelho-resumo-dia contém "ABRIL 2026" como texto puro
+            const elResumo = document.querySelector(
+                '.espelho-resumo-dia .layout.ma-2.align-center.justify-center.column'
+            );
             if (elResumo) {
                 const resultado = this._parsePeriodoTexto(elResumo.textContent.trim());
                 if (resultado) return resultado;
-            }
-
-            // 3. Qualquer .v-menu__activator que contenha ano de 4 dígitos
-            const todosMenus = [...document.querySelectorAll('.v-menu__activator .v-btn__content')];
-            for (const el of todosMenus) {
-                const texto = el.textContent.replace(/keyboard_arrow_down/g, '').trim();
-                if (/\d{4}/.test(texto)) {
-                    const resultado = this._parsePeriodoTexto(texto);
-                    if (resultado) return resultado;
-                }
             }
 
             // Último fallback: mês atual
@@ -863,13 +856,25 @@
                 STATE.menuRelatorios = abrindo;
 
                 if (abrindo) {
-                    // Ao abrir: recalcula com o período atual do calendário e re-renderiza
-                    render();
-                } else {
-                    // Ao fechar: apenas recolhe sem re-renderizar
+                    // Lê o período diretamente do DOM neste instante — sem chamar render()
+                    const periodoAtual = DataHelper.getPeriodoVisivel();
+                    const periodoObj   = DataHelper.getPeriodoObj(periodoAtual.ano, periodoAtual.mes);
+
+                    // Atualiza o label do período dentro do menu sem reconstruir o painel
+                    const labelEl = document.querySelector('#ahg-relatorios-body .a-lbl');
+                    if (labelEl) labelEl.textContent = `📅 Período: ${periodoObj.descricao}`;
+
                     const body   = document.getElementById('ahg-relatorios-body');
                     const toggle = document.getElementById('ahg-relatorios-toggle');
-                    if (body) body.style.display = 'none';
+                    if (body)   body.style.display = 'flex';
+                    if (toggle) {
+                        const lbl = toggle.querySelector('.a-lbl');
+                        if (lbl) lbl.textContent = `▼ 📁 Relatórios`;
+                    }
+                } else {
+                    const body   = document.getElementById('ahg-relatorios-body');
+                    const toggle = document.getElementById('ahg-relatorios-toggle');
+                    if (body)   body.style.display = 'none';
                     if (toggle) {
                         const lbl = toggle.querySelector('.a-lbl');
                         if (lbl) lbl.textContent = '▶ 📁 Relatórios';
@@ -879,11 +884,21 @@
             });
 
             document.getElementById('ahg-open-details-menu')?.addEventListener('click', () => {
-                Modal.abrir(ctx.relatorio);
+                // Lê o período do DOM no momento do clique
+                const pv  = DataHelper.getPeriodoVisivel();
+                const po  = DataHelper.getPeriodoObj(pv.ano, pv.mes);
+                const dias = DOM.extrairDias(pv);
+                const rel  = Relatorio.gerarMensal(dias, po);
+                Modal.abrir(rel);
             });
 
             document.getElementById('ahg-export-csv')?.addEventListener('click', () => {
-                Exportador.csv(ctx.relatorio);
+                // Lê o período do DOM no momento do clique
+                const pv  = DataHelper.getPeriodoVisivel();
+                const po  = DataHelper.getPeriodoObj(pv.ano, pv.mes);
+                const dias = DOM.extrairDias(pv);
+                const rel  = Relatorio.gerarMensal(dias, po);
+                Exportador.csv(rel);
             });
 
             document.getElementById('ahg-test-notif')?.addEventListener('click', () => {
