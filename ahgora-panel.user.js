@@ -3999,72 +3999,25 @@
         };
     }
 
-    function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
+    // Linha do tempo exibida no histórico: dias anteriores + hoje (mirror/local).
+    function buildHistoryTimelineEntries(effectiveHistory, displayPunches, startMs, endMs) {
 
-        const reconciled = reconcileTodayLocalHistoryWithMirror(
-            history,
-            mirrorPunches,
-            startMs,
-            endMs
-        );
+        const todayDateLabel = new Date(startMs).toLocaleDateString('pt-BR');
 
-        const effectiveHistory = reconciled.history;
+        const todayEntries = displayPunches.map(entry => ({
+            source: entry.source,
+            time: entry.time,
+            timestamp: startMs + ((toMin(entry.time) || 0) * MS_PER_MINUTE),
+            dateLabel: todayDateLabel
+        }));
 
-        const todayLocalHistory = effectiveHistory
-            .filter(p =>
-                p.timestamp &&
-                p.timestamp >= startMs &&
-                p.timestamp < endMs
-            );
-
-        const todayLocalPunches = todayLocalHistory
-            .map(p => normalizePunchTime(p.time))
-            .filter(Boolean);
-
-        const mirrorSet = new Set(mirrorPunches);
-        const localOnlyPunches = todayLocalPunches
-            .filter(time => !mirrorSet.has(time));
-
-        const displayPunches = [
-            ...mirrorPunches.map(time => ({
-                time,
-                source: 'mirror'
-            })),
-            ...localOnlyPunches.map(time => ({
-                time,
-                source: 'local'
-            }))
-        ].sort((a, b) => toMin(a.time) - toMin(b.time));
-
-        const combinedPunches = displayPunches.map(p => p.time);
-        const combinedLastPunch = combinedPunches.length
-            ? combinedPunches[combinedPunches.length - 1]
-            : null;
-
-        const localPendingSet = new Set(localOnlyPunches);
-        const pendingLocalHistoryEntries = todayLocalHistory
-            .filter(entry => {
-                const normalized = normalizePunchTime(entry.time);
-                return normalized && localPendingSet.has(normalized);
-            });
-
-        const todayDate = new Date(startMs);
-        const todayDateLabel = todayDate.toLocaleDateString('pt-BR');
-
-        const todayTimelineEntries = displayPunches
-            .map(entry => ({
-                source: entry.source,
-                time: entry.time,
-                timestamp: startMs + ((toMin(entry.time) || 0) * MS_PER_MINUTE),
-                dateLabel: todayDateLabel
-            }));
-
-        const previousTimelineEntries = effectiveHistory
+        const previousEntries = effectiveHistory
             .filter(entry => {
                 const ts = Number(entry?.timestamp);
                 return Number.isFinite(ts) && (ts < startMs || ts >= endMs);
             })
             .map(entry => {
+
                 const normalized = normalizePunchTime(entry.time);
 
                 if (!normalized) {
@@ -4082,18 +4035,47 @@
             })
             .filter(Boolean);
 
-        const historyTimelineEntries = [
-            ...previousTimelineEntries,
-            ...todayTimelineEntries
-        ].sort((a, b) => a.timestamp - b.timestamp);
+        return [...previousEntries, ...todayEntries].sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    // Combina batidas do mirror com as locais de hoje ainda não sincronizadas.
+    function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
+
+        const reconciled = reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, startMs, endMs);
+        const effectiveHistory = reconciled.history;
+
+        const todayLocalHistory = effectiveHistory.filter(p =>
+            p.timestamp &&
+            p.timestamp >= startMs &&
+            p.timestamp < endMs
+        );
+
+        const mirrorSet = new Set(mirrorPunches);
+        const localOnlyPunches = todayLocalHistory
+            .map(p => normalizePunchTime(p.time))
+            .filter(Boolean)
+            .filter(time => !mirrorSet.has(time));
+
+        const displayPunches = [
+            ...mirrorPunches.map(time => ({ time, source: 'mirror' })),
+            ...localOnlyPunches.map(time => ({ time, source: 'local' }))
+        ].sort((a, b) => toMin(a.time) - toMin(b.time));
+
+        const combinedPunches = displayPunches.map(p => p.time);
+
+        const localPendingSet = new Set(localOnlyPunches);
+        const pendingLocalHistoryEntries = todayLocalHistory.filter(entry => {
+            const normalized = normalizePunchTime(entry.time);
+            return normalized && localPendingSet.has(normalized);
+        });
 
         return {
             reconciled,
             effectiveHistory,
-            historyTimelineEntries,
+            historyTimelineEntries: buildHistoryTimelineEntries(effectiveHistory, displayPunches, startMs, endMs),
             localOnlyPunches,
             combinedPunches,
-            combinedLastPunch,
+            combinedLastPunch: combinedPunches.length ? combinedPunches[combinedPunches.length - 1] : null,
             pendingLocalHistoryEntries
         };
     }
@@ -4128,66 +4110,145 @@
 
         applyPrivacyState();
 
+        const container = ensureLoggerContainer();
+        const vm = computeLoggerViewModel();
+        const totals = computeLoggerTotals(vm);
+        const autoGcalMaxMinusLink = buildAutoGcalMaxMinusLink(vm.guidance, vm.alarmConfig);
+
+        container.innerHTML = buildLoggerHtml(vm, totals, autoGcalMaxMinusLink);
+
+        bindLoggerEvents(vm, autoGcalMaxMinusLink);
+        maybeAutoOpenQuickCalendar(vm, autoGcalMaxMinusLink);
+    }
+
+    const LOGGER_CONTAINER_STYLE = `
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: #0f0f1e;
+            color: #dde;
+            padding: 14px;
+            border-radius: 12px;
+            border-top: 4px solid #4a3faf;
+            box-shadow: 0 10px 30px rgba(0,0,0,.6);
+            font-family: 'Segoe UI', sans-serif;
+            z-index: 99999;
+            min-width: 280px;
+            max-width: 360px;
+            border: 1px solid rgba(255,255,255,.06);
+        `;
+
+    function ensureLoggerContainer() {
+
         let container = document.getElementById('ahg-punch-log');
 
         if (!container) {
-
             container = document.createElement('div');
             container.id = 'ahg-punch-log';
             document.body.appendChild(container);
         }
 
+        container.style = LOGGER_CONTAINER_STYLE;
+
+        return container;
+    }
+
+    // Estado consolidado do logger: limites do dia, contexto do mirror,
+    // linha do tempo local+mirror, orientação de próxima batida e config.
+    function computeLoggerViewModel() {
+
         const sharedTruth = readSharedTruth();
-
-        const { todayKey, startMs, endMs } = getTodayBounds();
-
-        const {
-            sharedTodayKey,
-            mirrorTodayKey,
-            mirrorPunches,
-            hasMirrorData,
-            hasSharedStaleCache,
-            hasMirrorStaleCache
-        } = getMirrorTodayContext(sharedTruth, todayKey);
+        const bounds = getTodayBounds();
+        const mirrorContext = getMirrorTodayContext(sharedTruth, bounds.todayKey);
 
         const saldoSemanaAnt = Number(
             sharedTruth.weekBalance ?? gmGetValue(STORAGE_KEYS.WEEK_BALANCE_CACHE, '0')
         );
 
-        const history = readPunchHistory();
-
-        const {
-            reconciled,
-            effectiveHistory,
-            historyTimelineEntries,
-            localOnlyPunches,
-            combinedPunches,
-            combinedLastPunch,
-            pendingLocalHistoryEntries
-        } = buildLoggerPunchTimeline(
-            history,
-            mirrorPunches,
-            startMs,
-            endMs
+        const timeline = buildLoggerPunchTimeline(
+            readPunchHistory(),
+            mirrorContext.mirrorPunches,
+            bounds.startMs,
+            bounds.endMs
         );
 
-        if (reconciled.removedCount > 0) {
-            gmSetValue(
-                STORAGE_KEYS.PUNCH_HISTORY,
-                JSON.stringify(effectiveHistory)
-            );
+        if (timeline.reconciled.removedCount > 0) {
+            writePunchHistory(timeline.effectiveHistory);
         }
 
-        const lastPunch = pendingLocalHistoryEntries[pendingLocalHistoryEntries.length - 1] || {
-            time: '--:--',
-            date: '--/--/--'
+        return {
+            sharedTruth,
+            ...bounds,
+            ...mirrorContext,
+            ...timeline,
+            saldoSemanaAnt,
+            guidance: buildPunchGuidance(timeline.combinedPunches, saldoSemanaAnt),
+            loggerPunchHealth: getPunchCountHealth(timeline.combinedPunches.length, { isToday: true }),
+            alarmConfig: readLoggerAlarmConfig()
         };
+    }
 
-        const guidance = buildPunchGuidance(combinedPunches, saldoSemanaAnt);
-        const loggerPunchHealth = getPunchCountHealth(combinedPunches.length, { isToday: true });
-        const alarmConfig = readLoggerAlarmConfig();
+    // "Faltam X" / "Excedente X" / "Meta diária concluída" para a jornada de hoje.
+    function computeJornadaDiaStatus(workedToday) {
 
-        const buildQuickCalendarLinks = (title, startMinute, endMinute = null, userPath = null) => {
+        if (workedToday === null) {
+            return { label: '--:--', tone: 'neu', detail: 'Sem dados para prever jornada.' };
+        }
+
+        const restante = CONFIG.CARGA_DIARIA - workedToday;
+
+        if (restante > 0) {
+            return {
+                label: `Faltam ${renderMinutes(restante)}`,
+                tone: 'warn',
+                detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)} · trabalhado: ${renderMinutes(workedToday)}`
+            };
+        }
+
+        if (restante < 0) {
+            return {
+                label: `Excedente ${renderMinutes(Math.abs(restante))}`,
+                tone: 'pos',
+                detail: `Meta diária superada · trabalhado: ${renderMinutes(workedToday)}`
+            };
+        }
+
+        return {
+            label: 'Meta diária concluída',
+            tone: 'pos',
+            detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)}`
+        };
+    }
+
+    // Totais exibidos no logger: prioriza o mirror sincronizado, senão o local.
+    function computeLoggerTotals(vm) {
+
+        const { sharedTruth, hasMirrorData, combinedPunches } = vm;
+
+        const workedToday = combinedPunches.length
+            ? calcularTrabalhado(combinedPunches)
+            : (hasMirrorData && typeof sharedTruth.workedToday === 'number'
+                ? sharedTruth.workedToday
+                : null);
+
+        const weekWorked = hasMirrorData && typeof sharedTruth.weekWorked === 'number'
+            ? sharedTruth.weekWorked
+            : (combinedPunches.length ? calcularTrabalhado(combinedPunches) : null);
+
+        const weekBalance = hasMirrorData && typeof sharedTruth.weekBalance === 'number'
+            ? sharedTruth.weekBalance
+            : (weekWorked === null ? null : weekWorked - CONFIG.CARGA_DIARIA);
+
+        return {
+            workedToday,
+            dayBalance: workedToday === null ? null : workedToday - CONFIG.CARGA_DIARIA,
+            weekWorked,
+            weekBalance,
+            jornadaDiaStatus: computeJornadaDiaStatus(workedToday)
+        };
+    }
+
+    function buildQuickCalendarLinks(title, startMinute, endMinute = null, userPath = null) {
 
             if (startMinute === null || startMinute === undefined) {
                 return null;
@@ -4208,9 +4269,10 @@
                     endMinute
                 })
             };
-        };
+    }
 
-        const buildAutoGcalMaxMinusLink = () => {
+    // Evento rápido "horário máximo da fase - offset" para Google/Outlook.
+    function buildAutoGcalMaxMinusLink(guidance, alarmConfig) {
 
             const leadMinutes = alarmConfig.quickGcalOffsetMinutes;
             let maxMinute = null;
@@ -4269,9 +4331,9 @@
                 maxLabel,
                 stage: guidance.stage
             };
-        };
+    }
 
-        const canAutoOpenQuickGcal = autoLink => {
+    function canAutoOpenQuickGcal(autoLink, alarmConfig) {
 
             if (!autoLink || !autoLink.gcal) {
                 return false;
@@ -4296,9 +4358,9 @@
             }
 
             return autoLink.stage === desiredStage;
-        };
+    }
 
-        const timeWithCalendarEmojis = (time, gcalUrl, outlookUrl, tone = 'neu') => {
+    function timeWithCalendarEmojis(time, gcalUrl, outlookUrl, tone = 'neu') {
 
             if (!time) {
                 return '';
@@ -4315,9 +4377,9 @@
                 : '';
 
             return `<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;"><span style="font-weight:700;color:${color};">${time}</span>${links}</span>`;
-        };
+    }
 
-        const forecastRowRange = (label, time1, gcalUrl1, outlookUrl1, time2, gcalUrl2, outlookUrl2, tone = 'neu') => {
+    function forecastRowRange(label, time1, gcalUrl1, outlookUrl1, time2, gcalUrl2, outlookUrl2, tone = 'neu') {
 
             if (!time1 || !time2) {
                 return '';
@@ -4330,9 +4392,9 @@
                 <span style="opacity:.72;">${label}</span>
                 <span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;white-space:nowrap;">${val1}<span style="opacity:.7;">→</span>${val2}</span>
             </div>`;
-        };
+    }
 
-        const forecastRow = (label, value, tone = 'neu', calendarLinks = null) => {
+    function forecastRow(label, value, tone = 'neu', calendarLinks = null) {
 
             if (!value) {
                 return '';
@@ -4355,80 +4417,93 @@
                     ${iconButtons}
                 </span>
             </div>`;
-        };
+    }
 
-        const sourceLabel = hasMirrorData
-            ? (localOnlyPunches.length > 0
-                ? 'Mirror sincronizado com pendências locais'
-                : 'Mirror sincronizado')
-            : 'Usando local (mirror pendente)';
+    // Linha "rótulo: horário [📅][📧]" com o evento pronto nos dois provedores.
+    function buildCalendarActionRow({ label, minute, tone, title, details, alarmConfig }) {
 
-        const workedToday = combinedPunches.length
-            ? calcularTrabalhado(combinedPunches)
-            : (hasMirrorData && typeof sharedTruth.workedToday === 'number'
-                ? sharedTruth.workedToday
-                : null);
+        const rgb = tone === 'warn' ? '255,165,0' : '61,220,132';
+        const boldColor = tone === 'warn' ? '#ffd08a' : '#c8ffe2';
+        const btnStyle = `border:1px solid rgba(${rgb},.38); background:rgba(${rgb},.12); color:${rgb === '61,220,132' ? '#c8ffe2' : '#ffd08a'}; border-radius:5px; padding:4px 6px; text-decoration:none; font-size:13px; transition:.15s;`;
 
-        const jornadaDiaDiff = workedToday === null
-            ? null
-            : CONFIG.CARGA_DIARIA - workedToday;
+        const gcalUrl = buildGoogleCalendarUrl({
+            title,
+            details,
+            startMinute: minute,
+            endMinute: minute + CONFIG.GCAL_EVENT_DURATION_MIN,
+            userPath: alarmConfig.gcalUserPath
+        });
 
-        const jornadaDiaStatus = jornadaDiaDiff === null
-            ? { label: '--:--', tone: 'neu', detail: 'Sem dados para prever jornada.' }
-            : jornadaDiaDiff > 0
-                ? {
-                    label: `Faltam ${renderMinutes(jornadaDiaDiff)}`,
+        const outlookUrl = buildOutlookCalendarUrl({
+            title,
+            details,
+            startMinute: minute,
+            endMinute: minute + CONFIG.GCAL_EVENT_DURATION_MIN
+        });
+
+        const calendarButton = (url, icon) =>
+            `<a href="${url}" target="_blank" rel="noopener noreferrer" style="${btnStyle}" onmouseover="this.style.background='rgba(${rgb},.18)'" onmouseout="this.style.background='rgba(${rgb},.12)'">${icon}</a>`;
+
+        return `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">${label}: <b style=\"color:${boldColor};\">${renderClock(minute)}</b></span><div style="display:flex; gap:4px;">${calendarButton(gcalUrl, '📅')}${calendarButton(outlookUrl, '📧')}</div></div>`;
+    }
+
+    // Atalhos de calendário por fase (antes três blocos quase idênticos).
+    function buildStageActionRows(guidance, alarmConfig) {
+
+        const exitRows = () => [
+            buildCalendarActionRow({
+                label: 'Saída 8h',
+                minute: guidance.day8WithIntervalMin,
+                tone: 'pos',
+                title: 'Saída 8h + intervalo',
+                details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
+                alarmConfig
+            }),
+            buildCalendarActionRow({
+                label: 'Saída 10h',
+                minute: guidance.day10WithIntervalMin,
+                tone: 'warn',
+                title: 'Saída 10h + intervalo',
+                details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
+                alarmConfig
+            })
+        ];
+
+        if (guidance.stage === 'interval' && guidance.firstExitMin !== null && guidance.firstExitMax !== null) {
+            return exitRows();
+        }
+
+        if (guidance.stage === 'return' && guidance.intervalMin !== null && guidance.intervalMax !== null) {
+            return [
+                buildCalendarActionRow({
+                    label: 'Retorno mín. +30m',
+                    minute: guidance.intervalMin,
+                    tone: 'pos',
+                    title: 'Retorno mínimo',
+                    details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
+                    alarmConfig
+                }),
+                buildCalendarActionRow({
+                    label: 'Retorno máx. +210m',
+                    minute: guidance.intervalMax,
                     tone: 'warn',
-                    detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)} · trabalhado: ${renderMinutes(workedToday)}`
-                }
-                : jornadaDiaDiff < 0
-                    ? {
-                        label: `Excedente ${renderMinutes(Math.abs(jornadaDiaDiff))}`,
-                        tone: 'pos',
-                        detail: `Meta diária superada · trabalhado: ${renderMinutes(workedToday)}`
-                    }
-                    : {
-                        label: 'Meta diária concluída',
-                        tone: 'pos',
-                        detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)}`
-                    };
+                    title: 'Retorno máximo',
+                    details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
+                    alarmConfig
+                })
+            ];
+        }
 
-        const dayBalance = workedToday === null
-            ? null
-            : workedToday - CONFIG.CARGA_DIARIA;
+        if (guidance.stage === 'exit' && guidance.day8WithIntervalMin !== null && guidance.day10WithIntervalMin !== null) {
+            return exitRows();
+        }
 
-        const weekWorked = hasMirrorData && typeof sharedTruth.weekWorked === 'number'
-            ? sharedTruth.weekWorked
-            : (combinedPunches.length ? calcularTrabalhado(combinedPunches) : null);
+        return [];
+    }
 
-        const weekBalance = hasMirrorData && typeof sharedTruth.weekBalance === 'number'
-            ? sharedTruth.weekBalance
-            : (weekWorked === null ? null : weekWorked - CONFIG.CARGA_DIARIA);
+    // Bloco "Próximos horários" com uma linha por previsão relevante da fase.
+    function buildForecastBlockHtml(guidance, alarmConfig) {
 
-        const mirrorSyncHint = hasMirrorData
-            ? `Mirror atualizado às ${new Date(sharedTruth.updatedAt || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-            : 'Abra o mirror para sincronizar totais oficiais.';
-
-        container.style = `
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            background: #0f0f1e;
-            color: #dde;
-            padding: 14px;
-            border-radius: 12px;
-            border-top: 4px solid #4a3faf;
-            box-shadow: 0 10px 30px rgba(0,0,0,.6);
-            font-family: 'Segoe UI', sans-serif;
-            z-index: 99999;
-            min-width: 280px;
-            max-width: 360px;
-            border: 1px solid rgba(255,255,255,.06);
-        `;
-
-        const recentHistoryEntries = historyTimelineEntries.slice(-CONFIG.LOGGER_HISTORY_SIZE);
-        const day8h = guidance.day8h !== null ? renderClock(guidance.day8h) : null;
-        const day10h = guidance.day10h !== null ? renderClock(guidance.day10h) : null;
         const intervalReturnMin = guidance.intervalMin !== null ? renderClock(guidance.intervalMin) : null;
         const intervalReturnMax = guidance.intervalMax !== null ? renderClock(guidance.intervalMax) : null;
         const day8WindowMin = guidance.day8WithIntervalMin !== null ? renderClock(guidance.day8WithIntervalMin) : null;
@@ -4441,45 +4516,6 @@
         const firstExitMinPause210 = guidance.firstExitMinPause210 !== null ? renderClock(guidance.firstExitMinPause210) : null;
         const firstExitMaxPause30 = guidance.firstExitMaxPause30 !== null ? renderClock(guidance.firstExitMaxPause30) : null;
         const firstExitMaxPause210 = guidance.firstExitMaxPause210 !== null ? renderClock(guidance.firstExitMaxPause210) : null;
-
-        const recentHistoryHtml = recentHistoryEntries.length
-            ? recentHistoryEntries
-                .slice()
-                .reverse()
-                .map(entry => {
-
-                    let sourceIcon = '🗂';
-                    let sourceLabel = 'histórico';
-
-                    if (entry.source === 'mirror') {
-                        sourceIcon = '🔄';
-                        sourceLabel = 'mirror';
-                    } else if (entry.source === 'local') {
-                        sourceIcon = '⏳';
-                        sourceLabel = 'local pendente';
-                    }
-
-                    const dateLabel = renderText(entry.dateLabel || '--/--/--');
-                    const timeLabel = renderText(entry.time || '--:--');
-                    const rawTime = normalizePunchTime(entry.time);
-                    const isEditableLocal = entry.source === 'local' && Boolean(rawTime);
-                    const editButton = isEditableLocal
-                        ? `<button class="ahg-history-edit" data-time="${escapeHtml(rawTime)}" title="Editar batida local" style="border:1px solid rgba(122,108,255,.35); background:rgba(122,108,255,.12); color:#d7e3ff; border-radius:5px; padding:1px 5px; font-size:11px; cursor:pointer; line-height:1;">✏</button>`
-                        : '';
-                    const minusFiveButton = isEditableLocal
-                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="-5" title="-5 min" style="border:1px solid rgba(255,165,0,.35); background:rgba(255,165,0,.12); color:#ffd08a; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">-5</button>`
-                        : '';
-                    const plusFiveButton = isEditableLocal
-                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="5" title="+5 min" style="border:1px solid rgba(61,220,132,.35); background:rgba(61,220,132,.12); color:#c8ffe2; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">+5</button>`
-                        : '';
-
-                    return `<div style="font-size:11px; display:flex; justify-content:space-between; margin-top:4px;">
-                        <span style="display:flex; align-items:center; gap:4px; opacity:.62;"><span>${dateLabel} · ${sourceIcon} ${sourceLabel}</span>${editButton}${minusFiveButton}${plusFiveButton}</span>
-                        <span style="font-weight:700; color:#ffd166; text-align:right; min-width:46px;">${timeLabel}</span>
-                    </div>`;
-                })
-                .join('')
-            : '<div style="font-size:10px; opacity:.4;">Aguardando primeira batida...</div>';
 
         const forecastBlock = [
             guidance.stage === 'interval' && firstExitMin ? forecastRow('Saída mín. (2h)', firstExitMin, 'pos', buildQuickCalendarLinks('Saída mínima (2h)', guidance.firstExitMin, null, alarmConfig.gcalUserPath)) : '',
@@ -4514,63 +4550,64 @@
             intervalReturnMax ? forecastRow('Retorno máx.', intervalReturnMax, 'warn', buildQuickCalendarLinks('Retorno máximo', guidance.intervalMax, null, alarmConfig.gcalUserPath)) : ''
         ].filter(Boolean).join('');
 
-        const forecastBlockHtml = forecastBlock
+        return forecastBlock
             ? `<div style="display:grid;gap:4px;">${forecastBlock}</div>`
             : '';
+    }
 
-        const syncBadge = hasMirrorData
-            ? '<span style="padding:2px 8px;border-radius:999px;background:rgba(61,220,132,.12);color:#9ef0bf;border:1px solid rgba(61,220,132,.28);">mirror ok</span>'
-            : '<span style="padding:2px 8px;border-radius:999px;background:rgba(255,165,0,.12);color:#ffd08a;border:1px solid rgba(255,165,0,.3);">sync pendente</span>';
+    function buildHistoryEntryRowHtml(entry) {
 
-        const mirrorCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:rgba(121,162,255,.14);color:#d7e3ff;border:1px solid rgba(121,162,255,.32);">mirror: ${mirrorPunches.length}</span>`;
-        const localPendingCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.12)' : 'rgba(61,220,132,.12)'};color:${localOnlyPunches.length > 0 ? '#ffd08a' : '#9ef0bf'};border:1px solid ${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.3)' : 'rgba(61,220,132,.28)'};">pendente local: ${localOnlyPunches.length}</span>`;
-        const alarmToggleIcon = alarmConfig.enabled ? '🔔' : '🔕';
-        const alarmToggleTitle = alarmConfig.enabled
-            ? `Alarmes ativos (${getLoggerAlarmModeLabel(alarmConfig.mode)})`
-            : 'Alarmes desativados - clique para ligar';
-        const alarmModeOptions = [
-            { value: '10h', label: '10h apenas' },
-            { value: 'interval', label: 'Intervalo' },
-            { value: 'complete', label: 'Completo' }
-        ].map(item => `<option value="${item.value}" ${item.value === alarmConfig.mode ? 'selected' : ''}>${item.label}</option>`).join('');
-        const alarmLeadOptions = CONFIG.LOGGER_ALARM_LEAD_OPTIONS
-            .map(min => `<option value="${min}" ${min === alarmConfig.leadMinutes ? 'selected' : ''}>${min} min</option>`)
-            .join('');
-        const alarmRepeatOptions = [
-            { value: 'once', label: '1x (padrão)' },
-            { value: 'triple', label: '3x' },
-            { value: 'loop', label: 'Contínuo curto' }
-        ].map(item => `<option value="${item.value}" ${item.value === alarmConfig.soundRepeat ? 'selected' : ''}>${item.label}</option>`).join('');
-        const alarmRepeatLabel = alarmConfig.soundRepeat === 'triple'
-            ? 'som 3x'
-            : alarmConfig.soundRepeat === 'loop'
-                ? 'som contínuo'
-                : 'som 1x';
-        const quickGcalOffsetOptions = CONFIG.QUICK_CALENDAR_OFFSET_OPTIONS
-            .map(min => `<option value="${min}" ${min === alarmConfig.quickGcalOffsetMinutes ? 'selected' : ''}>-${min} min</option>`)
-            .join('');
-        const quickGcalAutoOpenStageOptions = [
-            { value: 'off', label: 'Desligado' },
-            { value: 'interval', label: 'Intervalo' },
-            { value: 'return', label: 'Retorno' },
-            { value: 'exit', label: 'Saída' },
-            { value: 'any', label: 'Qualquer fase útil' }
-        ]
-            .map(item => `<option value="${item.value}" ${item.value === alarmConfig.quickGcalAutoOpenStage ? 'selected' : ''}>${item.label}</option>`)
-            .join('');
-        const quickCalendarProviderOptions = [
-            { value: 'google', label: 'Somente Google Calendar' },
-            { value: 'outlook', label: 'Somente Outlook' },
-            { value: 'both', label: 'Google + Outlook' }
-        ]
-            .map(item => `<option value="${item.value}" ${item.value === alarmConfig.quickCalendarProvider ? 'selected' : ''}>${item.label}</option>`)
-            .join('');
-        const alarmChannelsSummary = `${alarmConfig.channels.sound ? alarmRepeatLabel : 'som off'} · ${alarmConfig.channels.desktop ? 'desktop on' : 'desktop off'}`;
-        const quickGcalSummary = `botão ${alarmConfig.quickGcalEnabled ? 'on' : 'off'} · ${getQuickCalendarProviderLabel(alarmConfig.quickCalendarProvider)} · -${alarmConfig.quickGcalOffsetMinutes}m · auto ${alarmConfig.quickGcalAutoOpenEnabled ? 'on' : 'off'}`;
-        const alarmSummary = `${alarmConfig.enabled ? 'Ligado' : 'Desligado'} · ${getLoggerAlarmModeLabel(alarmConfig.mode)} · ${alarmConfig.leadMinutes} min antes · ${alarmChannelsSummary} · ${quickGcalSummary}`;
-        const alarmSettingsToggleLabel = _loggerAlarmSettingsExpanded ? 'Ocultar' : 'Configurar';
+                    let sourceIcon = '🗂';
+                    let sourceLabel = 'histórico';
 
-        const historyBlock = `
+                    if (entry.source === 'mirror') {
+                        sourceIcon = '🔄';
+                        sourceLabel = 'mirror';
+                    } else if (entry.source === 'local') {
+                        sourceIcon = '⏳';
+                        sourceLabel = 'local pendente';
+                    }
+
+                    const dateLabel = renderText(entry.dateLabel || '--/--/--');
+                    const timeLabel = renderText(entry.time || '--:--');
+                    const rawTime = normalizePunchTime(entry.time);
+                    const isEditableLocal = entry.source === 'local' && Boolean(rawTime);
+                    const editButton = isEditableLocal
+                        ? `<button class="ahg-history-edit" data-time="${escapeHtml(rawTime)}" title="Editar batida local" style="border:1px solid rgba(122,108,255,.35); background:rgba(122,108,255,.12); color:#d7e3ff; border-radius:5px; padding:1px 5px; font-size:11px; cursor:pointer; line-height:1;">✏</button>`
+                        : '';
+                    const minusFiveButton = isEditableLocal
+                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="-5" title="-5 min" style="border:1px solid rgba(255,165,0,.35); background:rgba(255,165,0,.12); color:#ffd08a; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">-5</button>`
+                        : '';
+                    const plusFiveButton = isEditableLocal
+                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="5" title="+5 min" style="border:1px solid rgba(61,220,132,.35); background:rgba(61,220,132,.12); color:#c8ffe2; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">+5</button>`
+                        : '';
+
+                    return `<div style="font-size:11px; display:flex; justify-content:space-between; margin-top:4px;">
+                        <span style="display:flex; align-items:center; gap:4px; opacity:.62;"><span>${dateLabel} · ${sourceIcon} ${sourceLabel}</span>${editButton}${minusFiveButton}${plusFiveButton}</span>
+                        <span style="font-weight:700; color:#ffd166; text-align:right; min-width:46px;">${timeLabel}</span>
+                    </div>`;
+    }
+
+    function buildRecentHistoryHtml(historyTimelineEntries) {
+
+        const recentHistoryEntries = historyTimelineEntries.slice(-CONFIG.LOGGER_HISTORY_SIZE);
+
+        if (!recentHistoryEntries.length) {
+            return '<div style="font-size:10px; opacity:.4;">Aguardando primeira batida...</div>';
+        }
+
+        return recentHistoryEntries
+            .slice()
+            .reverse()
+            .map(buildHistoryEntryRowHtml)
+            .join('');
+    }
+
+    function buildHistoryBlockHtml(historyTimelineEntries) {
+
+        const recentHistoryHtml = buildRecentHistoryHtml(historyTimelineEntries);
+
+        return `
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px;">
                 <div style="font-size:10px; opacity:.55;">Histórico recente (mirror + local)</div>
                 <button id="ahg-history-add" title="Adicionar batida local" style="border:1px solid rgba(61,220,132,.4); background:rgba(61,220,132,.14); color:#c8ffe2; border-radius:6px; padding:1px 7px; font-size:13px; cursor:pointer; line-height:1;">+</button>
@@ -4579,132 +4616,37 @@
                 ${recentHistoryHtml}
             </div>
         `;
+    }
 
-        const requestMirrorSyncButton = `<a id="ahg-request-mirror-sync" href="javascript:void(0)" style="display:block; border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.03); color:#cfd7ff; border-radius:7px; padding:6px 8px; cursor:pointer; text-decoration:none; text-align:center; font-weight:600; font-size:11px; letter-spacing:.2px;">↻ Sincronizar mirror</a>`;
+    const REQUEST_MIRROR_SYNC_BUTTON_HTML = `<a id="ahg-request-mirror-sync" href="javascript:void(0)" style="display:block; border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.03); color:#cfd7ff; border-radius:7px; padding:6px 8px; cursor:pointer; text-decoration:none; text-align:center; font-weight:600; font-size:11px; letter-spacing:.2px;">↻ Sincronizar mirror</a>`;
 
-        const buildActionButtons = () => {
+    function buildQuickCalendarButtonsHtml(autoGcalMaxMinusLink, alarmConfig) {
 
-            const btnSmall = (color) => `border:1px solid rgba(${color},.38); background:rgba(${color},.12); color:${color === '61,220,132' ? '#c8ffe2' : '#ffd08a'}; border-radius:5px; padding:4px 6px; text-decoration:none; font-size:13px; transition:.15s;`;
+        if (!alarmConfig.quickGcalEnabled || !autoGcalMaxMinusLink) {
+            return '';
+        }
 
-            if (guidance.stage === 'interval' && guidance.firstExitMin !== null && guidance.firstExitMax !== null) {
-
-                const url8hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url8hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                const url10hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url10hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
-                ];
-            }
-
-            if (guidance.stage === 'return' && guidance.intervalMin !== null && guidance.intervalMax !== null) {
-
-                const urlMinGcal = buildGoogleCalendarUrl({
-                    title: 'Retorno mínimo',
-                    details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
-                    startMinute: guidance.intervalMin,
-                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const urlMinOutlook = buildOutlookCalendarUrl({
-                    title: 'Retorno mínimo',
-                    details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
-                    startMinute: guidance.intervalMin,
-                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                const urlMaxGcal = buildGoogleCalendarUrl({
-                    title: 'Retorno máximo',
-                    details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
-                    startMinute: guidance.intervalMax,
-                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const urlMaxOutlook = buildOutlookCalendarUrl({
-                    title: 'Retorno máximo',
-                    details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
-                    startMinute: guidance.intervalMax,
-                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Retorno mín. +30m: <b style=\"color:#c8ffe2;\">${renderClock(guidance.intervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${urlMinGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${urlMinOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Retorno máx. +210m: <b style=\"color:#ffd08a;\">${renderClock(guidance.intervalMax)}</b></span><div style="display:flex; gap:4px;"><a href="${urlMaxGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${urlMaxOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
-                ];
-            }
-
-            if (guidance.stage === 'exit' && guidance.day8WithIntervalMin !== null && guidance.day10WithIntervalMin !== null) {
-
-                const url8hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url8hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                const url10hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url10hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
-                ];
-            }
-
-            return [];
-        };
-
-        const actionButtonsHtml = buildActionButtons().join('');
-        const autoGcalMaxMinusLink = buildAutoGcalMaxMinusLink();
         const quickProvider = alarmConfig.quickCalendarProvider;
         const showQuickGoogle = quickProvider === 'both' || quickProvider === 'google';
         const showQuickOutlook = quickProvider === 'both' || quickProvider === 'outlook';
-        const autoQuickCalendarButtonsHtml = (alarmConfig.quickGcalEnabled && autoGcalMaxMinusLink)
-            ? `<div style="display:grid;grid-template-columns:${showQuickGoogle && showQuickOutlook ? '1fr 1fr' : '1fr'};gap:6px;margin-top:6px;">${showQuickGoogle && autoGcalMaxMinusLink.gcal ? `<a id="ahg-gcal-max-minus" href="${autoGcalMaxMinusLink.gcal}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(61,220,132,.45); background:rgba(61,220,132,.14); color:#c8ffe2; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">⚡ Google -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}${showQuickOutlook && autoGcalMaxMinusLink.outlook ? `<a id="ahg-outlook-max-minus" href="${autoGcalMaxMinusLink.outlook}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.14); color:#d7e3ff; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">📧 Outlook -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}</div><div style="font-size:10px; color:#9fa7d6; opacity:.82; margin-top:4px; text-align:center;">Início: ${renderClock(autoGcalMaxMinusLink.startMinute)} · limite: ${renderClock(autoGcalMaxMinusLink.maxMinute)} · ${autoGcalMaxMinusLink.maxLabel}</div>`
-            : '';
+
+        return `<div style="display:grid;grid-template-columns:${showQuickGoogle && showQuickOutlook ? '1fr 1fr' : '1fr'};gap:6px;margin-top:6px;">${showQuickGoogle && autoGcalMaxMinusLink.gcal ? `<a id="ahg-gcal-max-minus" href="${autoGcalMaxMinusLink.gcal}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(61,220,132,.45); background:rgba(61,220,132,.14); color:#c8ffe2; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">⚡ Google -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}${showQuickOutlook && autoGcalMaxMinusLink.outlook ? `<a id="ahg-outlook-max-minus" href="${autoGcalMaxMinusLink.outlook}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.14); color:#d7e3ff; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">📧 Outlook -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}</div><div style="font-size:10px; color:#9fa7d6; opacity:.82; margin-top:4px; text-align:center;">Início: ${renderClock(autoGcalMaxMinusLink.startMinute)} · limite: ${renderClock(autoGcalMaxMinusLink.maxMinute)} · ${autoGcalMaxMinusLink.maxLabel}</div>`;
+    }
+
+    // Avisos operacionais (sync pendente, batidas inconsistentes, caches velhos).
+    function buildLoggerNotesHtml(vm) {
+
+        const {
+            hasMirrorData,
+            loggerPunchHealth,
+            localOnlyPunches,
+            reconciled,
+            hasSharedStaleCache,
+            sharedTodayKey,
+            hasMirrorStaleCache,
+            mirrorTodayKey,
+            todayKey
+        } = vm;
 
         const criticalNotes = [
             !hasMirrorData ? 'Mirror pendente: totais podem divergir.' : null,
@@ -4715,11 +4657,127 @@
             hasMirrorStaleCache ? `Cache do mirror de ${mirrorTodayKey} ignorado (hoje: ${todayKey}).` : null
         ].filter(Boolean);
 
-        const notesHtml = criticalNotes.length
+        return criticalNotes.length
             ? `<div class="a-row warn" style="background:rgba(255,165,0,.12); border-left-color:orange; padding:8px 8px; border-radius:7px; margin:0;"><span style="color:#ffd08a; font-size:10px; font-weight:700;">${criticalNotes.slice(0, 2).map(x => `<div style="margin:2px 0;">• ${x}</div>`).join('')}</span></div>`
             : '';
+    }
 
-        container.innerHTML = `
+    function buildLoggerBadgesHtml(vm) {
+
+        const { hasMirrorData, mirrorPunches, localOnlyPunches } = vm;
+
+        const syncBadge = hasMirrorData
+            ? '<span style="padding:2px 8px;border-radius:999px;background:rgba(61,220,132,.12);color:#9ef0bf;border:1px solid rgba(61,220,132,.28);">mirror ok</span>'
+            : '<span style="padding:2px 8px;border-radius:999px;background:rgba(255,165,0,.12);color:#ffd08a;border:1px solid rgba(255,165,0,.3);">sync pendente</span>';
+
+        const mirrorCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:rgba(121,162,255,.14);color:#d7e3ff;border:1px solid rgba(121,162,255,.32);">mirror: ${mirrorPunches.length}</span>`;
+        const localPendingCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.12)' : 'rgba(61,220,132,.12)'};color:${localOnlyPunches.length > 0 ? '#ffd08a' : '#9ef0bf'};border:1px solid ${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.3)' : 'rgba(61,220,132,.28)'};">pendente local: ${localOnlyPunches.length}</span>`;
+
+        return { syncBadge, mirrorCountBadge, localPendingCountBadge };
+    }
+
+    function buildSelectOptionsHtml(options, selectedValue) {
+
+        return options
+            .map(item => `<option value="${item.value}" ${item.value === selectedValue ? 'selected' : ''}>${item.label}</option>`)
+            .join('');
+    }
+
+    // Opções, resumo e rótulos da seção de alarmes/calendário rápido.
+    function buildAlarmSectionData(alarmConfig) {
+
+        const alarmRepeatLabel = alarmConfig.soundRepeat === 'triple'
+            ? 'som 3x'
+            : alarmConfig.soundRepeat === 'loop'
+                ? 'som contínuo'
+                : 'som 1x';
+
+        const alarmChannelsSummary = `${alarmConfig.channels.sound ? alarmRepeatLabel : 'som off'} · ${alarmConfig.channels.desktop ? 'desktop on' : 'desktop off'}`;
+        const quickGcalSummary = `botão ${alarmConfig.quickGcalEnabled ? 'on' : 'off'} · ${getQuickCalendarProviderLabel(alarmConfig.quickCalendarProvider)} · -${alarmConfig.quickGcalOffsetMinutes}m · auto ${alarmConfig.quickGcalAutoOpenEnabled ? 'on' : 'off'}`;
+
+        return {
+            alarmToggleIcon: alarmConfig.enabled ? '🔔' : '🔕',
+            alarmToggleTitle: alarmConfig.enabled
+                ? `Alarmes ativos (${getLoggerAlarmModeLabel(alarmConfig.mode)})`
+                : 'Alarmes desativados - clique para ligar',
+            alarmSummary: `${alarmConfig.enabled ? 'Ligado' : 'Desligado'} · ${getLoggerAlarmModeLabel(alarmConfig.mode)} · ${alarmConfig.leadMinutes} min antes · ${alarmChannelsSummary} · ${quickGcalSummary}`,
+            alarmSettingsToggleLabel: _loggerAlarmSettingsExpanded ? 'Ocultar' : 'Configurar',
+            alarmModeOptions: buildSelectOptionsHtml([
+                { value: '10h', label: '10h apenas' },
+                { value: 'interval', label: 'Intervalo' },
+                { value: 'complete', label: 'Completo' }
+            ], alarmConfig.mode),
+            alarmLeadOptions: buildSelectOptionsHtml(
+                CONFIG.LOGGER_ALARM_LEAD_OPTIONS.map(min => ({ value: min, label: `${min} min` })),
+                alarmConfig.leadMinutes
+            ),
+            alarmRepeatOptions: buildSelectOptionsHtml([
+                { value: 'once', label: '1x (padrão)' },
+                { value: 'triple', label: '3x' },
+                { value: 'loop', label: 'Contínuo curto' }
+            ], alarmConfig.soundRepeat),
+            quickGcalOffsetOptions: buildSelectOptionsHtml(
+                CONFIG.QUICK_CALENDAR_OFFSET_OPTIONS.map(min => ({ value: min, label: `-${min} min` })),
+                alarmConfig.quickGcalOffsetMinutes
+            ),
+            quickGcalAutoOpenStageOptions: buildSelectOptionsHtml([
+                { value: 'off', label: 'Desligado' },
+                { value: 'interval', label: 'Intervalo' },
+                { value: 'return', label: 'Retorno' },
+                { value: 'exit', label: 'Saída' },
+                { value: 'any', label: 'Qualquer fase útil' }
+            ], alarmConfig.quickGcalAutoOpenStage),
+            quickCalendarProviderOptions: buildSelectOptionsHtml([
+                { value: 'google', label: 'Somente Google Calendar' },
+                { value: 'outlook', label: 'Somente Outlook' },
+                { value: 'both', label: 'Google + Outlook' }
+            ], alarmConfig.quickCalendarProvider)
+        };
+    }
+
+    // Template principal do logger (todas as partes chegam pré-computadas).
+    function buildLoggerHtml(vm, totals, autoGcalMaxMinusLink) {
+
+        const { alarmConfig, guidance, combinedLastPunch, hasMirrorData, localOnlyPunches, sharedTruth } = vm;
+        const { jornadaDiaStatus, workedToday, dayBalance, weekWorked, weekBalance } = totals;
+
+        const sourceLabel = hasMirrorData
+            ? (localOnlyPunches.length > 0
+                ? 'Mirror sincronizado com pendências locais'
+                : 'Mirror sincronizado')
+            : 'Usando local (mirror pendente)';
+
+        const mirrorSyncHint = hasMirrorData
+            ? `Mirror atualizado às ${new Date(sharedTruth.updatedAt || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+            : 'Abra o mirror para sincronizar totais oficiais.';
+
+        const lastPunch = vm.pendingLocalHistoryEntries[vm.pendingLocalHistoryEntries.length - 1] || {
+            time: '--:--',
+            date: '--/--/--'
+        };
+
+        const { syncBadge, mirrorCountBadge, localPendingCountBadge } = buildLoggerBadgesHtml(vm);
+        const {
+            alarmToggleIcon,
+            alarmToggleTitle,
+            alarmSummary,
+            alarmSettingsToggleLabel,
+            alarmModeOptions,
+            alarmLeadOptions,
+            alarmRepeatOptions,
+            quickGcalOffsetOptions,
+            quickGcalAutoOpenStageOptions,
+            quickCalendarProviderOptions
+        } = buildAlarmSectionData(alarmConfig);
+
+        const actionButtonsHtml = buildStageActionRows(guidance, alarmConfig).join('');
+        const autoQuickCalendarButtonsHtml = buildQuickCalendarButtonsHtml(autoGcalMaxMinusLink, alarmConfig);
+        const notesHtml = buildLoggerNotesHtml(vm);
+        const forecastBlockHtml = buildForecastBlockHtml(guidance, alarmConfig);
+        const historyBlock = buildHistoryBlockHtml(vm.historyTimelineEntries);
+        const requestMirrorSyncButton = REQUEST_MIRROR_SYNC_BUTTON_HTML;
+
+        return `
             <div class="a-body" style="gap:6px; padding-top:10px;">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:10px; margin-bottom:4px;">
                     <span style="color:#7880aa; text-transform:uppercase; font-weight:700; letter-spacing:.5px;">${sourceLabel}</span>
@@ -4833,6 +4891,11 @@
                 </div>
             </div>
         `;
+    }
+
+    /* ---- Eventos do logger ---- */
+
+    function bindLoggerDetailsToggle() {
 
         document.getElementById('ahg-logger-details-toggle')
             ?.addEventListener('click', () => {
@@ -4844,17 +4907,19 @@
                 toggle.style.background = isOpen ? 'rgba(122,108,255,.08)' : 'rgba(122,108,255,.15)';
                 toggle.querySelector('span').textContent = isOpen ? '▶' : '▼';
             });
+    }
+
+    function bindLoggerSyncButton() {
 
         document.getElementById('ahg-request-mirror-sync')
             ?.addEventListener('click', () => {
 
                 showLoggerToast('Sincronizando com mirror...');
-                const opened = window.open(CONFIG.URL_REFRESH, '_blank', 'noopener,noreferrer');
-
-                if (opened) {
-                    opened.opener = null;
-                }
+                openInNewTab(CONFIG.URL_REFRESH);
             });
+    }
+
+    function bindQuickCalendarClickToasts(autoGcalMaxMinusLink, alarmConfig) {
 
         document.getElementById('ahg-gcal-max-minus')
             ?.addEventListener('click', () => {
@@ -4867,75 +4932,86 @@
 
                 showLoggerToast(`Abrindo Outlook com evento em máximo -${autoGcalMaxMinusLink?.leadMinutes || alarmConfig.quickGcalOffsetMinutes}m.`);
             });
+    }
 
-        if (canAutoOpenQuickGcal(autoGcalMaxMinusLink)) {
+    // Autoabertura por fase: pede confirmação e executa uma vez por detecção.
+    function maybeAutoOpenQuickCalendar(vm, autoGcalMaxMinusLink) {
 
-            const autoToken = `${todayKey}:${autoGcalMaxMinusLink.stage}:${alarmConfig.quickGcalAutoOpenStage}:${autoGcalMaxMinusLink.maxMinute}:${autoGcalMaxMinusLink.leadMinutes}`;
+        const { alarmConfig, todayKey } = vm;
 
-            if (!hasLoggerGcalAutoOpenToken(autoToken)) {
-
-                const stageLabel = getGuidanceStageLabel(autoGcalMaxMinusLink.stage);
-                const shouldOpen = window.confirm(
-                    `Fase detectada: ${stageLabel}.\n\nAbrir evento no Google Calendar para ${renderClock(autoGcalMaxMinusLink.startMinute)} (máximo -${autoGcalMaxMinusLink.leadMinutes}m)?`
-                );
-
-                if (shouldOpen) {
-                    const opened = window.open(autoGcalMaxMinusLink.gcal, '_blank', 'noopener,noreferrer');
-
-                    if (opened) {
-                        opened.opener = null;
-                    }
-
-                    markLoggerGcalAutoOpenToken(autoToken, 'accepted');
-                    showLoggerToast(`Evento aberto automaticamente para ${renderClock(autoGcalMaxMinusLink.startMinute)}.`);
-                } else {
-                    markLoggerGcalAutoOpenToken(autoToken, 'dismissed');
-                    showLoggerToast('Autoabertura cancelada nesta detecção.');
-                }
-            }
+        if (!canAutoOpenQuickGcal(autoGcalMaxMinusLink, alarmConfig)) {
+            return;
         }
 
-        const tryAddHistoryPunch = () => {
+        const autoToken = `${todayKey}:${autoGcalMaxMinusLink.stage}:${alarmConfig.quickGcalAutoOpenStage}:${autoGcalMaxMinusLink.maxMinute}:${autoGcalMaxMinusLink.leadMinutes}`;
 
-            const suggested = normalizePunchTime(combinedLastPunch) || '';
-            const typed = window.prompt('Nova batida local (HH:MM):', suggested);
+        if (hasLoggerGcalAutoOpenToken(autoToken)) {
+            return;
+        }
 
-            if (typed === null) {
-                return;
-            }
+        const stageLabel = getGuidanceStageLabel(autoGcalMaxMinusLink.stage);
+        const shouldOpen = window.confirm(
+            `Fase detectada: ${stageLabel}.\n\nAbrir evento no Google Calendar para ${renderClock(autoGcalMaxMinusLink.startMinute)} (máximo -${autoGcalMaxMinusLink.leadMinutes}m)?`
+        );
 
-            const time = normalizePunchTime(typed);
+        if (shouldOpen) {
+            openInNewTab(autoGcalMaxMinusLink.gcal);
+            markLoggerGcalAutoOpenToken(autoToken, 'accepted');
+            showLoggerToast(`Evento aberto automaticamente para ${renderClock(autoGcalMaxMinusLink.startMinute)}.`);
+        } else {
+            markLoggerGcalAutoOpenToken(autoToken, 'dismissed');
+            showLoggerToast('Autoabertura cancelada nesta detecção.');
+        }
+    }
 
-            if (!time) {
-                showLoggerToast('Informe um horário válido (HH:MM).');
-                return;
-            }
+    function promptAddLocalPunch(vm) {
 
-            const minute = toMin(time);
+        const { combinedLastPunch, startMs } = vm;
 
-            if (!Number.isFinite(minute)) {
-                showLoggerToast('Horário inválido para inclusão local.');
-                return;
-            }
 
-            const manualTimestamp = startMs + (minute * MS_PER_MINUTE);
-            const todayDateLabel = new Date(startMs).toLocaleDateString('pt-BR');
-            const inserted = savePunch(time, todayDateLabel, manualTimestamp);
+        const suggested = normalizePunchTime(combinedLastPunch) || '';
+        const typed = window.prompt('Nova batida local (HH:MM):', suggested);
 
-            if (!inserted) {
-                showLoggerToast(`Batida ${time} já existe no histórico local de hoje.`);
-                return;
-            }
+        if (typed === null) {
+            return;
+        }
 
-            showLoggerToast(`Batida local ${time} incluída.`);
+        const time = normalizePunchTime(typed);
 
-            if (document.getElementById('ahg-panel')) {
-                render();
-            }
-        };
+        if (!time) {
+            showLoggerToast('Informe um horário válido (HH:MM).');
+            return;
+        }
+
+        const minute = toMin(time);
+
+        if (!Number.isFinite(minute)) {
+            showLoggerToast('Horário inválido para inclusão local.');
+            return;
+        }
+
+        const manualTimestamp = startMs + (minute * MS_PER_MINUTE);
+        const todayDateLabel = new Date(startMs).toLocaleDateString('pt-BR');
+        const inserted = savePunch(time, todayDateLabel, manualTimestamp);
+
+        if (!inserted) {
+            showLoggerToast(`Batida ${time} já existe no histórico local de hoje.`);
+            return;
+        }
+
+        showLoggerToast(`Batida local ${time} incluída.`);
+
+        if (document.getElementById('ahg-panel')) {
+            render();
+        }
+    }
+
+    function bindLoggerHistoryEvents(vm) {
+
+        const { startMs, endMs } = vm;
 
         document.getElementById('ahg-history-add')
-            ?.addEventListener('click', () => tryAddHistoryPunch());
+            ?.addEventListener('click', () => promptAddLocalPunch(vm));
 
         document.querySelectorAll('.ahg-history-edit')
             .forEach(btn => {
@@ -4991,6 +5067,9 @@
                     showLoggerToast(result.message);
                 });
             });
+    }
+
+    function bindAlarmMasterToggle(alarmConfig) {
 
         document.getElementById('ahg-alarm-settings-toggle')
             ?.addEventListener('click', () => {
@@ -5018,6 +5097,9 @@
 
                 renderUILogger();
             });
+    }
+
+    function bindAlarmSelectEvents() {
 
         document.getElementById('ahg-alarm-mode')
             ?.addEventListener('change', ev => {
@@ -5077,6 +5159,9 @@
                 showLoggerToast(`Notificação desktop ${desktop ? 'ligada' : 'desligada'}.`);
                 renderUILogger();
             });
+    }
+
+    function bindQuickCalendarSettingEvents() {
 
         document.getElementById('ahg-alarm-gcal')
             ?.addEventListener('change', ev => {
@@ -5140,6 +5225,9 @@
                 showLoggerToast(`Fase de autoabertura: ${stage === 'any' ? 'qualquer fase útil' : getGuidanceStageLabel(stage)}.`);
                 renderUILogger();
             });
+    }
+
+    function bindAlarmTestButton() {
 
         document.getElementById('ahg-alarm-test')
             ?.addEventListener('click', () => {
@@ -5168,6 +5256,9 @@
 
                 showLoggerToast('Teste de alarme executado.');
             });
+    }
+
+    function bindLoggerPrivacyToggle() {
 
         document.getElementById('ahg-privacy-toggle-logger')
             ?.addEventListener('click', () => {
@@ -5178,6 +5269,19 @@
                     render();
                 }
             });
+    }
+
+    function bindLoggerEvents(vm, autoGcalMaxMinusLink) {
+
+        bindLoggerDetailsToggle();
+        bindLoggerSyncButton();
+        bindQuickCalendarClickToasts(autoGcalMaxMinusLink, vm.alarmConfig);
+        bindLoggerHistoryEvents(vm);
+        bindAlarmMasterToggle(vm.alarmConfig);
+        bindAlarmSelectEvents();
+        bindQuickCalendarSettingEvents();
+        bindAlarmTestButton();
+        bindLoggerPrivacyToggle();
     }
 
     function startLogger() {
