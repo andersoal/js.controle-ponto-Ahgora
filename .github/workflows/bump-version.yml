@@ -1,0 +1,66 @@
+name: Auto Bump Version
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  bump-version:
+    if: github.actor != 'github-actions[bot]'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Atualizar versão
+        run: |
+          python << 'EOF'
+          import re
+          from pathlib import Path
+
+          arquivo = Path("ahgora-panel.user.js")
+
+          texto = arquivo.read_text(encoding="utf-8")
+
+          m = re.search(r'@version\s+(\d+)\.(\d+)\.(\d+)', texto)
+
+          if not m:
+              raise Exception("Versão não encontrada.")
+
+          major, minor, patch = map(int, m.groups())
+
+          patch += 1
+
+          nova = f"{major}.{minor}.{patch}"
+
+          texto = re.sub(
+              r'(@version\s+)(\d+\.\d+\.\d+)',
+              rf'\g<1>{nova}',
+              texto
+          )
+
+          arquivo.write_text(texto, encoding="utf-8")
+
+          print(f"Nova versão: {nova}")
+          EOF
+
+      - name: Commit
+        run: |
+          git add ahgora-panel.user.js
+
+          git diff --cached --quiet || git commit -m "chore: bump version"
+
+      - name: Push
+        run: git push
