@@ -43,8 +43,19 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 
 ## Configuracao rapida
 - Instalar Tampermonkey.
-- Carregar ahgora-panel.user.js.
+- Carregar ahgora-panel.user.js (instalacao direta: https://github.com/jonathanfiss/js.controle-ponto-Ahgora/raw/refs/heads/master/ahgora-panel.user.js).
 - Acessar mirror/app Ahgora e validar carregamento do painel.
+
+## Tolerancia de saldo diario
+- Dias com batidas cujo saldo fica dentro de ±10 minutos (CONFIG.TOLERANCIA) contribuem com zero nos saldos semanal e mensal.
+- O saldo real do dia continua visivel; dias em tolerancia sao marcados com ⚪ no detalhamento mensal.
+
+## Exportacao CSV
+- O painel possui a acao `📥 Exportar CSV` na secao Mensal.
+- Gera um arquivo `Ahgora_AAAA-MM.csv` (separador `;`, UTF-8 com BOM) com resumo do mes e uma linha por dia: batidas, turnos, intervalo, trabalhado, saldo do dia e saldos acumulados (com tolerancia aplicada).
+
+## Versionamento
+- O workflow `.github/workflows/bump-version.yml` incrementa automaticamente o patch de `@version` a cada push na branch `master`.
 
 ## Calendario rapido (Google e Outlook)
 - No painel do logger, os botoes rapidos criam evento com inicio em `horario maximo - offset` e fim no horario maximo calculado para a fase atual.

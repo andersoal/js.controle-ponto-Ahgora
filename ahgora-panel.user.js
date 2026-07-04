@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ahgora — Painel Inteligente Local + Modal Logger
 // @namespace    https://github.com/jonathanfiss
-// @version      1.1.0
+// @version      2.1.0
 // @description  Painel com totais no calendário e logger de batidas com sugestões inteligentes
 // @author       Jonathan Fiss, Anderson Guarnier
 
@@ -12,8 +12,8 @@
 // @grant        GM_getValue
 // @run-at       document-idle
 
-// @downloadURL  https://raw.githubusercontent.com/jonathanfiss/js.controle-ponto-Ahgora/main/ahgora-panel.user.js
-// @updateURL    https://raw.githubusercontent.com/jonathanfiss/js.controle-ponto-Ahgora/main/ahgora-panel.user.js
+// @downloadURL  https://github.com/jonathanfiss/js.controle-ponto-Ahgora/raw/refs/heads/master/ahgora-panel.user.js
+// @updateURL    https://github.com/jonathanfiss/js.controle-ponto-Ahgora/raw/refs/heads/master/ahgora-panel.user.js
 
 // ==/UserScript==
 
@@ -38,6 +38,12 @@
         INTERVALO_MINIMO: 30,
         INTERVALO_MAXIMO: (3 * 60) + 30,
         MIN_TURNO_COM_INTERVALO: 2 * 60,
+
+        // Descanso entre jornadas (interjornada)
+        DESCANSO_MINIMO: 11 * 60,
+
+        // Tolerância — saldo diário dentro de ±TOLERANCIA minutos é zerado nos totais
+        TOLERANCIA: 10,
 
         // Regras de quantidade de batidas
         MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA: 4,
@@ -679,6 +685,18 @@
         return total;
     }
 
+    // Saldo dentro de ±TOLERANCIA em dia com batidas é zerado nos totais
+    function saldoComTolerancia(dia) {
+
+        if (!dia.isBusinessDay) return 0;
+
+        const emTolerancia =
+            dia.batidas.length > 0 &&
+            Math.abs(dia.saldo) <= CONFIG.TOLERANCIA;
+
+        return emTolerancia ? 0 : dia.saldo;
+    }
+
     function fmtCountdown(ms) {
 
         const totalSec =
@@ -1157,7 +1175,7 @@
             !x.isToday &&
             x.isBusinessDay
         )
-            .reduce((a, b) => a + b.saldo, 0);
+            .reduce((a, b) => a + saldoComTolerancia(b), 0);
 
         const totalSemana = dias.filter(x =>
             sameWeek(x.data, new Date()) &&
@@ -1188,7 +1206,7 @@
                     !x.isFuture &&
                     x.isBusinessDay
                 )
-                .reduce((a, b) => a + b.saldo, 0);
+                .reduce((a, b) => a + saldoComTolerancia(b), 0);
 
         const totalMes = dias.filter(x =>
             x.data.getMonth() === new Date().getMonth() &&
@@ -1286,7 +1304,7 @@
 
         const retorno11h =
             baseRetorno11h !== null
-                ? baseRetorno11h + (11 * 60)
+                ? baseRetorno11h + CONFIG.DESCANSO_MINIMO
                 : null;
 
         const saidaIdeal =
@@ -2798,6 +2816,16 @@
                         </span>
                     </div>
 
+                <div class="a-row infos clickable" id="ahg-export-csv" title="Exportar relatório mensal em CSV">
+                        <span class="a-lbl">
+                            📥 Exportar CSV
+                        </span>
+
+                        <span class="a-val neu">
+                            <small>relatório do mês</small>
+                        </span>
+                    </div>
+
             </div>
 
             <div class="a-foot">
@@ -2826,6 +2854,9 @@
                 });
             document.getElementById('ahg-open-details')?.addEventListener('click', () => {
                 abrirDetalhes(r);
+            });
+            document.getElementById('ahg-export-csv')?.addEventListener('click', () => {
+                exportarCsvMensal(r.dias);
             });
 
         } catch (e) {
@@ -2906,6 +2937,14 @@
             <button id="ahg-close-details">
                 Fechar
             </button>
+        </div>
+
+        <div style="
+            margin-bottom:12px;
+            font-size:12px;
+            opacity:.75;
+        ">
+            ⚪ Tolerância de ±${CONFIG.TOLERANCIA}min — saldo dentro desse intervalo não é contabilizado nos totais
         </div>
     `;
 
@@ -2991,11 +3030,17 @@
                     semanaAtual = semana;
                 }
 
+                const saldoEfetivo =
+                    saldoComTolerancia(d);
+
+                const emTolerancia =
+                    saldoEfetivo !== d.saldo;
+
                 totalSemana += d.trabalhado;
-                saldoSemana += d.saldo;
+                saldoSemana += saldoEfetivo;
 
                 html += `
-                <tr>
+                <tr ${emTolerancia ? `title="Tolerância: ${Math.abs(d.saldo)}min dentro do limite de ${CONFIG.TOLERANCIA}min — não contabilizado"` : ''}>
                     <td>
                         ${diasSemana[d.data.getDay()]}
                     </td>
@@ -3009,7 +3054,7 @@
                     </td>
 
                     <td align="right">
-                        ${fmtMin(d.saldo)}
+                        ${fmtMin(d.saldo)}${emTolerancia ? ' ⚪' : ''}
                     </td>
                 </tr>
             `;
@@ -3061,6 +3106,158 @@
                 modal.remove();
             }
         };
+    }
+
+    /* =========================================================
+       EXPORTAÇÃO CSV
+    ========================================================= */
+
+    function exportarCsvMensal(dias) {
+
+        const hoje = new Date();
+
+        const diasSemana = [
+            'Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'
+        ];
+
+        const registros = dias
+            .filter(x =>
+                !x.isFuture &&
+                x.data.getMonth() === hoje.getMonth()
+            )
+            .sort((a, b) => a.data - b.data);
+
+        const comBatidas =
+            registros.filter(x => x.batidas.length > 0);
+
+        const uteis =
+            registros.filter(x => x.isBusinessDay);
+
+        const totalMes =
+            uteis.reduce((a, b) => a + b.trabalhado, 0);
+
+        const saldoMes =
+            uteis.reduce((a, b) => a + saldoComTolerancia(b), 0);
+
+        const trabalhos =
+            comBatidas.map(x => x.trabalhado);
+
+        const media =
+            comBatidas.length > 0
+                ? totalMes / comBatidas.length
+                : 0;
+
+        const sep = ';';
+
+        const cabecalhoResumo = [
+            ['Período', `${String(hoje.getMonth() + 1).padStart(2, '0')}/${hoje.getFullYear()}`],
+            ['Gerado em', hoje.toLocaleString('pt-BR')],
+            ['Carga diária', fmtMin(CONFIG.CARGA_DIARIA)],
+            ['Máx. turno', fmtMin(CONFIG.MAX_HORAS_TURNO)],
+            ['Máx. dia', fmtMin(CONFIG.MAX_HORAS_DIA)],
+            ['Tolerância diária (min)', CONFIG.TOLERANCIA],
+            ['Horas realizadas', fmtMin(totalMes)],
+            ['Saldo mensal', fmtMin(saldoMes)],
+            ['Dias registrados', comBatidas.length],
+            ['Dias úteis', uteis.length],
+            ['Média diária', fmtMin(media)],
+            ['Maior jornada', fmtMin(trabalhos.length ? Math.max(...trabalhos) : 0)],
+            ['Menor jornada', fmtMin(trabalhos.length ? Math.min(...trabalhos) : 0)]
+        ].map(([k, v]) => `"${k}"${sep}"${v}"`);
+
+        const cabecalhoDados = [
+            'Data', 'Dia', 'Semana', 'Útil', 'Feriado',
+            'Batida 1', 'Batida 2', 'Batida 3', 'Batida 4',
+            '1º Turno', '2º Turno', 'Intervalo',
+            'Trabalhado', 'Saldo dia', 'Saldo semana', 'Saldo mês'
+        ].map(v => `"${v}"`).join(sep);
+
+        let saldoMesAcum = 0;
+        let saldoSemAcum = 0;
+        let semanaAnterior = null;
+
+        const linhas = registros.map(d => {
+
+            const semana =
+                getWeekNumber(d.data);
+
+            if (semana !== semanaAnterior) {
+                saldoSemAcum = 0;
+                semanaAnterior = semana;
+            }
+
+            const b = d.batidas;
+
+            const turno1Min =
+                (b[0] && b[1])
+                    ? toMin(b[1]) - toMin(b[0])
+                    : null;
+
+            const turno2Min =
+                (b[2] && b[3])
+                    ? toMin(b[3]) - toMin(b[2])
+                    : null;
+
+            const intervMin =
+                (b[1] && b[2])
+                    ? toMin(b[2]) - toMin(b[1])
+                    : null;
+
+            const saldoEfetivo =
+                saldoComTolerancia(d);
+
+            saldoMesAcum += saldoEfetivo;
+            saldoSemAcum += saldoEfetivo;
+
+            return [
+                d.data.toLocaleDateString('pt-BR'),
+                diasSemana[d.data.getDay()],
+                semana,
+                d.isBusinessDay ? 'Sim' : 'Não',
+                d.isHoliday ? 'Sim' : 'Não',
+                b[0] || '', b[1] || '', b[2] || '', b[3] || '',
+                turno1Min !== null ? fmtMin(turno1Min) : '',
+                turno2Min !== null ? fmtMin(turno2Min) : '',
+                intervMin !== null ? fmtMin(intervMin) : '',
+                b.length > 0 ? fmtMin(d.trabalhado) : '',
+                d.isBusinessDay ? fmtMin(d.saldo) : '',
+                fmtMin(saldoSemAcum),
+                fmtMin(saldoMesAcum)
+            ].map(v => `"${v}"`).join(sep);
+        });
+
+        const conteudo = [
+            ...cabecalhoResumo,
+            '',
+            cabecalhoDados,
+            ...linhas
+        ].join('\r\n');
+
+        const nomeArquivo =
+            `Ahgora_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}.csv`;
+
+        const blob =
+            new Blob(
+                ['\uFEFF' + conteudo],
+                { type: 'text/csv;charset=utf-8;' }
+            );
+
+        const url =
+            URL.createObjectURL(blob);
+
+        const link =
+            document.createElement('a');
+
+        link.href = url;
+        link.download = nomeArquivo;
+
+        document.body.appendChild(link);
+
+        link.click();
+
+        document.body.removeChild(link);
+
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     /* =========================================================
