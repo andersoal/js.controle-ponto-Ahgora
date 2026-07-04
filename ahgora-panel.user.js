@@ -2254,10 +2254,10 @@
         }
     }
 
-    // Template do painel principal (r = resumo calculado do dia/semana/mês).
-    function buildPanelHtml(r) {
+    // Cabeçalho + linhas de status (situação, batidas, atenção, alertas).
+    function buildPanelStatusHtml(r, labels) {
 
-        const { day8WindowLabel, day10WindowLabel, anomalyDaysLabel, nonComplianceLabel } = buildPanelLabels(r);
+        const { anomalyDaysLabel, nonComplianceLabel } = labels;
 
         return `
             <div class="a-tit">
@@ -2323,7 +2323,13 @@
                     </span>
                 </div>
                 ` : ''}
+`;
+    }
 
+    // Seção "Hoje": turnos, trabalhado e saldo do dia.
+    function buildPanelTodayHtml(r) {
+
+        return `
                 <hr class="a-div">
 
                 <div class="a-sec">
@@ -2395,7 +2401,15 @@
                         ${renderMinutes(r.hoje.saldo)}
                     </span>
                 </div>
+`;
+    }
 
+    // Seção "Saídas": marcos de 6h/8h/10h e saída ideal.
+    function buildPanelExitsHtml(r, labels) {
+
+        const { day8WindowLabel, day10WindowLabel } = labels;
+
+        return `
                 <hr class="a-div">
 
                 <div class="a-sec">
@@ -2461,7 +2475,13 @@
                         ${renderClock(r.saidaIdeal)}
                     </span>
                 </div>
+`;
+    }
 
+    // Seção "Intervalo" (condicional) + interjornada de 11h.
+    function buildPanelIntervalHtml(r) {
+
+        return `
                 ${r.retornoMinimo ? `
                 <hr class="a-div">
 
@@ -2499,7 +2519,13 @@
                         ${renderClock(r.retorno11h)}
                     </span>
                 </div>
+`;
+    }
 
+    // Seções "Semanal" e "Mensal".
+    function buildPanelTotalsHtml(r) {
+
+        return `
                 <hr class="a-div">
 
                 <div class="a-sec">
@@ -2548,7 +2574,12 @@
                             ${renderMinutes(r.totalMes)}
                         </span>
                     </div>
+`;
+    }
 
+    function buildPanelFooterHtml() {
+
+        return `
             </div>
 
             <div class="a-foot">
@@ -2559,6 +2590,19 @@
             )}
             </div>
             `;
+    }
+
+    // Template do painel principal (r = resumo calculado do dia/semana/mês).
+    function buildPanelHtml(r) {
+
+        const labels = buildPanelLabels(r);
+
+        return buildPanelStatusHtml(r, labels)
+            + buildPanelTodayHtml(r)
+            + buildPanelExitsHtml(r, labels)
+            + buildPanelIntervalHtml(r)
+            + buildPanelTotalsHtml(r)
+            + buildPanelFooterHtml();
     }
 
     function bindPanelEvents(panel, resumo) {
@@ -5006,12 +5050,7 @@
         }
     }
 
-    function bindLoggerHistoryEvents(vm) {
-
-        const { startMs, endMs } = vm;
-
-        document.getElementById('ahg-history-add')
-            ?.addEventListener('click', () => promptAddLocalPunch(vm));
+    function bindHistoryEditButtons(startMs, endMs) {
 
         document.querySelectorAll('.ahg-history-edit')
             .forEach(btn => {
@@ -5042,6 +5081,9 @@
                     showLoggerToast(result.message);
                 });
             });
+    }
+
+    function bindHistoryShiftButtons(startMs, endMs) {
 
         document.querySelectorAll('.ahg-history-shift')
             .forEach(btn => {
@@ -5067,6 +5109,17 @@
                     showLoggerToast(result.message);
                 });
             });
+    }
+
+    function bindLoggerHistoryEvents(vm) {
+
+        const { startMs, endMs } = vm;
+
+        document.getElementById('ahg-history-add')
+            ?.addEventListener('click', () => promptAddLocalPunch(vm));
+
+        bindHistoryEditButtons(startMs, endMs);
+        bindHistoryShiftButtons(startMs, endMs);
     }
 
     function bindAlarmMasterToggle(alarmConfig) {
@@ -5127,6 +5180,9 @@
                 showLoggerToast('Configuração de som atualizada.');
                 renderUILogger();
             });
+    }
+
+    function bindAlarmChannelEvents() {
 
         document.getElementById('ahg-alarm-sound')
             ?.addEventListener('change', ev => {
@@ -5207,6 +5263,9 @@
                 showLoggerToast(`Offset do Google Calendar: -${offset} min.`);
                 renderUILogger();
             });
+    }
+
+    function bindQuickCalendarAutoOpenEvents() {
 
         document.getElementById('ahg-gcal-auto-open')
             ?.addEventListener('change', ev => {
@@ -5279,7 +5338,9 @@
         bindLoggerHistoryEvents(vm);
         bindAlarmMasterToggle(vm.alarmConfig);
         bindAlarmSelectEvents();
+        bindAlarmChannelEvents();
         bindQuickCalendarSettingEvents();
+        bindQuickCalendarAutoOpenEvents();
         bindAlarmTestButton();
         bindLoggerPrivacyToggle();
     }
