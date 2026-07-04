@@ -4124,29 +4124,238 @@
         };
     }
 
+    function getLatestTodayKnownPunchMinute() {
+
+        const sharedTruth = readSharedTruth();
+        const { todayKey, startMs, endMs } = getTodayBounds();
+        const { mirrorPunches } = getMirrorTodayContext(sharedTruth, todayKey);
+        const history = parseJson(
+            gmGetValue('ahgora_history_v6', '[]'),
+            []
+        );
+
+        const { combinedPunches } = buildLoggerPunchTimeline(
+            history,
+            mirrorPunches,
+            startMs,
+            endMs
+        );
+
+        if (!combinedPunches.length) {
+            return null;
+        }
+
+        return toMin(combinedPunches[combinedPunches.length - 1]);
+    }
+
+    function getClockingInIntervalState(nextTime) {
+
+        const nextMinute = toMin(nextTime);
+
+        if (!Number.isFinite(nextMinute)) {
+            return null;
+        }
+
+        const lastMinute = getLatestTodayKnownPunchMinute();
+
+        if (!Number.isFinite(lastMinute)) {
+            return {
+                nextMinute,
+                lastMinute: null,
+                minMinute: null,
+                diff: null,
+                isBlocked: false
+            };
+        }
+
+        const diff = nextMinute - lastMinute;
+
+        return {
+            nextMinute,
+            lastMinute,
+            minMinute: lastMinute + CONFIG.INTERVALO_MINIMO,
+            diff,
+            isBlocked: diff >= 0 && diff < CONFIG.INTERVALO_MINIMO
+        };
+    }
+
+    function getClockingInIntervalViolation(nextTime) {
+
+        const state = getClockingInIntervalState(nextTime);
+
+        if (state && state.isBlocked) {
+            return {
+                lastMinute: state.lastMinute,
+                minMinute: state.minMinute,
+                diff: state.diff
+            };
+        }
+
+        return null;
+    }
+
+    function upsertClockingInModalHint(confirmBtn) {
+
+        const modalRoot = confirmBtn.closest('[role="dialog"]') || document;
+        const titleText = String(
+            modalRoot.querySelector('#server-modal-title')?.textContent || ''
+        ).trim().toLowerCase();
+        const buttonLabelText = String(
+            confirmBtn.textContent || ''
+        ).trim().toLowerCase();
+
+        const isClockingInConfirmModal =
+            titleText.includes('confirm your punch-in') &&
+            buttonLabelText.includes('clocking in');
+
+        const staleHint = modalRoot.querySelector('#ahg-clocking-in-hint');
+
+        if (!isClockingInConfirmModal) {
+
+            if (staleHint) {
+                staleHint.remove();
+            }
+
+            confirmBtn.removeAttribute('aria-disabled');
+            confirmBtn.style.opacity = '';
+            confirmBtn.style.filter = '';
+            confirmBtn.style.pointerEvents = '';
+
+            return;
+        }
+
+        const timeParts = modalRoot.querySelectorAll('.jss77');
+        const datePart = modalRoot.querySelector('.jss79');
+
+        if (!datePart || timeParts.length < 2) {
+            return;
+        }
+
+        const hours = String(timeParts[0].innerText || '').trim();
+        const minutes = String(timeParts[1].innerText || '').trim();
+        const time = normalizePunchTime(`${hours}:${minutes}`);
+
+        if (!time) {
+            return;
+        }
+
+        const state = getClockingInIntervalState(time);
+
+        let hint = staleHint;
+
+        if (!hint) {
+            hint = document.createElement('p');
+            hint.id = 'ahg-clocking-in-hint';
+            hint.style.margin = '8px 0 0';
+            hint.style.fontSize = '12px';
+            hint.style.lineHeight = '1.35';
+            hint.style.fontWeight = '700';
+            datePart.insertAdjacentElement('afterend', hint);
+        }
+
+        if (!state || !Number.isFinite(state.lastMinute)) {
+            hint.textContent = `Sem referencia anterior para validar intervalo minimo de ${CONFIG.INTERVALO_MINIMO}min.`;
+            hint.style.color = '#8cb6ff';
+            confirmBtn.removeAttribute('aria-disabled');
+            confirmBtn.style.opacity = '';
+            confirmBtn.style.filter = '';
+            confirmBtn.style.pointerEvents = '';
+            return;
+        }
+
+        if (state.isBlocked) {
+            hint.textContent = `Aguarde: ultima batida ${fmtHour(state.lastMinute)}. Permitido apos ${fmtHour(state.minMinute)}.`;
+            hint.style.color = '#ff8888';
+            confirmBtn.setAttribute('aria-disabled', 'true');
+            confirmBtn.style.opacity = '.55';
+            confirmBtn.style.filter = 'grayscale(0.2)';
+            confirmBtn.style.pointerEvents = 'none';
+            return;
+        }
+
+        hint.textContent = `Intervalo OK: ultima batida ${fmtHour(state.lastMinute)} (minimo ${CONFIG.INTERVALO_MINIMO}min respeitado).`;
+        hint.style.color = '#9ef0bf';
+        confirmBtn.removeAttribute('aria-disabled');
+        confirmBtn.style.opacity = '';
+        confirmBtn.style.filter = '';
+        confirmBtn.style.pointerEvents = '';
+    }
+
     function monitorModal() {
 
-        const confirmBtn = document.querySelector('.jss83');
+        const confirmBtn = Array.from(document.querySelectorAll('.jss83')).find(btn => {
+
+            const modalRoot = btn.closest('[role="dialog"]') || document;
+            const titleText = String(
+                modalRoot.querySelector('#server-modal-title')?.textContent || ''
+            ).trim().toLowerCase();
+            const buttonLabelText = String(btn.textContent || '').trim().toLowerCase();
+
+            return (
+                titleText.includes('confirm your punch-in') &&
+                buttonLabelText.includes('clocking in')
+            );
+        });
+
+        const staleHints = document.querySelectorAll('#ahg-clocking-in-hint');
+
+        staleHints.forEach(hint => {
+
+            const modalRoot = hint.closest('[role="dialog"]') || document;
+            const titleText = String(
+                modalRoot.querySelector('#server-modal-title')?.textContent || ''
+            ).trim().toLowerCase();
+
+            if (!titleText.includes('confirm your punch-in')) {
+                hint.remove();
+            }
+        });
+
+        if (confirmBtn) {
+            upsertClockingInModalHint(confirmBtn);
+        }
 
         if (confirmBtn && !confirmBtn.dataset.hooked) {
 
             confirmBtn.dataset.hooked = 'true';
 
-            confirmBtn.addEventListener('click', () => {
+            confirmBtn.addEventListener('click', (event) => {
 
                 const timeParts = document.querySelectorAll('.jss77');
                 const datePart = document.querySelector('.jss79');
 
                 if (timeParts.length >= 2 && datePart) {
 
-                    const hours = pad2(timeParts[0].innerText);
-                    const minutes = pad2(timeParts[1].innerText);
-                    const time = `${hours}:${minutes}`;
+                    const hours = String(timeParts[0].innerText || '').trim();
+                    const minutes = String(timeParts[1].innerText || '').trim();
+                    const time = normalizePunchTime(`${hours}:${minutes}`);
                     const date = String(datePart.innerText).replace(/from\s/g, '').trim();
+
+                    if (!time) {
+                        return;
+                    }
+
+                    const violation = getClockingInIntervalViolation(time);
+
+                    if (violation) {
+
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+
+                        const message =
+                            `Intervalo minimo de ${CONFIG.INTERVALO_MINIMO} minutos entre batidas. ` +
+                            `Ultima: ${fmtHour(violation.lastMinute)}. ` +
+                            `Permitido apos: ${fmtHour(violation.minMinute)}.`;
+
+                        showLoggerToast(message);
+                        alert(message);
+
+                        return;
+                    }
 
                     savePunch(time, date);
                 }
-            });
+            }, true);
         }
     }
 
