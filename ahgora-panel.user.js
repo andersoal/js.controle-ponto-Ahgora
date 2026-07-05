@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Ahgora — Painel Inteligente Local + Modal Logger
-// @namespace    https://github.com/jonathanfiss
-// @version      2.1.0
-// @description  Painel com totais no calendário e logger de batidas com sugestões inteligentes
+// @name         Ahgora — Painel Inteligente Local v3.0
+// @namespace    https://github.com/andersoal
+// @version      3.0.0
+// @description  Painel com totais no calendario, logger de batidas, overlay de jornada na novabatidaonline, alarmes configuraveis, tema adaptativo e diagnostico
 // @author       Jonathan Fiss, Anderson Guarnier
 
 // @match https://mirror.app.ahgora.com.br/*
@@ -10,2394 +10,647 @@
 
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_addStyle
 // @run-at       document-idle
 
-// @downloadURL  https://github.com/jonathanfiss/js.controle-ponto-Ahgora/raw/refs/heads/master/ahgora-panel.user.js
-// @updateURL    https://github.com/jonathanfiss/js.controle-ponto-Ahgora/raw/refs/heads/master/ahgora-panel.user.js
+// @downloadURL  https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
+// @updateURL    https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
 
 // ==/UserScript==
+
+/**
+ * AHGORA SMART PANEL v3.0
+ * ========================
+ * Arquitetura: Monolito com PageAdapter
+ * - PageAdapter.detect() -> 'mirror' | 'batida' | 'unknown'
+ * - Apenas modulos da pagina ativa sao inicializados
+ * - Processamento 100% local, sem chamadas a APIs externas
+ *
+ * Releases:
+ *   v3.0 (MVP): F-001, F-002, F-003, F-005, F-006, F-009, F-017, F-020, F-021, F-026
+ *   v3.1: F-004, F-007, F-008, F-012, F-013, F-014, F-016, F-018, F-025
+ *   v3.2: F-010, F-011, F-015, F-019, F-022, F-023, F-024
+ */
 
 (function () {
     'use strict';
 
     /* =========================================================
-       CONFIG
+       SECAO 0: UTILITARIOS COMPARTILHADOS (executam em qualquer pagina)
     ========================================================= */
 
-    const CONFIG = {
+    const _logBuffer = [];
+    const _moduleStatus = [];
 
-        // Jornada
-        CARGA_DIARIA: 8 * 60,
-
-        // Limites
-        MAX_HORAS_DIA: 10 * 60,
-        MAX_HORAS_TURNO: 6 * 60,
-        QUATRO_HORAS: 4 * 60,
-
-        // Intervalo entre turnos
-        INTERVALO_MINIMO: 30,
-        INTERVALO_MAXIMO: (3 * 60) + 30,
-        MIN_TURNO_COM_INTERVALO: 2 * 60,
-
-        // Descanso entre jornadas (interjornada)
-        DESCANSO_MINIMO: 11 * 60,
-
-        // Tolerância — saldo diário dentro de ±TOLERANCIA minutos é zerado nos totais
-        TOLERANCIA: 10,
-
-        // Regras de quantidade de batidas
-        MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA: 4,
-        MAX_BATIDAS_DIA_COM_JUSTIFICATIVA: 6,
-
-        // Atualização
-        UPDATE_INTERVAL: 1 * 1000,
-
-        // Notificações
-        NOTIFICAR_ANTES: 5,
-
-        // Alarmes logger (novabatidaonline)
-        LOGGER_ALARM_LEAD_MINUTES: 5,
-        LOGGER_ALARM_REPEAT: 'once',
-
-        // Logger
-        LOGGER_HISTORY_SIZE: 5,
-
-        // Google Calendar
-        // Aceita "0" ou "example@gmail.com" para gerar /u/{valor}/ na URL.
-        GCAL_USER_PATH: '0',
-        GCAL_TITLE_PREFIX: '🗓️ Ahgora - ',
-        GCAL_TIMEZONE: 'America/Sao_Paulo',
-        // Duração padrão (em minutos) dos eventos criados via Google Calendar.
-        GCAL_EVENT_DURATION_MIN: 1,
-
-        AUTO_REFRESH_MINUTES: 15,
-        URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
+    const $ = {
+        qs: (s, c = document) => c.querySelector(s),
+        qsa: (s, c = document) => [...c.querySelectorAll(s)],
+        el: (tag, opts = {}) => {
+            const e = document.createElement(tag);
+            Object.entries(opts).forEach(([k, v]) => {
+                if (k === 'text') e.textContent = v;
+                else if (k === 'html') e.innerHTML = v;
+                else if (k === 'class') e.className = v;
+                else e.setAttribute(k, v);
+            });
+            return e;
+        },
+        on: (el, ev, fn) => el?.addEventListener(ev, fn),
+        off: (el, ev, fn) => el?.removeEventListener(ev, fn),
+        ready: (fn) => {
+            if (document.readyState !== 'loading') fn();
+            else document.addEventListener('DOMContentLoaded', fn);
+        }
     };
 
-    let NEXT_REFRESH = Date.now() + (CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
-
-    /* =========================================================
-       UTILS
-    ========================================================= */
-
-    function agendarRenderMinuto() {
-
-        const agora =
-            new Date();
-
-        const msAteProximoMinuto =
-            (60 - agora.getSeconds()) * 1000
-            - agora.getMilliseconds();
-
-        setTimeout(() => {
-
-            if (
-                document.visibilityState === 'visible'
-            ) {
-
-                render();
-            }
-
-            agendarRenderMinuto();
-
-        }, msAteProximoMinuto);
-    }
-
-    const toMin = s => {
-
+    function toMin(s) {
         if (!s) return null;
-
         s = String(s).trim();
-
         const neg = s.startsWith('-');
-
-        const [h, m] =
-            s.replace(/[^0-9:]/g, '')
-                .split(':')
-                .map(Number);
-
+        const [h, m] = s.replace(/[^0-9:]/g, '').split(':').map(Number);
         if (isNaN(h)) return null;
+        return neg ? -(h * 60 + (m || 0)) : h * 60 + (m || 0);
+    }
 
-        return neg
-            ? -(h * 60 + (m || 0))
-            : h * 60 + (m || 0);
-    };
-
-    const fmtMin = m => {
-
-        if (m === null || m === undefined) {
-            return '--:--';
-        }
-
+    function fmtMin(m) {
+        if (m === null || m === undefined) return '--:--';
         const neg = m < 0;
-
         const abs = Math.abs(Math.round(m));
-
         return `${neg ? '-' : ''}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-    };
+    }
 
-    const roundUpQuarterHour = m => {
-
-        if (m === null || m === undefined) {
-            return null;
-        }
-
-        return Math.ceil(m / 15) * 15;
-    };
-
-    const fmtQuarterDecimal = m => {
-
-        if (m === null || m === undefined) {
-            return '--';
-        }
-
-        const decimal = roundUpQuarterHour(m) / 60;
-
-        if (Number.isInteger(decimal)) {
-            return String(decimal);
-        }
-
-        return decimal.toFixed(2)
-            .replace(/0+$/, '')
-            .replace(/\.$/, '');
-    };
-
-    const fmtHour = m => {
-
-        if (m === null || m === undefined) {
-            return '--:--';
-        }
-
-        const n =
-            ((Math.round(m) % 1440) + 1440) % 1440;
-
+    function fmtHour(m) {
+        if (m === null || m === undefined) return '--:--';
+        const n = ((Math.round(m) % 1440) + 1440) % 1440;
         return `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
-    };
+    }
 
-    const nowMin = () => {
-
+    function nowMin() {
         const d = new Date();
-
         return d.getHours() * 60 + d.getMinutes();
-    };
-
-    const gmGetValue = (key, fallback) => {
-
-        if (typeof GM_getValue === 'function') {
-            return GM_getValue(key, fallback);
-        }
-
-        try {
-
-            const raw = localStorage.getItem(key);
-
-            return raw === null ? fallback : raw;
-
-        } catch (_) {
-
-            return fallback;
-        }
-    };
-
-    const gmSetValue = (key, value) => {
-
-        if (typeof GM_setValue === 'function') {
-            GM_setValue(key, value);
-            return;
-        }
-
-        try {
-            localStorage.setItem(key, String(value));
-        } catch (_) {
-            // noop
-        }
-    };
-
-    const PRIVACY_HIDE_KEY = 'ahgora_privacy_hide_times';
-    const LOGGER_ALARM_CONFIG_KEY = 'ahgora_logger_alarm_v1';
-    const LOGGER_ALARM_FIRED_STATE_KEY = 'ahgora_logger_alarm_fired_v1';
-    const LOGGER_GCAL_AUTOPEN_STATE_KEY = 'ahgora_logger_gcal_autopen_v1';
-
-    function isPrivacyHidden() {
-
-        return gmGetValue(PRIVACY_HIDE_KEY, 'false') === 'true';
-    }
-
-    function applyPrivacyState() {
-
-        if (!document.body) {
-            return;
-        }
-
-        document.body.classList.toggle('ahg-hide-times', isPrivacyHidden());
-        syncPrivacyButtons();
-    }
-
-    function setPrivacyHidden(hidden) {
-
-        gmSetValue(PRIVACY_HIDE_KEY, hidden ? 'true' : 'false');
-        applyPrivacyState();
-    }
-
-    function togglePrivacyHidden() {
-
-        const next = !isPrivacyHidden();
-        setPrivacyHidden(next);
-        return next;
-    }
-
-    function privacyButtonState() {
-
-        const hidden = isPrivacyHidden();
-
-        return {
-            icon: hidden ? '🙈' : '👁',
-            title: hidden
-                ? 'Privacidade ativa - mostrar valores'
-                : 'Privacidade desativada - ocultar valores',
-            pressed: hidden ? 'true' : 'false'
-        };
-    }
-
-    function syncPrivacyButtons() {
-
-        const state = privacyButtonState();
-
-        [
-            'ahg-eye-fab-mirror',
-            'ahg-eye-fab-logger',
-            'ahg-privacy-toggle',
-            'ahg-privacy-toggle-logger'
-        ].forEach(id => {
-
-            const el = document.getElementById(id);
-
-            if (!el) {
-                return;
-            }
-
-            el.textContent = state.icon;
-            el.title = state.title;
-            el.setAttribute('aria-pressed', state.pressed);
-            el.classList.toggle('is-active', isPrivacyHidden());
-        });
-    }
-
-    function createPrivacyFab(id, bottom, onToggle) {
-
-        if (document.getElementById(id)) {
-            return;
-        }
-
-        const eyeFab = document.createElement('div');
-        eyeFab.id = id;
-        eyeFab.className = 'ahg-eye-fab';
-        eyeFab.title = 'Alternar privacidade';
-        eyeFab.textContent = '👁';
-        eyeFab.style.bottom = bottom;
-        eyeFab.onclick = () => {
-
-            togglePrivacyHidden();
-            onToggle();
-        };
-
-        document.body.appendChild(eyeFab);
-    }
-
-    function renderClock(m) {
-
-        return isPrivacyHidden() ? '••:••' : fmtHour(m);
-    }
-
-    function renderMinuteRange(entrada, saida) {
-
-        return isPrivacyHidden()
-            ? '••:•• → ••:••'
-            : `${entrada} → ${saida}`;
-    }
-
-    function renderMinutes(m) {
-
-        return isPrivacyHidden() ? '••:••' : fmtMin(m);
-    }
-
-    function renderText(text) {
-
-        return isPrivacyHidden() ? '••:••' : escapeHtml(String(text));
-    }
-
-    function escapeHtml(value) {
-
-        return String(value)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    function formatDayMonth(date) {
-
-        if (!(date instanceof Date)) {
-            return '--/--';
-        }
-
-        return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
     }
 
     function formatDateKey(date = new Date()) {
-
         const d = new Date(date);
-
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
-    function normalizePunchTime(value) {
-
-        const text = String(value || '').trim();
-
-        if (!text) {
-            return null;
-        }
-
-        const match = text.match(/(\d{1,2}):(\d{2})/);
-
-        if (!match) {
-            return null;
-        }
-
-        const hh = Number(match[1]);
-        const mm = Number(match[2]);
-
-        if (!Number.isFinite(hh) || !Number.isFinite(mm)) {
-            return null;
-        }
-
-        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) {
-            return null;
-        }
-
-        return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-    }
-
-    function shiftPunchTime(time, deltaMinutes) {
-
-        const normalized = normalizePunchTime(time);
-
-        if (!normalized) {
-            return null;
-        }
-
-        const minute = toMin(normalized);
-
-        if (!Number.isFinite(minute)) {
-            return null;
-        }
-
-        return fmtHour(minute + deltaMinutes);
-    }
-
-    function getPunchCountHealth(count, { isToday = false } = {}) {
-
-        if (!count) {
-            return {
-                level: 'ok',
-                icon: '⬜',
-                short: 'sem batidas',
-                text: 'Sem batidas registradas'
-            };
-        }
-
-        if (count > CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
-            return {
-                level: 'neg',
-                icon: '⛔',
-                short: `${count} batidas`,
-                text: `${count} batidas: acima do limite de ${CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA}`
-            };
-        }
-
-        if (count === CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
-            return {
-                level: 'warn',
-                icon: '📝',
-                short: '6 batidas',
-                text: '6 batidas: permitido com justificativa (ex: consulta médica)'
-            };
-        }
-
-        if ((count % 2) !== 0) {
-            return {
-                level: isToday ? 'warn' : 'neg',
-                icon: '⚠️',
-                short: `${count} batidas`,
-                text: isToday
-                    ? `${count} batidas: jornada aberta, precisa fechar com quantidade par`
-                    : `${count} batidas: registro inconsistente (esperado número par)`
-            };
-        }
-
-        if (count <= CONFIG.MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA) {
-            return {
-                level: 'ok',
-                icon: '✅',
-                short: `${count} batidas`,
-                text: `${count} batidas: padrão válido`
-            };
-        }
-
-        return {
-            level: 'warn',
-            icon: '⚠️',
-            short: `${count} batidas`,
-            text: `${count} batidas: fora do padrão esperado`
-        };
-    }
-
-    function getIntrajornadaMaxViolations(batidas) {
-
-        const punches = Array.isArray(batidas) ? batidas : [];
-        const violations = [];
-
-        for (let i = 1; i + 1 < punches.length; i += 2) {
-
-            const saida = toMin(punches[i]);
-            const retorno = toMin(punches[i + 1]);
-
-            if (!Number.isFinite(saida) || !Number.isFinite(retorno)) {
-                continue;
-            }
-
-            const duration = retorno - saida;
-
-            if (!Number.isFinite(duration) || duration <= 0) {
-                continue;
-            }
-
-            if (duration > CONFIG.INTERVALO_MAXIMO) {
-                violations.push({
-                    start: punches[i],
-                    end: punches[i + 1],
-                    duration,
-                    excess: duration - CONFIG.INTERVALO_MAXIMO
-                });
-            }
-        }
-
-        return violations;
-    }
-
-    function getMaxShiftViolations(batidas) {
-
-        const punches = Array.isArray(batidas) ? batidas : [];
-        const violations = [];
-
-        for (let i = 0; i + 1 < punches.length; i += 2) {
-
-            const entrada = toMin(punches[i]);
-            const saida = toMin(punches[i + 1]);
-
-            if (!Number.isFinite(entrada) || !Number.isFinite(saida)) {
-                continue;
-            }
-
-            const duration = saida - entrada;
-
-            if (!Number.isFinite(duration) || duration <= 0) {
-                continue;
-            }
-
-            if (duration > CONFIG.MAX_HORAS_TURNO) {
-                violations.push({
-                    start: punches[i],
-                    end: punches[i + 1],
-                    duration,
-                    excess: duration - CONFIG.MAX_HORAS_TURNO
-                });
-            }
-        }
-
-        return violations;
-    }
-
-    function buildViolationDaysSummary(resumo) {
-
-        const byDate = new Map();
-
-        const ensureDay = (date) => {
-
-            const key = formatDateKey(date);
-
-            if (!byDate.has(key)) {
-                byDate.set(key, {
-                    key,
-                    date,
-                    notes: []
-                });
-            }
-
-            return byDate.get(key);
-        };
-
-        (resumo.intrajornadaMaxViolationDays || []).forEach(day => {
-
-            const entry = ensureDay(day.date);
-            const first = day.intervals?.[0];
-
-            if (!first) {
-                return;
-            }
-
-            entry.notes.push(`intervalo ${first.start}→${first.end} (${fmtMin(first.duration)})`);
-        });
-
-        (resumo.maxShiftViolationDays || []).forEach(day => {
-
-            const entry = ensureDay(day.date);
-            const first = day.shifts?.[0];
-
-            if (!first) {
-                return;
-            }
-
-            entry.notes.push(`turno ${first.start}→${first.end} (${fmtMin(first.duration)})`);
-        });
-
-        (resumo.maxDailyViolationDays || []).forEach(day => {
-
-            const entry = ensureDay(day.date);
-
-            entry.notes.push(`dia ${fmtMin(day.worked)}`);
-        });
-
-        return [...byDate.values()]
-            .sort((a, b) => a.date - b.date)
-            .map(x => `${formatDayMonth(x.date)}: ${x.notes.join(' · ')}`);
-    }
-
-    function getDayRuleViolations(day) {
-
-        if (!day || !Array.isArray(day.batidas)) {
-            return [];
-        }
-
-        const violations = [];
-        const intrajornada = getIntrajornadaMaxViolations(day.batidas);
-        const maxShift = getMaxShiftViolations(day.batidas);
-
-        if (intrajornada.length > 0) {
-            const first = intrajornada[0];
-            violations.push({
-                code: 'INT',
-                label: `Intervalo > ${fmtMin(CONFIG.INTERVALO_MAXIMO)}`,
-                detail: `${first.start}→${first.end} (${fmtMin(first.duration)})`
-            });
-        }
-
-        if (maxShift.length > 0) {
-            const first = maxShift[0];
-            violations.push({
-                code: 'TUR',
-                label: `Turno > ${fmtMin(CONFIG.MAX_HORAS_TURNO)}`,
-                detail: `${first.start}→${first.end} (${fmtMin(first.duration)})`
-            });
-        }
-
-        if (Number.isFinite(day.trabalhado) && day.trabalhado > CONFIG.MAX_HORAS_DIA) {
-            violations.push({
-                code: 'DIA',
-                label: `Dia > ${fmtMin(CONFIG.MAX_HORAS_DIA)}`,
-                detail: fmtMin(day.trabalhado)
-            });
-        }
-
-        return violations;
+    function formatDayMonth(date) {
+        if (!(date instanceof Date)) return '--/--';
+        return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
     }
 
     function sameWeek(a, b) {
-
-        const startOfWeek = d => {
-
+        const startOfWeek = (d) => {
             const date = new Date(d);
-
             const day = date.getDay();
-
-            const diff =
-                date.getDate() - day + (day === 0 ? -6 : 1);
-
+            const diff = date.getDate() - day + (day === 0 ? -6 : 1);
             return new Date(date.setDate(diff));
         };
-
-        const wa = startOfWeek(a);
-        const wb = startOfWeek(b);
-
-        return (
-            wa.getFullYear() === wb.getFullYear() &&
-            wa.getMonth() === wb.getMonth() &&
-            wa.getDate() === wb.getDate()
-        );
+        const wa = startOfWeek(a), wb = startOfWeek(b);
+        return wa.getFullYear() === wb.getFullYear() && wa.getMonth() === wb.getMonth() && wa.getDate() === wb.getDate();
     }
 
     function getWeekNumber(date) {
-
-        const d = new Date(
-            Date.UTC(
-                date.getFullYear(),
-                date.getMonth(),
-                date.getDate()
-            )
-        );
-
-        d.setUTCDate(
-            d.getUTCDate() + 4 - (d.getUTCDay() || 7)
-        );
-
-        const yearStart =
-            new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-
+        const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+        d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+        const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
         return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
     }
 
     function calcularTrabalhado(batidas) {
-
         let total = 0;
-
         for (let i = 0; i < batidas.length; i += 2) {
-
-            const entrada =
-                toMin(batidas[i]);
-
-            let saida;
-
-            if (batidas[i + 1]) {
-
-                saida =
-                    toMin(batidas[i + 1]);
-
-            } else {
-
-                saida = nowMin();
-            }
-
-            total += (saida - entrada);
+            const entrada = toMin(batidas[i]);
+            const saida = batidas[i + 1] ? toMin(batidas[i + 1]) : nowMin();
+            if (entrada !== null && saida !== null) total += (saida - entrada);
         }
-
         return total;
     }
 
-    // Saldo dentro de ±TOLERANCIA em dia com batidas é zerado nos totais
-    function saldoComTolerancia(dia) {
-
-        if (!dia.isBusinessDay) return 0;
-
-        const emTolerancia =
-            dia.batidas.length > 0 &&
-            Math.abs(dia.saldo) <= CONFIG.TOLERANCIA;
-
-        return emTolerancia ? 0 : dia.saldo;
+    function normalizePunchTime(value) {
+        const text = String(value || '').trim();
+        if (!text) return null;
+        const match = text.match(/(\d{1,2}):(\d{2})/);
+        if (!match) return null;
+        const hh = Number(match[1]), mm = Number(match[2]);
+        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+        return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
     }
 
+    function escapeHtml(value) {
+        return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function gmGet(key, fallback) {
+        if (typeof GM_getValue === 'function') return GM_getValue(key, fallback);
+        try { const raw = localStorage.getItem(key); return raw === null ? fallback : raw; } catch (_) { return fallback; }
+    }
+
+    function gmSet(key, value) {
+        if (typeof GM_setValue === 'function') { GM_setValue(key, value); return; }
+        try { localStorage.setItem(key, String(value)); } catch (_) { /* noop */ }
+    }
+
+    function parseJson(text, fallback) { try { return JSON.parse(text); } catch (_) { return fallback; } }
+
     function fmtCountdown(ms) {
-
-        const totalSec =
-            Math.max(0, Math.floor(ms / 1000));
-
-        const min =
-            Math.floor(totalSec / 60);
-
-        const sec =
-            totalSec % 60;
-
+        const totalSec = Math.max(0, Math.floor(ms / 1000));
+        const min = Math.floor(totalSec / 60), sec = totalSec % 60;
         return `${min}m ${String(sec).padStart(2, '0')}s`;
     }
 
+    function roundUpQuarterHour(m) { return m === null ? null : Math.ceil(m / 15) * 15; }
+
+    function fmtQuarterDecimal(m) {
+        if (m === null) return '--';
+        const decimal = roundUpQuarterHour(m) / 60;
+        return Number.isInteger(decimal) ? String(decimal) : decimal.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    }
+
     function minuteToDate(baseDate, minute) {
-
-        if (minute === null || minute === undefined) {
-            return null;
-        }
-
+        if (minute === null) return null;
         const date = new Date(baseDate || new Date());
         const n = ((Math.round(minute) % 1440) + 1440) % 1440;
-
         date.setHours(Math.floor(n / 60), n % 60, 0, 0);
-
         return date;
     }
 
     function fmtGoogleCalendarDate(date) {
-
-        const yyyy = date.getFullYear();
-        const mm = String(date.getMonth() + 1).padStart(2, '0');
-        const dd = String(date.getDate()).padStart(2, '0');
-        const hh = String(date.getHours()).padStart(2, '0');
-        const min = String(date.getMinutes()).padStart(2, '0');
-        const ss = String(date.getSeconds()).padStart(2, '0');
-
+        const yyyy = date.getFullYear(), mm = String(date.getMonth() + 1).padStart(2, '0'), dd = String(date.getDate()).padStart(2, '0');
+        const hh = String(date.getHours()).padStart(2, '0'), min = String(date.getMinutes()).padStart(2, '0'), ss = String(date.getSeconds()).padStart(2, '0');
         return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
     }
 
-    function normalizeGoogleCalendarUserPath(value) {
+    function isWeekend(date) { return date.getDay() === 0 || date.getDay() === 6; }
 
-        let raw = String(value || '').trim();
-
-        if (!raw) {
-            return '0';
+    function getWorkingDaysInMonth(year, month) {
+        let count = 0;
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        for (let d = 1; d <= daysInMonth; d++) {
+            if (!isWeekend(new Date(year, month, d))) count++;
         }
-
-        // Se é uma URL, extrai o valor do /u/
-        if (/^https?:\/\//i.test(raw)) {
-
-            try {
-
-                const url = new URL(raw);
-                const parts = url.pathname.split('/').filter(Boolean);
-                const i = parts.indexOf('u');
-
-                if (i >= 0 && parts[i + 1]) {
-                    raw = decodeURIComponent(parts[i + 1]);
-                }
-
-            } catch (_) {
-                // noop
-            }
-        }
-
-        // Remove prefixo /u/ se existir
-        raw = raw.replace(/^\/?u\//i, '').replace(/^\/+/, '');
-
-        // Extrai apenas o número (0, 1, 2, etc)
-        // O Google Calendar só aceita números no segmento /u/
-        const numberMatch = raw.match(/^(\d+)/);
-        
-        if (numberMatch) {
-            return numberMatch[1];
-        }
-
-        // Se não encontrou número, retorna padrão '0'
-        return '0';
-    }
-
-    function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date(), userPath = null }) {
-
-        if (startMinute === null || startMinute === undefined) {
-            return null;
-        }
-
-        const startDate = minuteToDate(baseDate, startMinute);
-
-        let endDate =
-            (endMinute === null || endMinute === undefined)
-                ? null
-                : minuteToDate(baseDate, endMinute);
-
-        if (!endDate || endDate <= startDate) {
-            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * 60 * 1000));
-        }
-
-        const normalizedPath = normalizeGoogleCalendarUserPath(userPath || CONFIG.GCAL_USER_PATH);
-        const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
-
-        const params = new URLSearchParams();
-        params.set('action', 'TEMPLATE');
-        params.set('text', fullTitle || 'Ahgora');
-        params.set('details', details || '');
-        params.set('ctz', CONFIG.GCAL_TIMEZONE || 'America/Sao_Paulo');
-        params.set('dates', `${fmtGoogleCalendarDate(startDate)}/${fmtGoogleCalendarDate(endDate)}`);
-
-        return `https://calendar.google.com/calendar/u/${encodeURIComponent(normalizedPath)}/r/eventedit?${params.toString()}`;
-    }
-
-    function buildOutlookCalendarUrl({ title, details, startMinute, endMinute, baseDate = new Date() }) {
-
-        if (startMinute === null || startMinute === undefined) {
-            return null;
-        }
-
-        const startDate = minuteToDate(baseDate, startMinute);
-
-        let endDate =
-            (endMinute === null || endMinute === undefined)
-                ? null
-                : minuteToDate(baseDate, endMinute);
-
-        if (!endDate || endDate <= startDate) {
-            endDate = new Date(startDate.getTime() + (CONFIG.GCAL_EVENT_DURATION_MIN * 60 * 1000));
-        }
-
-        const fullTitle = `${CONFIG.GCAL_TITLE_PREFIX || ''}${title || ''}`.trim();
-
-        const params = new URLSearchParams();
-        // Outlook Web usa deeplink de compose para abrir o formulário já preenchido.
-        params.set('path', '/calendar/action/compose');
-        params.set('rru', 'addevent');
-        params.set('subject', fullTitle || 'Ahgora');
-        params.set('body', details || '');
-        params.set('startdt', startDate.toISOString());
-        params.set('enddt', endDate.toISOString());
-
-        return `https://outlook.office.com/calendar/0/deeplink/compose?${params.toString()}`;
+        return count;
     }
 
     /* =========================================================
-       NOTIFICAÇÕES
+       SECAO 1: CONFIGURACOES E FEATURE FLAGS
     ========================================================= */
 
-    const _fired = new Set();
+    const CONFIG = {
+        VERSAO: '3.0.0',
+        BUILD_DATE: '2026-07-05',
+
+        CARGA_DIARIA: 8 * 60,
+        MAX_HORAS_DIA: 10 * 60,
+        MAX_HORAS_TURNO: 6 * 60,
+        QUATRO_HORAS: 4 * 60,
+        INTERVALO_MINIMO: 30,
+        INTERVALO_MAXIMO: (3 * 60) + 30,
+        MIN_TURNO_COM_INTERVALO: 2 * 60,
+        DESCANSO_MINIMO: 11 * 60,
+        DESCANSO_SEMANAL: 24 * 60,
+        TOLERANCIA: 10,
+        MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA: 4,
+        MAX_BATIDAS_DIA_COM_JUSTIFICATIVA: 6,
+        UPDATE_INTERVAL: 1000,
+        NOTIFICAR_ANTES: 5,
+        LOGGER_ALARM_LEAD_MINUTES: 5,
+        LOGGER_ALARM_REPEAT: 'once',
+        GCAL_USER_PATH: '0',
+        GCAL_TITLE_PREFIX: '🗓️ Ahgora - ',
+        GCAL_TIMEZONE: 'America/Sao_Paulo',
+        GCAL_EVENT_DURATION_MIN: 1,
+        AUTO_REFRESH_MINUTES: 15,
+        URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
+
+        FLAGS: {
+            F001_interjornada: true,
+            F002_intrajornada: true,
+            F003_alarme: true,
+            F004_ics: true,
+            F005_overlay: true,
+            F006_inconsistencias: true,
+            F007_justificativas: false,
+            F008_aprovacao: false,
+            F009_banco_horas: true,
+            F010_afastamentos: false,
+            F011_limite_legal: true,
+            F012_descanso_semanal: true,
+            F013_resumo_oficial: true,
+            F014_alarmes_avancados: true,
+            F015_webhook: false,
+            F016_exportacao_multi: true,
+            F017_tema: true,
+            F018_ajuda_confirmacao: false,
+            F019_historico_6: true,
+            F020_configuracoes: true,
+            F021_cards_configuraveis: true,
+            F022_projecao: true,
+            F023_backup_json: false,
+            F024_dashboard: false,
+            F025_modo_zen: true,
+            F026_diagnostico: true
+        }
+    };
+
+    /* =========================================================
+       SECAO 2: CONFIGURACOES CENTRALIZADAS (F-020)
+    ========================================================= */
+
+    const ConfigStore = {
+        KEY: '@ahgora-panel/config',
+
+        _default() {
+            return {
+                versao: '3.0',
+                tema: 'auto',
+                alarmeAtivo: true,
+                alarmes: {
+                    h6: { ativo: true, canal: { visual: true, som: true, desktop: false } },
+                    h8: { ativo: true, canal: { visual: true, som: false, desktop: false } },
+                    h10: { ativo: true, canal: { visual: true, som: true, desktop: true } },
+                    h12: { ativo: true, canal: { visual: true, som: true, desktop: true } },
+                    intervalo_inicio: { ativo: false, canal: { visual: true, som: false, desktop: false } },
+                    intervalo_fim: { ativo: true, canal: { visual: true, som: true, desktop: true } },
+                    interjornada: { ativo: true, canal: { visual: true, som: false, desktop: false } },
+                    dsr: { ativo: true, canal: { visual: true, som: false, desktop: false } }
+                },
+                cardsAtivos: ['interjornada', 'intrajornada', 'alarme', 'saldo', 'historico'],
+                modoZen: false,
+                modoMinimalista: false,
+                webhookUrl: '',
+                webhookEventos: ['limite_10h', 'ilegalidade_12h'],
+                gcalUserPath: '0',
+                logLevel: 'INFO',
+                flags: { ...CONFIG.FLAGS },
+                _migrated: false
+            };
+        },
+
+        get() {
+            const raw = parseJson(localStorage.getItem(this.KEY), null);
+            if (!raw) return this._default();
+            const defaults = this._default();
+            const merged = { ...defaults, ...raw };
+            if (!raw._migrated) {
+                this._migrateV2(merged);
+                merged._migrated = true;
+                this.set(merged);
+            }
+            return merged;
+        },
+
+        set(config) {
+            try { localStorage.setItem(this.KEY, JSON.stringify(config)); } catch (_) { /* noop */ }
+        },
+
+        patch(patch) {
+            const current = this.get();
+            const merged = { ...current, ...patch };
+            if (patch.alarmes) merged.alarmes = { ...current.alarmes, ...patch.alarmes };
+            if (patch.cardsAtivos) merged.cardsAtivos = [...patch.cardsAtivos];
+            this.set(merged);
+            return merged;
+        },
+
+        _migrateV2(config) {
+            const alarmConfig = parseJson(gmGet('ahgora_logger_alarm_v1', '{}'), {});
+            if (alarmConfig.enabled !== undefined) config.alarmeAtivo = Boolean(alarmConfig.enabled);
+        },
+
+        isCardAtivo(cardId) {
+            const cfg = this.get();
+            if (cfg.modoZen) return false;
+            if (cfg.modoMinimalista) return false;
+            return cfg.cardsAtivos.includes(cardId);
+        },
+
+        isFeatureEnabled(flagId) {
+            const cfg = this.get();
+            return cfg.flags[flagId] !== false;
+        }
+    };
+
+    /* =========================================================
+       SECAO 3: SISTEMA DE TEMA (F-017)
+    ========================================================= */
+
+    const Tema = {
+        _temaAtual: 'dark',
+
+        detectar() {
+            const cfg = ConfigStore.get();
+            if (cfg.tema === 'auto') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            return cfg.tema;
+        },
+
+        atualizar() {
+            this._temaAtual = this.detectar();
+            const root = document.documentElement;
+            if (this._temaAtual === 'dark') {
+                root.style.setProperty('--ahg-bg', '#0f0f1e');
+                root.style.setProperty('--ahg-bg-card', '#16162a');
+                root.style.setProperty('--ahg-text', '#dde');
+                root.style.setProperty('--ahg-text-label', '#7880aa');
+                root.style.setProperty('--ahg-border', '#252545');
+                root.style.setProperty('--ahg-primary', '#7a6cff');
+                root.style.setProperty('--ahg-shadow', 'rgba(0,0,0,.5)');
+            } else {
+                root.style.setProperty('--ahg-bg', '#ffffff');
+                root.style.setProperty('--ahg-bg-card', '#f8f9fa');
+                root.style.setProperty('--ahg-text', '#1f2937');
+                root.style.setProperty('--ahg-text-label', '#6b7280');
+                root.style.setProperty('--ahg-border', '#e5e7eb');
+                root.style.setProperty('--ahg-primary', '#6366f1');
+                root.style.setProperty('--ahg-shadow', 'rgba(0,0,0,.15)');
+            }
+        },
+
+        get() { return this._temaAtual; }
+    };
+
+    /* =========================================================
+       SECAO 4: LOGGER ESTRUTURADO
+    ========================================================= */
+
+    const Logger = {
+        LEVELS: { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3, TRACE: 4 },
+
+        config() { return ConfigStore.get().logLevel || 'INFO'; },
+
+        log(level, module, message, data) {
+            const currentLevel = this.LEVELS[this.config()] || 2;
+            if (this.LEVELS[level] > currentLevel) return;
+            const prefix = `[AHGORA:${level}][${module}]`;
+            const timestamp = new Date().toISOString();
+            if (data) console.log(`${timestamp} ${prefix} ${message}`, data);
+            else console.log(`${timestamp} ${prefix} ${message}`);
+            _logBuffer.push({ timestamp, level, module, message });
+            if (_logBuffer.length > 200) _logBuffer.shift();
+            if (level === 'ERROR') this._persistError({ timestamp, module, message, data });
+        },
+
+        error(m, msg, d) { this.log('ERROR', m, msg, d); },
+        warn(m, msg, d) { this.log('WARN', m, msg, d); },
+        info(m, msg, d) { this.log('INFO', m, msg, d); },
+        debug(m, msg, d) { this.log('DEBUG', m, msg, d); },
+        trace(m, msg, d) { this.log('TRACE', m, msg, d); },
+
+        _persistError(err) {
+            try {
+                const logs = parseJson(localStorage.getItem('@ahgora-panel/error-log') || '[]', []);
+                logs.push(err); if (logs.length > 100) logs.shift();
+                localStorage.setItem('@ahgora-panel/error-log', JSON.stringify(logs));
+            } catch (_) { }
+        },
+
+        exportLogs() {
+            return {
+                errors: parseJson(localStorage.getItem('@ahgora-panel/error-log') || '[]', []),
+                recent: [..._logBuffer], config: ConfigStore.get(),
+                version: CONFIG.VERSAO, userAgent: navigator.userAgent, url: window.location.href
+            };
+        },
+
+        registerModule(name, status, message, stack) {
+            const existing = _moduleStatus.find(m => m.nome === name);
+            if (existing) { existing.status = status; existing.mensagem = message; existing.stack = stack; }
+            else _moduleStatus.push({ nome: name, status, mensagem: message, stack });
+        }
+    };
+
+    /* =========================================================
+       SECAO 5: NOTIFICACOES
+    ========================================================= */
+
+    const _notifFired = new Set();
 
     async function pedirNotif() {
-
-        if (
-            'Notification' in window &&
-            Notification.permission === 'default'
-        ) {
-
-            await Notification
-                .requestPermission()
-                .catch(() => { });
+        if ('Notification' in window && Notification.permission === 'default') {
+            await Notification.requestPermission().catch(() => { });
         }
     }
 
-    function notif(id, title, body, urgente = false) {
-
-        if (_fired.has(id)) {
-            return;
-        }
-
-        _fired.add(id);
-
-        if (
-            !('Notification' in window) ||
-            Notification.permission !== 'granted'
-        ) {
-            return;
-        }
-
-        try {
-
-            new Notification(title, {
-                body,
-                requireInteraction: urgente,
-                tag: id
-            });
-
-        } catch (e) {
-
-            console.error(e);
-        }
-    }
-
-    function checarNotifs(resumo) {
-
-        const now = nowMin();
-
-        const A = CONFIG.NOTIFICAR_ANTES;
-
-        const chk = (h, id, tit, msg, urgente) => {
-
-            if (h === null) return;
-
-            const f = h - now;
-
-            if (f >= A - 1 && f <= A + 2) {
-
-                notif(
-                    `${id}-av`,
-                    `⏰ ${tit}`,
-                    `${msg}\nFaltam ~${A}min`,
-                    urgente
-                );
-            }
-
-            if (f >= -1 && f <= 1) {
-
-                notif(
-                    `${id}-ok`,
-                    `✅ ${tit}`,
-                    msg,
-                    urgente
-                );
-            }
-        };
-
-        chk(
-            resumo.h6,
-            '6h',
-            '6h atingidas',
-            'Você completou o mínimo de 6h.',
-            true
-        );
-
-        chk(
-            resumo.h8,
-            '8h',
-            'Meta diária',
-            'Você completou as 8h.',
-            false
-        );
-
-        chk(
-            resumo.h10,
-            '10h',
-            'Limite diário',
-            '⚠ Limite diário atingido.',
-            true
-        );
-
-        chk(
-            resumo.saidaIdeal,
-            'ideal',
-            'Saída ideal',
-            'Saldo semanal compensado.',
-            false
-        );
+    function notif(id, title, body, urgente) {
+        if (_notifFired.has(id)) return;
+        _notifFired.add(id);
+        if (!('Notification' in window) || Notification.permission !== 'granted') return;
+        try { new Notification(title, { body, requireInteraction: urgente, tag: id }); } catch (e) { }
     }
 
     /* =========================================================
-       EXTRAÇÃO DOM
+       SECAO 6: SHARED TRUTH (comunicacao mirror <-> batida)
     ========================================================= */
 
-    function extrairDados() {
-
-        const dias =
-            [...document.querySelectorAll('.v-calendar-weekly__day')];
-
-        const hoje = new Date();
-
-        const resultado = [];
-
-        dias.forEach(day => {
-
-            if (day.classList.contains('v-outside')) {
-                return;
-            }
-
-            const label =
-                day.querySelector('.v-calendar-weekly__day-label');
-
-            if (!label) return;
-
-            const numeroDia =
-                Number(label.textContent.trim());
-
-            if (!numeroDia) return;
-
-            const isToday =
-                day.classList.contains('v-present');
-
-            const isFuture =
-                day.classList.contains('v-future');
-
-            const isHoliday =
-                [...day.querySelectorAll('.material-icons')]
-                    .some(x =>
-                        x.textContent.trim() === 'star'
-                    );
-
-            const data =
-                new Date(
-                    hoje.getFullYear(),
-                    hoje.getMonth(),
-                    numeroDia
-                );
-
-            const weekDay =
-                data.getDay();
-
-            const batidas =
-                [...day.querySelectorAll('.batida')]
-                    .filter(x =>
-                        !x.classList.contains('prevista')
-                    )
-                    .map(x =>
-                        x.textContent.trim()
-                    );
-
-            const possuiBatidas = batidas.length > 0;
-
-            const isBusinessDay =
-                (
-                    weekDay !== 0 &&
-                    weekDay !== 6 &&
-                    !isHoliday
-                )
-                || possuiBatidas;
-
-            const dateKey = formatDateKey(data);
-            const localOverrides = !isFuture ? getLocalDayPunchOverrides(dateKey) : null;
-            const displayBatidas = localOverrides || batidas;
-
-            const trabalhado =
-                displayBatidas.length > 0
-                    ? calcularTrabalhado(displayBatidas)
-                    : 0;
-
-            const saldo =
-                isBusinessDay
-                    ? trabalhado - CONFIG.CARGA_DIARIA
-                    : 0;
-
-            let totalDiv =
-                day.querySelector('.ahg-day-total');
-
-            let roundedDiv =
-                day.querySelector('.ahg-day-total-rounded');
-
-            let violationDiv =
-                day.querySelector('.ahg-day-violations');
-
-            const violations = getDayRuleViolations({ batidas: displayBatidas, trabalhado });
-
-            if (trabalhado > 0) {
-
-                if (!totalDiv) {
-
-                    totalDiv = document.createElement('div');
-                    totalDiv.className = 'ahg-day-total';
-                    day.appendChild(totalDiv);
-                }
-
-                totalDiv.textContent = renderMinutes(trabalhado);
-
-                if (!roundedDiv) {
-
-                    roundedDiv = document.createElement('div');
-                    roundedDiv.className = 'ahg-day-total-rounded';
-                    day.appendChild(roundedDiv);
-                }
-
-                const trabalhadoArredondado =
-                    roundUpQuarterHour(trabalhado);
-
-                roundedDiv.textContent = `${renderMinutes(trabalhadoArredondado)} (${renderText(fmtQuarterDecimal(trabalhado))})`;
-
-                if (violations.length > 0) {
-
-                    if (!violationDiv) {
-
-                        violationDiv = document.createElement('div');
-                        violationDiv.className = 'ahg-day-violations';
-                        day.appendChild(violationDiv);
-                    }
-
-                    const hasCritical = violations.some(x => x.code === 'TUR' || x.code === 'DIA');
-                    violationDiv.className = `ahg-day-violations ${hasCritical ? 'is-critical' : 'is-warning'}`;
-                    violationDiv.textContent = `⚠ ${violations.map(x => x.code).join('/')}`;
-                    violationDiv.title = violations.map(x => `${x.label}: ${x.detail}`).join(' | ');
-
-                } else if (violationDiv) {
-                    violationDiv.remove();
-                }
-
-            } else {
-
-                if (totalDiv) {
-                    totalDiv.remove();
-                }
-
-                if (roundedDiv) {
-                    roundedDiv.remove();
-                }
-
-                if (violationDiv) {
-                    violationDiv.remove();
-                }
-            }
-
-            // Pencil edit button — shown on hover for all non-future business days
-            if (!isFuture && isBusinessDay) {
-
-                let editBtn = day.querySelector('.ahg-day-edit-btn');
-
-                if (!editBtn) {
-                    editBtn = document.createElement('button');
-                    editBtn.className = 'ahg-day-edit-btn';
-                    day.appendChild(editBtn);
-                }
-
-                editBtn.textContent = '✏';
-                editBtn.title = localOverrides
-                    ? `Batidas ajustadas (${displayBatidas.length}) — clique para editar`
-                    : `Editar batidas (${batidas.length} no mirror)`;
-                editBtn.classList.toggle('has-overrides', Boolean(localOverrides));
-
-                editBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    openPunchEditor({
-                        dateKey,
-                        dateLabel: formatDayMonth(data),
-                        mirrorPunches: [...batidas]
-                    }, e.target);
-                };
-
-            } else {
-
-                const editBtn = day.querySelector('.ahg-day-edit-btn');
-                if (editBtn) editBtn.remove();
-            }
-
-            resultado.push({
-                data,
-                dateKey,
-                isToday,
-                isFuture,
-                isHoliday,
-                isBusinessDay,
-                batidas,
-                trabalhado,
-                saldo,
-                violations
-            });
-        });
-
-        return resultado;
-    }
-
-    /* =========================================================
-       RESUMO
-    ========================================================= */
-
-    function calcularResumo() {
-
-        const dias =
-            extrairDados();
-
-        const hoje =
-            dias.find(x => x.isToday);
-
-        if (!hoje) {
-            return null;
-        }
-
-        const saldoSemana = dias.filter(x =>
-            sameWeek(x.data, new Date()) &&
-            !x.isFuture &&
-            !x.isToday &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + saldoComTolerancia(b), 0);
-
-        const totalSemana = dias.filter(x =>
-            sameWeek(x.data, new Date()) &&
-            !x.isFuture &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + b.trabalhado, 0);
-
-        gmSetValue(
-            'ahgora_mirror_today',
-            JSON.stringify(hoje.batidas || [])
-        );
-
-        gmSetValue(
-            'ahgora_mirror_today_ref',
-            formatDateKey(hoje.data)
-        );
-
-        gmSetValue(
-            'ahgora_saldo_semana_anterior',
-            String(saldoSemana)
-        );
-
-        const saldoMes =
-            dias
-                .filter(x =>
-                    x.data.getMonth() === new Date().getMonth() &&
-                    !x.isFuture &&
-                    x.isBusinessDay
-                )
-                .reduce((a, b) => a + saldoComTolerancia(b), 0);
-
-        const totalMes = dias.filter(x =>
-            x.data.getMonth() === new Date().getMonth() &&
-            !x.isFuture &&
-            x.isBusinessDay
-        )
-            .reduce((a, b) => a + b.trabalhado, 0);
-
-        const diasRestantesMes =
-            dias.filter(x =>
-                x.isFuture &&
-                x.isBusinessDay
-            ).length;
-
-        const diasRegistrados =
-            dias.filter(x =>
-                x.batidas.length > 0 &&
-                !x.isFuture
-            ).length;
-
-        const entrada =
-            hoje.batidas[0]
-                ? toMin(hoje.batidas[0])
-                : null;
-
-        const ultimaBatida =
-            hoje.batidas.length >= 4
-                ? toMin(hoje.batidas[3])
-                : null;
-
-        let h6 = null;
-        let h8 = null;
-        let h10 = null;
-
-        if (hoje.batidas.length >= 3) {
-
-            // SEGUNDO TURNO
-
-            const inicioTurno2 =
-                toMin(hoje.batidas[2]);
-
-            h6 =
-                inicioTurno2 +
-                CONFIG.MAX_HORAS_TURNO;
-
-        } else if (hoje.batidas.length >= 1) {
-
-            // PRIMEIRO TURNO
-
-            const inicioTurno1 =
-                toMin(hoje.batidas[0]);
-
-            h6 =
-                inicioTurno1 +
-                CONFIG.MAX_HORAS_TURNO;
-        }
-
-        if (hoje.batidas.length >= 2) {
-
-            const entrada1 =
-                toMin(hoje.batidas[0]);
-
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            const trabalhadoTurno1 =
-                saida1 - entrada1;
-
-            const inicioTurno2 =
-                hoje.batidas[2]
-                    ? toMin(hoje.batidas[2])
-                    : nowMin();
-
-            h8 =
-                inicioTurno2 +
-                (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
-
-            h10 =
-                inicioTurno2 +
-                (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
-
-        } else if (entrada !== null) {
-
-            h8 =
-                entrada + CONFIG.CARGA_DIARIA;
-
-            h10 =
-                entrada + CONFIG.MAX_HORAS_DIA;
-        }
-
-        const baseRetorno11h =
-            h10 !== null
-                ? h10
-                : ultimaBatida;
-
-        const retorno11h =
-            baseRetorno11h !== null
-                ? baseRetorno11h + CONFIG.DESCANSO_MINIMO
-                : null;
-
-        const saidaIdeal =
-            h8 !== null
-                ? h8 - saldoSemana
-                : null;
-
-        let turno1 = null;
-        let turno2 = null;
-
-        /* =====================================================
-           PRIMEIRO TURNO
-        ===================================================== */
-
-        if (hoje.batidas.length >= 1) {
-
-            const e1 =
-                toMin(hoje.batidas[0]);
-
-            const s1 =
-                hoje.batidas[1]
-                    ? toMin(hoje.batidas[1])
-                    : nowMin();
-
-            turno1 = {
-
-                entrada: hoje.batidas[0],
-
-                saida: hoje.batidas[1] || 'agora',
-
-                aberto: !hoje.batidas[1],
-
-                total: s1 - e1,
-
-                limite: CONFIG.MAX_HORAS_TURNO,
-
-                classe:
-                    (
-                        (s1 - e1) >= CONFIG.MAX_HORAS_TURNO ||
-                        hoje.trabalhado >= CONFIG.MAX_HORAS_DIA
-                    )
-                        ? 'danger'
-                        : (
-                            (s1 - e1) >= (CONFIG.MAX_HORAS_TURNO - 30) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)
-                        )
-                            ? 'warn'
-                            : 'infos',
-            };
-        }
-
-        /* =====================================================
-           SEGUNDO TURNO
-        ===================================================== */
-
-        if (hoje.batidas.length >= 3) {
-
-            const e2 =
-                toMin(hoje.batidas[2]);
-
-            const s2 =
-                hoje.batidas[3]
-                    ? toMin(hoje.batidas[3])
-                    : nowMin();
-
-            turno2 = {
-
-                entrada: hoje.batidas[2],
-
-                saida: hoje.batidas[3] || 'agora',
-
-                aberto: !hoje.batidas[3],
-
-                total: s2 - e2,
-
-                limite: CONFIG.MAX_HORAS_TURNO,
-
-                classe:
-                    (
-                        (s2 - e2) >= CONFIG.MAX_HORAS_TURNO ||
-                        hoje.trabalhado >= CONFIG.MAX_HORAS_DIA
-                    )
-                        ? 'danger'
-
-                        : (
-                            (s2 - e2) >= (CONFIG.MAX_HORAS_TURNO - 30) ||
-                            hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)
-                        )
-                            ? 'warn'
-                            : 'infos',
-            };
-        }
-
-        const status =
-            (() => {
-
-                const qtd =
-                    hoje.batidas.length;
-
-                if (qtd === 0) {
-                    return '🛬 Não iniciado';
-                }
-
-                if (qtd === 1) {
-                    return '🥇 Primeiro turno';
-                }
-
-                if (qtd === 2) {
-                    return '⏸ Intervalo';
-                }
-
-                if (qtd === 3) {
-                    return '🥈 Segundo turno';
-                }
-
-                if (qtd >= 4) {
-                    return '🛫 Encerrado';
-                }
-
-                return '--';
-            })();
-
-        let retornoMinimo = null;
-        let retornoMaximo = null;
-
-        if (hoje.batidas.length === 2) {
-
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            retornoMinimo =
-                saida1 + CONFIG.INTERVALO_MINIMO;
-
-            retornoMaximo =
-                saida1 + CONFIG.INTERVALO_MAXIMO;
-        }
-
-        let alerta = null;
-
-        if (hoje.batidas.length >= 2) {
-
-            const entrada1 =
-                toMin(hoje.batidas[0]);
-
-            const saida1 =
-                toMin(hoje.batidas[1]);
-
-            const turno1 =
-                saida1 - entrada1;
-
-            if (turno1 > CONFIG.MAX_HORAS_TURNO) {
-
-                alerta =
-                    '⚠️ Primeiro turno excedeu 6h';
-            }
-        }
-
-        if (hoje.trabalhado > CONFIG.MAX_HORAS_DIA) {
-
-            alerta =
-                '⚠️ Limite diário excedido';
-        }
-
-        const hojePunchHealth = getPunchCountHealth(
-            hoje.batidas.length,
-            { isToday: true }
-        );
-
-        const punchAnomalyDays = dias
-            .filter(x => !x.isFuture && x.batidas.length > 0)
-            .map(x => ({
-                date: x.data,
-                count: x.batidas.length,
-                health: getPunchCountHealth(x.batidas.length, { isToday: x.isToday })
-            }))
-            .filter(x => x.health.level !== 'ok');
-
-        const intrajornadaMaxViolationDays = dias
-            .filter(x => !x.isFuture && x.batidas.length >= 3)
-            .map(x => ({
-                date: x.data,
-                intervals: getIntrajornadaMaxViolations(x.batidas)
-            }))
-            .filter(x => x.intervals.length > 0);
-
-        const maxShiftViolationDays = dias
-            .filter(x => !x.isFuture && x.batidas.length >= 2)
-            .map(x => ({
-                date: x.data,
-                shifts: getMaxShiftViolations(x.batidas)
-            }))
-            .filter(x => x.shifts.length > 0);
-
-        const maxDailyViolationDays = dias
-            .filter(x => !x.isFuture && x.batidas.length > 0 && x.trabalhado > CONFIG.MAX_HORAS_DIA)
-            .map(x => ({
-                date: x.data,
-                worked: x.trabalhado,
-                excess: x.trabalhado - CONFIG.MAX_HORAS_DIA
-            }));
-
-        const trabalhado = hoje.trabalhado;
-
-        persistSharedTruth({
-            hoje,
-            saldoSemana,
-            totalSemana,
-            saldoMes,
-            totalMes,
-            dias,
-            diasRestantesMes,
-            diasRegistrados,
-            entrada,
-            turno1,
-            turno2,
-            retorno11h,
-            h6,
-            h8,
-            h10,
-            saidaIdeal,
-            status,
-            retornoMinimo,
-            retornoMaximo,
-            trabalhado,
-            alerta,
-            hojePunchHealth,
-            punchAnomalyDays,
-            intrajornadaMaxViolationDays,
-            maxShiftViolationDays,
-            maxDailyViolationDays
-        });
-
-        return {
-            hoje,
-            saldoSemana,
-            totalSemana,
-            saldoMes,
-            totalMes,
-            dias,
-            diasRestantesMes,
-            diasRegistrados,
-            entrada,
-            turno1,
-            turno2,
-            retorno11h,
-            h6,
-            h8,
-            h10,
-            saidaIdeal,
-            status,
-            retornoMinimo,
-            retornoMaximo,
-            trabalhado,
-            alerta,
-            hojePunchHealth,
-            punchAnomalyDays,
-            intrajornadaMaxViolationDays,
-            maxShiftViolationDays,
-            maxDailyViolationDays
-        };
-    }
-
-    function buildPunchGuidance(punches, saldoSemanaAnt = 0) {
-
-        const lista = (punches || []).filter(Boolean);
-
-        const guidance = {
-            punches: lista,
-            stage: 'entry',
-            title: 'Entrar',
-            summary: 'Aguardando primeira batida.',
-            minTime: null,
-            maxTime: null,
-            idealTime: null,
-            firstTurn4h: null,
-            firstTurn6h: null,
-            secondTurn4h: null,
-            secondTurn6h: null,
-            day8h: null,
-            day10h: null,
-            day8WithIntervalMin: null,
-            day8WithIntervalMax: null,
-            day10WithIntervalMin: null,
-            day10WithIntervalMax: null,
-            intervalMin: null,
-            intervalMax: null,
-            firstExitMin: null,
-            firstExitMax: null,
-            secondEntryMin: null,
-            secondEntryMax: null,
-            firstExitMinPause30: null,
-            firstExitMinPause210: null,
-            firstExitMaxPause30: null,
-            firstExitMaxPause210: null,
-            copyTarget: null,
-            copyLabel: null
-        };
-
-        if (lista.length >= 1) {
-
-            const firstStart = toMin(lista[0]);
-
-            if (firstStart !== null) {
-
-                guidance.firstTurn4h = firstStart + CONFIG.QUATRO_HORAS;
-                guidance.firstTurn6h = firstStart + CONFIG.MAX_HORAS_TURNO;
-                guidance.day8h = firstStart + CONFIG.CARGA_DIARIA;
-                guidance.day10h = firstStart + CONFIG.MAX_HORAS_DIA;
-                guidance.day8WithIntervalMin = firstStart + CONFIG.CARGA_DIARIA + CONFIG.INTERVALO_MINIMO;
-                guidance.day8WithIntervalMax = firstStart + CONFIG.CARGA_DIARIA + CONFIG.INTERVALO_MAXIMO;
-                guidance.day10WithIntervalMin = firstStart + CONFIG.MAX_HORAS_DIA + CONFIG.INTERVALO_MINIMO;
-                guidance.day10WithIntervalMax = firstStart + CONFIG.MAX_HORAS_DIA + CONFIG.INTERVALO_MAXIMO;
-            }
-        }
-
-        if (lista.length >= 3) {
-
-            const secondStart = toMin(lista[2]);
-
-            if (secondStart !== null) {
-
-                guidance.secondTurn4h = secondStart + CONFIG.QUATRO_HORAS;
-                guidance.secondTurn6h = secondStart + CONFIG.MAX_HORAS_TURNO;
-                guidance.day8h = secondStart + (CONFIG.CARGA_DIARIA - (toMin(lista[1]) - toMin(lista[0])));
-                guidance.day10h = secondStart + (CONFIG.MAX_HORAS_DIA - (toMin(lista[1]) - toMin(lista[0])));
-            }
-        }
-
-        if (lista.length === 1) {
-            guidance.stage = 'interval';
-            guidance.title = 'Intervalo';
-
-            guidance.minTime = guidance.firstTurn6h;
-
-            const firstStart = toMin(lista[0]);
-
-            if (firstStart !== null) {
-
-                guidance.firstExitMin = firstStart + CONFIG.MIN_TURNO_COM_INTERVALO;
-                guidance.firstExitMax = firstStart + CONFIG.MAX_HORAS_TURNO;
-                guidance.secondEntryMin = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
-                guidance.secondEntryMax = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
-                guidance.firstExitMinPause30 = guidance.firstExitMin + CONFIG.INTERVALO_MINIMO;
-                guidance.firstExitMinPause210 = guidance.firstExitMin + CONFIG.INTERVALO_MAXIMO;
-                guidance.firstExitMaxPause30 = guidance.firstExitMax + CONFIG.INTERVALO_MINIMO;
-                guidance.firstExitMaxPause210 = guidance.firstExitMax + CONFIG.INTERVALO_MAXIMO;
-
-                guidance.summary = `Saída mín. 2h: ${renderClock(guidance.firstExitMin)} · máx. 6h: ${renderClock(guidance.firstExitMax)} · retorno +30m/+210m`;
-            } else {
-                guidance.summary = `Saída entre 2h e 6h · pausa entre ${CONFIG.INTERVALO_MINIMO}m e ${CONFIG.INTERVALO_MAXIMO}m`;
-            }
-
-            return guidance;
-        }
-
-        if (lista.length === 2) {
-
-            const saida1 = toMin(lista[1]);
-            const minRet = saida1 + CONFIG.INTERVALO_MINIMO;
-            const maxRet = saida1 + CONFIG.INTERVALO_MAXIMO;
-
-            guidance.stage = 'return';
-            guidance.title = 'Retorno';
-            guidance.summary = `Janela permitida: ${renderClock(minRet)} até ${renderClock(maxRet)}`;
-            guidance.minTime = minRet;
-            guidance.maxTime = maxRet;
-            guidance.intervalMin = minRet;
-            guidance.intervalMax = maxRet;
-            const workedTurn1 = saida1 - toMin(lista[0]);
-            const remaining8h = CONFIG.CARGA_DIARIA - workedTurn1;
-            const remaining10h = CONFIG.MAX_HORAS_DIA - workedTurn1;
-
-            guidance.day8WithIntervalMin = minRet + remaining8h;
-            guidance.day8WithIntervalMax = maxRet + remaining8h;
-            guidance.day10WithIntervalMin = minRet + remaining10h;
-            guidance.day10WithIntervalMax = maxRet + remaining10h;
-            guidance.copyTarget = fmtHour(minRet);
-            guidance.copyLabel = 'Copiar retorno mínimo';
-            return guidance;
-        }
-
-        if (lista.length === 3) {
-
-            const entrada1 = toMin(lista[0]);
-            const saida1 = toMin(lista[1]);
-            const entrada2 = toMin(lista[2]);
-            const workedTurn1 = saida1 - entrada1;
-            const h8 = entrada2 + (CONFIG.CARGA_DIARIA - workedTurn1);
-
-            guidance.stage = 'exit';
-            guidance.title = 'Saída';
-            guidance.summary = `8h: ${renderClock(h8)}`;
-            guidance.minTime = h8;
-            guidance.day8h = h8;
-            guidance.day10h = entrada2 + (CONFIG.MAX_HORAS_DIA - workedTurn1);
-            guidance.day8WithIntervalMin = h8;
-            guidance.day8WithIntervalMax = h8;
-            guidance.day10WithIntervalMin = guidance.day10h;
-            guidance.day10WithIntervalMax = guidance.day10h;
-            guidance.idealTime = h8 - saldoSemanaAnt;
-            guidance.copyTarget = fmtHour(guidance.idealTime);
-            guidance.copyLabel = 'Copiar saída ideal';
-            return guidance;
-        }
-
-        if (lista.length === 5) {
-
-            const e3 = toMin(lista[4]);
-
-            guidance.stage = 'extra-turn';
-            guidance.title = 'Ajuste com justificativa';
-            guidance.summary = '5 batidas registradas. Feche com a 6ª batida e registre justificativa.';
-
-            if (e3 !== null) {
-                guidance.minTime = e3 + CONFIG.QUATRO_HORAS;
-                guidance.maxTime = e3 + CONFIG.MAX_HORAS_TURNO;
-            }
-
-            return guidance;
-        }
-
-        if (lista.length >= 4) {
-
-            guidance.stage = 'done';
-            guidance.title = 'Jornada Encerrada';
-            guidance.summary = 'Nenhuma próxima batida pendente.';
-            return guidance;
-        }
-
-        return guidance;
-    }
-
-    const SHARED_TRUTH_KEY = 'ahgora_shared_truth_v1';
+    const SHARED_TRUTH_KEY = 'ahgora_shared_truth_v3';
 
     function persistSharedTruth(resumo) {
-
-        if (!resumo || !resumo.hoje) {
-            return;
-        }
-
-        const shared = {
-            source: 'mirror',
-            updatedAt: Date.now(),
-            todayKey: formatDateKey(resumo.hoje.data || new Date()),
-            todayPunches: [...(resumo.hoje.batidas || [])],
-            workedToday: resumo.hoje.trabalhado,
-            dayBalance: resumo.hoje.saldo,
-            weekWorked: resumo.totalSemana,
-            weekBalance: resumo.saldoSemana,
-            monthWorked: resumo.totalMes,
-            monthBalance: resumo.saldoMes,
-            nextWindow: buildPunchGuidance(resumo.hoje.batidas || [], resumo.saldoSemana),
-            status: resumo.status,
-            alert: resumo.alerta,
-            returnMin: resumo.retornoMinimo,
-            returnMax: resumo.retornoMaximo,
-            h6: resumo.h6,
-            h8: resumo.h8,
-            h10: resumo.h10,
-            idealExit: resumo.saidaIdeal,
+        if (!resumo || !resumo.hoje) return;
+        gmSet(SHARED_TRUTH_KEY, JSON.stringify({
+            source: 'mirror', updatedAt: Date.now(), todayKey: formatDateKey(resumo.hoje.data || new Date()),
+            todayPunches: [...(resumo.hoje.batidas || [])], workedToday: resumo.hoje.trabalhado,
+            dayBalance: resumo.hoje.saldo, weekWorked: resumo.totalSemana, weekBalance: resumo.saldoSemana,
+            monthWorked: resumo.totalMes, monthBalance: resumo.saldoMes, status: resumo.status,
+            alert: resumo.alerta, returnMin: resumo.retornoMinimo, returnMax: resumo.retornoMaximo,
+            h6: resumo.h6, h8: resumo.h8, h10: resumo.h10, idealExit: resumo.saidaIdeal,
             lastPunch: resumo.hoje.batidas?.[resumo.hoje.batidas.length - 1] || null,
             hojePunchHealth: resumo.hojePunchHealth || null,
             punchAnomalyDays: resumo.punchAnomalyDays || [],
             intrajornadaMaxViolationDays: resumo.intrajornadaMaxViolationDays || [],
             maxShiftViolationDays: resumo.maxShiftViolationDays || [],
-            maxDailyViolationDays: resumo.maxDailyViolationDays || []
-        };
-
-        gmSetValue(SHARED_TRUTH_KEY, JSON.stringify(shared));
+            maxDailyViolationDays: resumo.maxDailyViolationDays || [],
+            bancoHoras: resumo.bancoHoras || null,
+            diasConsecutivos: resumo.diasConsecutivos || 0,
+            dsrStatus: resumo.dsrStatus || null
+        }));
     }
 
-    function readSharedTruth() {
-
-        return parseJson(
-            gmGetValue(SHARED_TRUTH_KEY, '{}'),
-            {}
-        );
-    }
+    function readSharedTruth() { return parseJson(gmGet(SHARED_TRUTH_KEY, '{}'), {}); }
 
     /* =========================================================
-       CSS
+       SECAO 7: CSS DINAMICO COM TEMA
     ========================================================= */
 
     function injectCSS() {
+        if (document.getElementById('ahg-css-v6')) return;
+        Tema.atualizar();
 
-        if (document.getElementById('ahg-css-v5')) {
-            return;
-        }
+        const t = Tema.get();
+        const isDark = t === 'dark';
 
-        const style =
-            document.createElement('style');
-
-        style.id = 'ahg-css-v5';
-
+        const style = $.el('style', { id: 'ahg-css-v6' });
         style.textContent = `
-        /* Design System Minimalista */
         :root {
-            --primary: #7a6cff;
-            --text-main: #dde;
-            --text-label: #7880aa;
-            --bg-card: #0f0f1e;
-            --bg-input: #16162a;
-            --border: #252545;
-            --radius: 6px;
-            --radius-lg: 12px;
+            --ahg-primary: ${isDark ? '#7a6cff' : '#6366f1'};
+            --ahg-bg: ${isDark ? '#0f0f1e' : '#ffffff'};
+            --ahg-bg-card: ${isDark ? '#16162a' : '#f8f9fa'};
+            --ahg-text: ${isDark ? '#dde' : '#1f2937'};
+            --ahg-text-label: ${isDark ? '#7880aa' : '#6b7280'};
+            --ahg-border: ${isDark ? '#252545' : '#e5e7eb'};
+            --ahg-shadow: ${isDark ? 'rgba(0,0,0,.5)' : 'rgba(0,0,0,.15)'};
+            --ahg-radius: 8px;
+            --ahg-radius-lg: 12px;
         }
 
-        #ahg-fab{
-            position:fixed;
-            bottom:20px;
-            right:20px;
-            left: auto;
-            z-index:99999;
-            width:44px;
-            height:44px;
-            border-radius:50%;
-            background:var(--primary);
-            border:none;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            font-size:20px;
-            cursor:pointer;
-            color:white;
-            box-shadow:0 4px 12px rgba(0,0,0,.3);
-            opacity:.85;
+        #ahg-fab, #ahg-batida-fab {
+            position:fixed; bottom:20px; right:20px; z-index:99999;
+            width:52px; height:52px; border-radius:50%;
+            background:var(--ahg-primary); border:none;
+            display:flex; align-items:center; justify-content:center;
+            font-size:22px; cursor:pointer; color:#fff;
+            box-shadow:0 4px 14px var(--ahg-shadow);
+            opacity:.9; transition:opacity .2s, transform .2s;
+        }
+        #ahg-fab:hover, #ahg-batida-fab:hover { opacity:1; transform:scale(1.05); }
+
+        #ahg-panel {
+            position:fixed; bottom:20px; right:20px; z-index:99999;
+            background:var(--ahg-bg); border:1px solid var(--ahg-border);
+            border-radius:var(--ahg-radius-lg); min-width:280px; max-width:320px;
+            font-family:'Segoe UI',system-ui,sans-serif; color:var(--ahg-text);
+            box-shadow:0 8px 32px var(--ahg-shadow);
+            max-height:calc(100vh - 40px); overflow:hidden;
+            display:flex; flex-direction:column;
+            transition:background .2s, border-color .2s;
         }
 
-        #ahg-fab:hover{
-            opacity:1;
-            box-shadow:0 6px 16px rgba(0,0,0,.4);
+        #ahg-batida-panel {
+            position:fixed; bottom:84px; right:20px; z-index:99998;
+            background:var(--ahg-bg); border:1px solid var(--ahg-border);
+            border-radius:var(--ahg-radius-lg); min-width:300px; max-width:360px;
+            font-family:'Segoe UI',system-ui,sans-serif; color:var(--ahg-text);
+            box-shadow:0 8px 32px var(--ahg-shadow);
+            max-height:calc(100vh - 120px); overflow-y:auto;
+            display:none; flex-direction:column;
+            transition:background .2s, border-color .2s;
         }
+        #ahg-batida-panel.visible { display:flex; }
 
-        #ahg-panel{
-            position:fixed;
-            bottom:20px;
-            right:20px;
-            left: auto;
-            z-index:99999;
-            background:var(--bg-card);
-            border:1px solid var(--border);
-            border-radius:var(--radius-lg);
-            min-width:260px;
-            max-width:290px;
-            font-family:'Segoe UI',sans-serif;
-            color:var(--text-main);
-            box-shadow:0 4px 16px rgba(0,0,0,.5);
-            max-height: calc(100vh - 40px);
-            overflow: hidden;
-            display:flex;
-            flex-direction:column;
+        .a-tit {
+            background:transparent; color:var(--ahg-text-label); font-weight:700;
+            font-size:11px; letter-spacing:.5px; text-transform:uppercase;
+            padding:12px 14px 10px; border-radius:var(--ahg-radius-lg) var(--ahg-radius-lg) 0 0;
+            display:flex; align-items:center; gap:6px; cursor:grab;
+            border-bottom:1px solid var(--ahg-border); user-select:none;
         }
+        .a-x { margin-left:auto; cursor:pointer; opacity:.6; font-size:16px; transition:.15s; }
+        .a-x:hover { opacity:1; }
+        .a-body { padding:10px 14px; display:flex; flex-direction:column; gap:4px; overflow-y:auto; flex:1; }
+        .a-body::-webkit-scrollbar { width:5px; }
+        .a-body::-webkit-scrollbar-thumb { background:var(--ahg-primary); border-radius:3px; }
+        .a-row {
+            display:flex; justify-content:space-between; align-items:center;
+            padding:7px 10px; border-radius:var(--ahg-radius); background:transparent;
+            border-left:3px solid var(--ahg-border); transition:.1s; gap:8px;
+        }
+        .a-row.ok { border-color:#22c55e; background:rgba(34,197,94,.06); }
+        .a-row.warn { border-color:#f59e0b; background:rgba(245,158,11,.06); }
+        .a-row.danger { border-color:#ef4444; background:rgba(239,68,68,.08); }
+        .a-row.infos { border-color:var(--ahg-primary); background:color-mix(in srgb, var(--ahg-primary) 5%, transparent); }
+        .a-row.neu { border-color:var(--ahg-border); background:rgba(128,128,128,.04); }
+        .a-lbl { color:var(--ahg-text-label); font-size:10px; font-weight:600; white-space:nowrap; }
+        .a-val { font-weight:700; font-size:12px; text-align:right; }
+        .a-val.pos { color:#22c55e; } .a-val.neg { color:#ef4444; }
+        .a-val.warn { color:#f59e0b; } .a-val.neu { color:var(--ahg-primary); }
+        .a-val small { font-size:10px; font-weight:600; color:var(--ahg-text-label); display:block; }
+        .a-div { border:none; border-top:1px solid var(--ahg-border); margin:4px 0; }
+        .a-sec { font-size:9px; letter-spacing:.5px; text-transform:uppercase; color:var(--ahg-text-label); padding:6px 0 2px; font-weight:700; opacity:.7; }
+        .a-foot { font-size:9px; font-weight:600; color:var(--ahg-text-label); text-align:right; padding:6px 14px; opacity:.6; }
+        .a-row.clickable { cursor:pointer; }
+        .a-row.clickable:hover { background:rgba(128,128,128,.05); }
 
-        .ahg-hide-times .ahg-day-total,
-        .ahg-hide-times .ahg-day-total-rounded{
-            opacity:.3;
-            filter: blur(1px);
+        .ahg-btn {
+            border:1px solid var(--ahg-primary); background:color-mix(in srgb, var(--ahg-primary) 12%, transparent);
+            color:var(--ahg-text); border-radius:var(--ahg-radius); padding:6px 12px;
+            cursor:pointer; font-size:11px; font-weight:700; transition:.15s; white-space:nowrap;
         }
+        .ahg-btn:hover { background:color-mix(in srgb, var(--ahg-primary) 18%, transparent); }
+        .ahg-btn-sm { padding:4px 8px; font-size:10px; }
+        .ahg-btn-danger { border-color:rgba(239,68,68,.45); background:rgba(239,68,68,.1); color:#ef4444; }
+        .ahg-btn-success { border-color:rgba(34,197,94,.45); background:rgba(34,197,94,.1); color:#22c55e; }
 
-        .v-calendar-weekly__day{
-            position:relative !important;
+        .ahg-toggle { display:flex; align-items:center; gap:8px; cursor:pointer; font-size:11px; }
+        .ahg-toggle input { display:none; }
+        .ahg-toggle-track {
+            width:36px; height:20px; background:var(--ahg-border); border-radius:10px;
+            position:relative; transition:.2s; flex-shrink:0;
         }
+        .ahg-toggle input:checked + .ahg-toggle-track { background:var(--ahg-primary); }
+        .ahg-toggle-thumb {
+            width:16px; height:16px; background:#fff; border-radius:50%;
+            position:absolute; top:2px; left:2px; transition:.2s;
+        }
+        .ahg-toggle input:checked + .ahg-toggle-track .ahg-toggle-thumb { left:18px; }
 
-        .ahg-day-total{
-            position:absolute;
-            top:4px;
-            left:50%;
-            transform:translateX(-50%);
-            background:var(--primary);
-            color:#fff;
-            padding:2px 6px;
-            border-radius:var(--radius);
-            font-size:10px;
-            font-weight:700;
-            box-shadow:0 2px 4px rgba(0,0,0,.2);
-            display:block;
-            z-index:10;
-            pointer-events:none;
-            white-space:nowrap;
+        .ahg-card {
+            background:var(--ahg-bg-card); border:1px solid var(--ahg-border);
+            border-radius:var(--ahg-radius); padding:10px 12px; margin-bottom:6px;
+            transition:background .2s, border-color .2s;
         }
+        .ahg-card-tit { font-size:10px; font-weight:700; color:var(--ahg-text-label); text-transform:uppercase; letter-spacing:.4px; margin-bottom:6px; display:flex; align-items:center; gap:4px; }
+        .ahg-card-val { font-size:22px; font-weight:800; line-height:1; }
+        .ahg-card-val.ok { color:#22c55e; } .ahg-card-val.warn { color:#f59e0b; } .ahg-card-val.danger { color:#ef4444; }
+        .ahg-card-sub { font-size:10px; color:var(--ahg-text-label); margin-top:4px; }
 
-        .ahg-day-total-rounded{
-            position:absolute;
-            top:20px;
-            left:50%;
-            transform:translateX(-50%);
-            background:rgba(17,24,39,.95);
-            color:#e5ecff;
-            padding:1px 5px;
-            border-radius:var(--radius);
-            font-size:9px;
-            font-weight:600;
-            box-shadow:0 2px 4px rgba(0,0,0,.15);
-            display:block;
-            z-index:10;
-            pointer-events:none;
-            white-space:nowrap;
+        #ahg-diag-modal {
+            position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:1000000;
+            display:flex; align-items:center; justify-content:center; font-family:'Segoe UI',system-ui,sans-serif;
         }
+        #ahg-diag-box {
+            background:var(--ahg-bg); border:1px solid var(--ahg-border); border-radius:var(--ahg-radius-lg);
+            width:min(640px, 95vw); max-height:85vh; overflow-y:auto; padding:20px;
+            color:var(--ahg-text); box-shadow:0 16px 48px var(--ahg-shadow);
+        }
+        .ahg-diag-sec { margin:12px 0; }
+        .ahg-diag-sec h3 { font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--ahg-text-label); margin:0 0 8px; }
+        .ahg-diag-mod { display:flex; align-items:center; gap:8px; padding:4px 0; font-size:12px; }
+        .ahg-diag-mod.ok { color:#22c55e; } .ahg-diag-mod.erro { color:#ef4444; } .ahg-diag-mod.na { color:var(--ahg-text-label); }
+        .ahg-diag-json { background:var(--ahg-bg-card); border:1px solid var(--ahg-border); border-radius:var(--ahg-radius); padding:12px; font-family:'SF Mono',monospace; font-size:11px; max-height:200px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; }
 
-        .ahg-day-violations{
-            position:absolute;
-            top:auto;
-            bottom:20px;
-            right:4px;
-            left:auto;
-            transform:none;
-            background:rgba(255,207,102,.22);
-            color:#6a4200;
-            border:1px solid rgba(255,176,32,.9);
-            padding:1px 5px;
-            border-radius:var(--radius);
-            font-size:9px;
-            font-weight:700;
-            letter-spacing:.15px;
-            text-shadow:none;
-            box-shadow:0 2px 5px rgba(0,0,0,.28);
-            display:block;
-            z-index:13;
-            pointer-events:auto;
-            white-space:nowrap;
-            cursor:help;
-            max-width:calc(100% - 8px);
-            overflow:hidden;
-            text-overflow:ellipsis;
-        }
+        .ahg-eye-fab { position:fixed; right:20px; width:40px; height:40px; border-radius:50%; z-index:99998; border:1px solid var(--ahg-border); background:var(--ahg-bg); color:var(--ahg-text); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:16px; box-shadow:0 4px 12px var(--ahg-shadow); opacity:.7; transition:.15s; }
+        .ahg-eye-fab:hover { opacity:1; }
+        #ahg-eye-fab-mirror { bottom:68px; } #ahg-eye-fab-logger { bottom:84px; }
 
-        .ahg-day-violations.is-critical{
-            background:rgba(255,90,95,.22);
-            color:#b40018;
-            border-color:rgba(255,106,112,.95);
+        .ahg-cal-overlay {
+            position:absolute; top:4px; right:4px; z-index:15;
+            font-size:10px; font-weight:700; padding:1px 5px;
+            border-radius:4px; pointer-events:none; white-space:nowrap;
         }
+        .ahg-cal-overlay.inconsistencia { background:rgba(239,68,68,.85); color:#fff; }
+        .ahg-cal-overlay.justificativa-pendente { background:rgba(107,114,128,.85); color:#fff; }
+        .ahg-cal-overlay.justificativa-aprovada { background:rgba(34,197,94,.85); color:#fff; }
+        .ahg-cal-overlay.justificativa-reprovada { background:rgba(239,68,68,.85); color:#fff; }
+        .ahg-cal-overlay.dsr-alerta { background:rgba(245,158,11,.85); color:#000; }
 
-        .ahg-day-violations.is-warning{
-            background:rgba(255,207,102,.22);
-            color:#6a4200;
-            border-color:rgba(255,176,32,.9);
-        }
+        .ahg-config-grid { display:grid; gap:8px; }
+        .ahg-config-item { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+        .ahg-config-label { font-size:11px; color:var(--ahg-text-label); }
+        .ahg-config-select { background:var(--ahg-bg-card); color:var(--ahg-text); border:1px solid var(--ahg-border); border-radius:var(--ahg-radius); padding:4px 8px; font-size:11px; font-family:inherit; }
+        .ahg-config-select:focus { outline:none; border-color:var(--ahg-primary); }
 
-        .ahg-privacy-btn{
-            margin-left:auto;
-            display:inline-flex;
-            align-items:center;
-            justify-content:center;
-            width:28px;
-            height:28px;
-            border-radius:50%;
-            border:1px solid var(--border);
-            background:transparent;
-            color:var(--text-main);
-            cursor:pointer;
-            opacity:.6;
-            font-size:16px;
-            user-select:none;
-            line-height:1;
-            flex:0 0 auto;
-            transition:.15s;
-        }
+        .ahg-privacy-btn { margin-left:auto; display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; border:1px solid var(--ahg-border); background:transparent; color:var(--ahg-text); cursor:pointer; opacity:.6; font-size:16px; transition:.15s; }
+        .ahg-privacy-btn:hover { opacity:1; background:color-mix(in srgb, var(--ahg-primary) 8%, transparent); }
 
-        .ahg-privacy-btn:hover{
-            opacity:1;
-            background:rgba(122,108,255,.08);
-        }
+        .ahg-hide-times .ahg-day-total, .ahg-hide-times .ahg-day-total-rounded { opacity:.3; filter:blur(1px); }
 
-        .ahg-privacy-btn.is-active,
-        .ahg-eye-fab.is-active{
-            opacity:1;
-            border-color:var(--primary);
-            background:rgba(122,108,255,.12);
-        }
+        .v-calendar-weekly__day { position:relative !important; }
+        .ahg-day-total { position:absolute; top:4px; left:50%; transform:translateX(-50%); background:var(--ahg-primary); color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; box-shadow:0 2px 4px rgba(0,0,0,.2); display:block; z-index:10; pointer-events:none; white-space:nowrap; }
+        .ahg-day-total-rounded { position:absolute; top:20px; left:50%; transform:translateX(-50%); background:var(--ahg-bg-card); color:var(--ahg-text); padding:1px 5px; border-radius:4px; font-size:9px; font-weight:600; box-shadow:0 2px 4px rgba(0,0,0,.15); display:block; z-index:10; pointer-events:none; white-space:nowrap; }
+        .ahg-day-violations { position:absolute; top:auto; bottom:20px; right:4px; left:auto; transform:none; background:rgba(245,158,11,.22); color:#92400e; border:1px solid rgba(245,158,11,.9); padding:1px 5px; border-radius:4px; font-size:9px; font-weight:700; z-index:13; pointer-events:auto; white-space:nowrap; cursor:help; max-width:calc(100% - 8px); overflow:hidden; text-overflow:ellipsis; }
+        .ahg-day-violations.is-critical { background:rgba(239,68,68,.22); color:#991b1b; border-color:rgba(239,68,68,.9); }
+        .ahg-day-violations.is-warning { background:rgba(245,158,11,.22); color:#92400e; border-color:rgba(245,158,11,.9); }
 
-        .ahg-eye-fab{
-            position:fixed;
-            right:20px;
-            width:40px;
-            height:40px;
-            border-radius:50%;
-            z-index:99998;
-            border:1px solid var(--border);
-            background:var(--bg-card);
-            color:var(--text-main);
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            cursor:pointer;
-            font-size:16px;
-            box-shadow:0 4px 12px rgba(0,0,0,.3);
-            user-select:none;
-            opacity:.7;
-            transition:.15s;
-        }
+        @keyframes ahg-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
+        .ahg-alarm-active { animation: ahg-pulse 1s ease-in-out infinite; border-color:#ef4444 !important; background:rgba(239,68,68,.1) !important; }
 
-        .ahg-eye-fab:hover{
-            opacity:1;
-            box-shadow:0 6px 16px rgba(0,0,0,.4);
-        }
+        .ahg-zen .ahg-card:not(.ahg-card-active) { display:none; }
+        .ahg-zen .ahg-card.ahg-card-active { display:block; animation: ahg-fadein .3s ease; }
+        @keyframes ahg-fadein { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
 
-        #ahg-eye-fab-mirror{
-            bottom:68px;
-        }
-
-        #ahg-eye-fab-logger{
-            bottom:20px;
-        }
-
-        .a-tit{
-            background:transparent;
-            color:var(--text-label);
-            font-weight:700;
-            font-size:11px;
-            letter-spacing:.5px;
-            text-transform:uppercase;
-            padding:10px 12px 8px;
-            border-radius:var(--radius-lg) var(--radius-lg) 0 0;
-            display:flex;
-            align-items:center;
-            gap:6px;
-            cursor:grab;
-            border-bottom:1px solid var(--border);
-        }
-
-        .a-x{
-            margin-left:auto;
-            cursor:pointer;
-            opacity:.6;
-            font-size:16px;
-            transition:.15s;
-        }
-
-        .a-x:hover{
-            opacity:1;
-        }
-
-        .a-body{
-            padding:10px 12px;
-            display:flex;
-            flex-direction:column;
-            gap:4px;
-            overflow-y:auto;
-            overflow-x:hidden;
-            flex:1;
-        }
-
-        .a-row{
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            padding:6px 8px;
-            border-radius:var(--radius);
-            background:transparent;
-            border-left:2px solid var(--border);
-            transition:.1s;
-        }
-
-        .a-row.ok{
-            border-color:#3ddc84;
-            background:rgba(61,220,132,.06);
-        }
-
-        .a-row.warn{
-            border-color:orange;
-            background:rgba(255,165,0,.06);
-        }
-
-        .a-row.danger{
-            border-color:#ff4444;
-            background:rgba(255,60,60,.06);
-        }
-
-        .a-row.infos{
-            border-color:var(--primary);
-            background:rgba(122,108,255,.05);
-        }
-
-        .a-row.neu{
-            border-color:var(--primary);
-            background:rgba(122,108,255,.04);
-        }
-
-        .a-lbl{
-            color:var(--text-label);
-            font-size:10px;
-            font-weight:600;
-        }
-
-        .a-val{
-            font-weight:700;
-            font-size:12px;
-            text-align:right;
-        }
-
-        .a-val.pos{color:#3ddc84;}
-        .a-val.neg{color:#ff6b6b;}
-        .a-val.warn{color:#ffa500;}
-        .a-val.neu{color:var(--primary);}
-
-        .a-val small{
-            font-size:10px;
-            font-weight:600;
-            color:var(--text-label);
-            display:block;
-        }
-
-        .a-div{
-            border:none;
-            border-top:1px solid var(--border);
-            margin:4px 0;
-        }
-
-        .a-sec{
-            font-size:9px;
-            letter-spacing:.5px;
-            text-transform:uppercase;
-            color:var(--text-label);
-            padding:6px 0 2px;
-            font-weight:700;
-            opacity:.7;
-        }
-
-        .a-foot{
-            font-size:9px;
-            font-weight:600;
-            color:var(--text-label);
-            text-align:right;
-            padding:6px 12px;
-            opacity:.6;
-        }
-
-        .a-row.clickable{
-            cursor:pointer;
-            transition:.15s;
-        }
-
-        .a-row.clickable:hover{
-            background:rgba(255,255,255,.05);
-        }
-
-        .a-body::-webkit-scrollbar,
-        #ahg-details *::-webkit-scrollbar{
-            width:6px;
-        }
-
-        .a-body::-webkit-scrollbar-thumb,
-        #ahg-details *::-webkit-scrollbar-thumb{
-            background:var(--primary);
-            border-radius:3px;
-            opacity:.3;
-        }
-
-        .a-body::-webkit-scrollbar-track,
-        #ahg-details *::-webkit-scrollbar-track{
-            background:transparent;
-        }
-
-        /* Formulários e Botões */
-        .form-label{
-            font-size:10px;
-            opacity:.78;
-            font-weight:600;
-        }
-
-        .form-input,
-        .form-select{
-            font-size:10px;
-            background:var(--bg-input);
-            color:var(--text-main);
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-            padding:4px 6px;
-            font-family:inherit;
-            transition:.1s;
-        }
-
-        .form-input:focus,
-        .form-select:focus{
-            outline:none;
-            border-color:var(--primary);
-            box-shadow:0 0 0 2px rgba(122,108,255,.1);
-        }
-
-        .btn{
-            border:1px solid var(--primary);
-            background:rgba(122,108,255,.12);
-            color:var(--text-main);
-            border-radius:var(--radius);
-            padding:6px 10px;
-            cursor:pointer;
-            font-size:10px;
-            font-weight:700;
-            transition:.15s;
-            white-space:nowrap;
-        }
-
-        .btn:hover{
-            background:rgba(122,108,255,.18);
-        }
-
-        .btn-danger{
-            border-color:rgba(255,77,77,.45);
-            background:rgba(255,77,77,.12);
-            color:#ffd2d2;
-        }
-
-        .btn-danger:hover{
-            background:rgba(255,77,77,.18);
-        }
-
-        .btn-primary{
-            border-color:var(--primary);
-            background:rgba(122,108,255,.12);
-            color:var(--text-main);
-        }
-
-        .btn-primary:hover{
-            background:rgba(122,108,255,.18);
-        }
-
-        .btn-success{
-            border-color:rgba(61,220,132,.45);
-            background:rgba(61,220,132,.12);
-            color:#c8ffe2;
-        }
-
-        .btn-success:hover{
-            background:rgba(61,220,132,.18);
-        }
-
-        .btn-icon{
-            font-size:12px;
-            padding:2px 5px;
-            border:1px solid var(--primary);
-            background:rgba(122,108,255,.12);
-            color:var(--text-main);
-            border-radius:3px;
-            text-decoration:none;
-            line-height:1;
-            transition:.1s;
-        }
-
-        .btn-icon:hover{
-            background:rgba(122,108,255,.18);
-        }
-
-        .toggle-btn{
-            border:1px solid var(--primary);
-            background:rgba(122,108,255,.12);
-            color:var(--text-main);
-            border-radius:var(--radius);
-            padding:4px 7px;
-            cursor:pointer;
-            font-size:10px;
-            font-weight:700;
-            white-space:nowrap;
-            transition:.15s;
-        }
-
-        .toggle-btn:hover{
-            background:rgba(122,108,255,.18);
-        }
-
-        /* ── Day punch-edit button ── */
-        .ahg-day-edit-btn{
-            position:absolute;
-            top:35px;
-            left:50%;
-            transform:translateX(-50%);
-            background:transparent;
-            border:1px solid transparent;
-            color:var(--primary);
-            font-size:9px;
-            cursor:pointer;
-            z-index:12;
-            opacity:0;
-            padding:1px 4px;
-            line-height:1;
-            border-radius:3px;
-            transition:opacity .15s;
-            pointer-events:auto;
-            white-space:nowrap;
-        }
-        .v-calendar-weekly__day:hover .ahg-day-edit-btn{
-            opacity:.5;
-        }
-        .ahg-day-edit-btn:hover{
-            opacity:1!important;
-            background:rgba(122,108,255,.15);
-            border-color:rgba(122,108,255,.4);
-        }
-        .ahg-day-edit-btn.has-overrides{
-            opacity:.85;
-            color:#ffd08a;
-            border-color:rgba(255,165,0,.35);
-            background:rgba(255,165,0,.08);
-        }
-
-        /* ── Punch Editor Panel ── */
-        #ahg-punch-editor{
-            position:fixed;
-            z-index:999997;
-            background:var(--bg-card);
-            border:1px solid var(--border);
-            border-radius:var(--radius-lg);
-            min-width:230px;
-            max-width:270px;
-            font-family:'Segoe UI',sans-serif;
-            color:var(--text-main);
-            box-shadow:0 8px 24px rgba(0,0,0,.6);
-        }
-        #ahg-punch-editor.is-pinned{
-            border-color:var(--primary);
-            box-shadow:0 8px 24px rgba(0,0,0,.6),0 0 0 2px rgba(122,108,255,.2);
-        }
-        .ahg-pe-hdr{
-            color:var(--text-label);
-            font-weight:700;
-            font-size:11px;
-            letter-spacing:.5px;
-            text-transform:uppercase;
-            padding:8px 10px;
-            border-radius:var(--radius-lg) var(--radius-lg) 0 0;
-            display:flex;
-            align-items:center;
-            gap:5px;
-            cursor:grab;
-            border-bottom:1px solid var(--border);
-            user-select:none;
-        }
-        .ahg-pe-body{
-            padding:8px 10px;
-            display:flex;
-            flex-direction:column;
-            gap:4px;
-        }
-        .ahg-pe-punch{
-            display:flex;
-            align-items:center;
-            gap:4px;
-            font-size:12px;
-            padding:2px 0;
-        }
-        .ahg-pe-punch-time{
-            font-weight:700;
-            min-width:36px;
-        }
-        .ahg-pe-punch-src{
-            font-size:9px;
-            opacity:.45;
-            flex:1;
-        }
-        .ahg-pe-totals{
-            display:grid;
-            grid-template-columns:1fr 1fr;
-            gap:4px;
-            padding:6px 0 0;
-            border-top:1px solid var(--border);
-            margin-top:2px;
-        }
-        .ahg-pe-total-item{
-            text-align:center;
-            padding:4px;
-            border-radius:var(--radius);
-            background:rgba(255,255,255,.03);
-        }
-        .ahg-pe-total-lbl{
-            font-size:9px;
-            color:var(--text-label);
-            text-transform:uppercase;
-            letter-spacing:.3px;
-        }
-        .ahg-pe-total-val{
-            font-size:13px;
-            font-weight:700;
-            margin-top:1px;
-        }
-        .ahg-pe-add-row{
-            display:flex;
-            gap:4px;
-            margin-top:2px;
-        }
-        .ahg-pe-add-row input{
-            flex:1;
-            font-size:12px;
-            background:var(--bg-input);
-            color:var(--text-main);
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-            padding:4px 6px;
-            font-family:inherit;
-            min-width:0;
-        }
-        .ahg-pe-add-row input:focus{
-            outline:none;
-            border-color:var(--primary);
-            box-shadow:0 0 0 2px rgba(122,108,255,.1);
+        @media (max-width:480px) {
+            #ahg-panel, #ahg-batida-panel { min-width:auto; width:calc(100vw - 40px); right:10px; left:10px; }
+            #ahg-fab, #ahg-batida-fab { right:10px; bottom:10px; }
         }
         `;
 
@@ -2405,3572 +658,919 @@
     }
 
     /* =========================================================
-       ESTRUTURA
+       SECAO 8: PRIVACIDADE (compartilhado)
     ========================================================= */
 
-    function criarEstrutura() {
+    const PRIVACY_KEY = 'ahgora_privacy_hide_times';
+    function isPrivacyHidden() { return gmGet(PRIVACY_KEY, 'false') === 'true'; }
+    function togglePrivacyHidden() { const next = !isPrivacyHidden(); gmSet(PRIVACY_KEY, next ? 'true' : 'false'); return next; }
+    function privacyIcon() { return isPrivacyHidden() ? '🙈' : '👁'; }
+    function renderMin(m) { return isPrivacyHidden() ? '••:••' : fmtMin(m); }
+    function renderClock(m) { return isPrivacyHidden() ? '••:••' : fmtHour(m); }
+    function renderText(t) { return isPrivacyHidden() ? '••:••' : escapeHtml(String(t)); }
 
-        if (document.getElementById('ahg-panel')) {
-            return;
+    /* =========================================================
+       SECAO 9: CALCULOS DE JORNADA
+    ========================================================= */
+
+    function calcularResumo() {
+        const dias = extrairDadosDOM();
+        const hoje = dias.find(x => x.isToday);
+        if (!hoje) return null;
+
+        const saldoSemana = dias.filter(x => sameWeek(x.data, new Date()) && !x.isFuture && !x.isToday && x.isBusinessDay)
+            .reduce((a, b) => a + saldoComTolerancia(b), 0);
+        const totalSemana = dias.filter(x => sameWeek(x.data, new Date()) && !x.isFuture && x.isBusinessDay)
+            .reduce((a, b) => a + b.trabalhado, 0);
+
+        gmSet('ahgora_mirror_today', JSON.stringify(hoje.batidas || []));
+        gmSet('ahgora_mirror_today_ref', formatDateKey(hoje.data));
+        gmSet('ahgora_saldo_semana_anterior', String(saldoSemana));
+
+        const saldoMes = dias.filter(x => x.data.getMonth() === new Date().getMonth() && !x.isFuture && x.isBusinessDay)
+            .reduce((a, b) => a + saldoComTolerancia(b), 0);
+        const totalMes = dias.filter(x => x.data.getMonth() === new Date().getMonth() && !x.isFuture && x.isBusinessDay)
+            .reduce((a, b) => a + b.trabalhado, 0);
+        const diasRestantesMes = dias.filter(x => x.isFuture && x.isBusinessDay).length;
+        const diasRegistrados = dias.filter(x => x.batidas.length > 0 && !x.isFuture).length;
+
+        const entrada = hoje.batidas[0] ? toMin(hoje.batidas[0]) : null;
+
+        let h6 = null, h8 = null, h10 = null;
+        if (hoje.batidas.length >= 3) {
+            h6 = toMin(hoje.batidas[2]) + CONFIG.MAX_HORAS_TURNO;
+        } else if (hoje.batidas.length >= 1) {
+            h6 = toMin(hoje.batidas[0]) + CONFIG.MAX_HORAS_TURNO;
         }
 
-        createPrivacyFab('ahg-eye-fab-mirror', '80px', () => render());
+        if (hoje.batidas.length >= 2) {
+            const entrada1 = toMin(hoje.batidas[0]), saida1 = toMin(hoje.batidas[1]);
+            const trabalhadoTurno1 = saida1 - entrada1;
+            const inicioTurno2 = hoje.batidas[2] ? toMin(hoje.batidas[2]) : nowMin();
+            h8 = inicioTurno2 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
+            h10 = inicioTurno2 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
+        } else if (entrada !== null) {
+            h8 = entrada + CONFIG.CARGA_DIARIA;
+            h10 = entrada + CONFIG.MAX_HORAS_DIA;
+        }
 
-        const fab =
-            document.createElement('div');
+        const retorno11h = h10 !== null ? h10 + CONFIG.DESCANSO_MINIMO : null;
+        const saidaIdeal = h8 !== null ? h8 - saldoSemana : null;
 
-        fab.id = 'ahg-fab';
+        let turno1 = null, turno2 = null;
+        if (hoje.batidas.length >= 1) {
+            const e1 = toMin(hoje.batidas[0]), s1 = hoje.batidas[1] ? toMin(hoje.batidas[1]) : nowMin();
+            turno1 = { entrada: hoje.batidas[0], saida: hoje.batidas[1] || 'agora', aberto: !hoje.batidas[1], total: s1 - e1, limite: CONFIG.MAX_HORAS_TURNO, classe: ((s1 - e1) >= CONFIG.MAX_HORAS_TURNO || hoje.trabalhado >= CONFIG.MAX_HORAS_DIA) ? 'danger' : ((s1 - e1) >= (CONFIG.MAX_HORAS_TURNO - 30) || hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)) ? 'warn' : 'infos' };
+        }
+        if (hoje.batidas.length >= 3) {
+            const e2 = toMin(hoje.batidas[2]), s2 = hoje.batidas[3] ? toMin(hoje.batidas[3]) : nowMin();
+            turno2 = { entrada: hoje.batidas[2], saida: hoje.batidas[3] || 'agora', aberto: !hoje.batidas[3], total: s2 - e2, limite: CONFIG.MAX_HORAS_TURNO, classe: ((s2 - e2) >= CONFIG.MAX_HORAS_TURNO || hoje.trabalhado >= CONFIG.MAX_HORAS_DIA) ? 'danger' : ((s2 - e2) >= (CONFIG.MAX_HORAS_TURNO - 30) || hoje.trabalhado >= (CONFIG.MAX_HORAS_DIA - 30)) ? 'warn' : 'infos' };
+        }
 
-        fab.innerHTML = '⏱';
+        const status = (() => { const q = hoje.batidas.length; if (q === 0) return '🛬 Não iniciado'; if (q === 1) return '🥇 Primeiro turno'; if (q === 2) return '⏸ Intervalo'; if (q === 3) return '🥈 Segundo turno'; if (q >= 4) return '🛫 Encerrado'; return '--'; })();
 
-        fab.onclick = () => {
+        let retornoMinimo = null, retornoMaximo = null;
+        if (hoje.batidas.length === 2) {
+            const saida1 = toMin(hoje.batidas[1]);
+            retornoMinimo = saida1 + CONFIG.INTERVALO_MINIMO;
+            retornoMaximo = saida1 + CONFIG.INTERVALO_MAXIMO;
+        }
 
-            document.getElementById('ahg-panel')
-                .style.display = '';
+        let alerta = null;
+        if (hoje.batidas.length >= 2) {
+            const entrada1 = toMin(hoje.batidas[0]), saida1 = toMin(hoje.batidas[1]);
+            if ((saida1 - entrada1) > CONFIG.MAX_HORAS_TURNO) alerta = '⚠️ Primeiro turno excedeu 6h';
+        }
+        if (hoje.trabalhado > CONFIG.MAX_HORAS_DIA) alerta = '⚠️ Limite diário excedido';
 
-            fab.style.display = 'none';
+        const hojePunchHealth = getPunchCountHealth(hoje.batidas.length, { isToday: true });
+        const punchAnomalyDays = dias.filter(x => !x.isFuture && x.batidas.length > 0).map(x => ({ date: x.data, count: x.batidas.length, health: getPunchCountHealth(x.batidas.length, { isToday: x.isToday }) })).filter(x => x.health.level !== 'ok');
+        const intrajornadaMaxViolationDays = dias.filter(x => !x.isFuture && x.batidas.length >= 3).map(x => ({ date: x.data, intervals: getIntrajornadaMaxViolations(x.batidas) })).filter(x => x.intervals.length > 0);
+        const maxShiftViolationDays = dias.filter(x => !x.isFuture && x.batidas.length >= 2).map(x => ({ date: x.data, shifts: getMaxShiftViolations(x.batidas) })).filter(x => x.shifts.length > 0);
+        const maxDailyViolationDays = dias.filter(x => !x.isFuture && x.batidas.length > 0 && x.trabalhado > CONFIG.MAX_HORAS_DIA).map(x => ({ date: x.data, worked: x.trabalhado, excess: x.trabalhado - CONFIG.MAX_HORAS_DIA }));
+
+        const bancoHoras = extrairBancoHoras();
+        const { diasConsecutivos, dsrStatus } = calcularDSR(dias);
+
+        const resumo = {
+            hoje, saldoSemana, totalSemana, saldoMes, totalMes, dias, diasRestantesMes, diasRegistrados,
+            entrada, turno1, turno2, retorno11h, h6, h8, h10, saidaIdeal, status, retornoMinimo, retornoMaximo,
+            trabalhado: hoje.trabalhado, alerta, hojePunchHealth, punchAnomalyDays,
+            intrajornadaMaxViolationDays, maxShiftViolationDays, maxDailyViolationDays,
+            bancoHoras, diasConsecutivos, dsrStatus
         };
 
-        document.body.appendChild(fab);
+        persistSharedTruth(resumo);
+        return resumo;
+    }
 
-        const panel =
-            document.createElement('div');
+    function saldoComTolerancia(dia) {
+        if (!dia.isBusinessDay) return 0;
+        return (dia.batidas.length > 0 && Math.abs(dia.saldo) <= CONFIG.TOLERANCIA) ? 0 : dia.saldo;
+    }
 
-        panel.id = 'ahg-panel';
+    function getPunchCountHealth(count, { isToday = false } = {}) {
+        if (!count) return { level: 'ok', icon: '⬜', short: 'sem batidas', text: 'Sem batidas registradas' };
+        if (count > CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) return { level: 'neg', icon: '⛔', short: `${count} batidas`, text: `${count} batidas: acima do limite` };
+        if (count === CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) return { level: 'warn', icon: '📝', short: '6 batidas', text: '6 batidas: permitido com justificativa' };
+        if ((count % 2) !== 0) return { level: isToday ? 'warn' : 'neg', icon: '⚠️', short: `${count} batidas`, text: `${count} batidas: inconsistente` };
+        if (count <= CONFIG.MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA) return { level: 'ok', icon: '✅', short: `${count} batidas`, text: `${count} batidas: padrão válido` };
+        return { level: 'warn', icon: '⚠️', short: `${count} batidas`, text: `${count} batidas: fora do padrão` };
+    }
 
-        panel.style.display = 'none';
+    function getIntrajornadaMaxViolations(batidas) {
+        const violations = [];
+        for (let i = 1; i + 1 < batidas.length; i += 2) {
+            const saida = toMin(batidas[i]), retorno = toMin(batidas[i + 1]);
+            if (!Number.isFinite(saida) || !Number.isFinite(retorno)) continue;
+            const duration = retorno - saida;
+            if (duration > CONFIG.INTERVALO_MAXIMO) violations.push({ start: batidas[i], end: batidas[i + 1], duration, excess: duration - CONFIG.INTERVALO_MAXIMO });
+        }
+        return violations;
+    }
 
-        panel.innerHTML =
-            `<div class="a-tit">⏱ Carregando...</div>`;
+    function getMaxShiftViolations(batidas) {
+        const violations = [];
+        for (let i = 0; i + 1 < batidas.length; i += 2) {
+            const entrada = toMin(batidas[i]), saida = toMin(batidas[i + 1]);
+            if (!Number.isFinite(entrada) || !Number.isFinite(saida)) continue;
+            const duration = saida - entrada;
+            if (duration > CONFIG.MAX_HORAS_TURNO) violations.push({ start: batidas[i], end: batidas[i + 1], duration, excess: duration - CONFIG.MAX_HORAS_TURNO });
+        }
+        return violations;
+    }
 
-        document.body.appendChild(panel);
+    function calcularDSR(dias) {
+        const diasOrdenados = dias.filter(d => !d.isFuture && d.batidas.length > 0).sort((a, b) => b.data - a.data);
+        if (diasOrdenados.length === 0) return { diasConsecutivos: 0, dsrStatus: null };
 
-        let drag = false;
-        let ox = 0;
-        let oy = 0;
+        let consecutivos = 0;
+        const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+        const ultimoDia = diasOrdenados[0].data;
+        const diffDias = Math.floor((hoje - ultimoDia) / 86400000);
 
-        panel.addEventListener('mousedown', e => {
-
-            if (!e.target.closest('.a-tit')) {
-                return;
+        if (diffDias <= 1) {
+            consecutivos = 1;
+            for (let i = 1; i < diasOrdenados.length; i++) {
+                const diff = Math.floor((diasOrdenados[i - 1].data - diasOrdenados[i].data) / 86400000);
+                if (diff <= 2) consecutivos++; else break;
             }
+        }
 
-            drag = true;
+        let dsrStatus = null;
+        if (consecutivos >= 6) dsrStatus = { nivel: 'critico', mensagem: `🚨 ${consecutivos} dias consecutivos sem DSR — Art. 67 CLT`, dias: consecutivos };
+        else if (consecutivos >= 5) dsrStatus = { nivel: 'alerta', mensagem: `⚠️ ${consecutivos} dias consecutivos — DSR em até 24h`, dias: consecutivos };
+        else if (consecutivos >= 4) dsrStatus = { nivel: 'info', mensagem: `ℹ️ ${consecutivos} dias consecutivos — DSR próximo`, dias: consecutivos };
 
-            const r =
-                panel.getBoundingClientRect();
-
-            ox = e.clientX - r.left;
-            oy = e.clientY - r.top;
-        });
-
-        document.addEventListener('mousemove', e => {
-
-            if (!drag) return;
-
-            panel.style.left =
-                `${e.clientX - ox}px`;
-
-            panel.style.top =
-                `${e.clientY - oy}px`;
-
-            panel.style.bottom = 'auto';
-        });
-
-        document.addEventListener('mouseup', () => {
-            drag = false;
-        });
+        return { diasConsecutivos: consecutivos, dsrStatus };
     }
 
     /* =========================================================
-       RENDER
+       SECAO 10: EXTRACAO DOM DO ESPELHO
     ========================================================= */
 
-    function render() {
+    function extrairDadosDOM() {
+        const dias = [...document.querySelectorAll('.v-calendar-weekly__day')];
+        const hoje = new Date();
+        const resultado = [];
 
+        dias.forEach(day => {
+            if (day.classList.contains('v-outside')) return;
+            const label = day.querySelector('.v-calendar-weekly__day-label');
+            if (!label) return;
+            const numeroDia = Number(label.textContent.trim());
+            if (!numeroDia) return;
+
+            const isToday = day.classList.contains('v-present');
+            const isFuture = day.classList.contains('v-future');
+            const isHoliday = [...day.querySelectorAll('.material-icons')].some(x => x.textContent.trim() === 'star');
+            const data = new Date(hoje.getFullYear(), hoje.getMonth(), numeroDia);
+            const weekDay = data.getDay();
+
+            const batidas = [...day.querySelectorAll('.batida')].filter(x => !x.classList.contains('prevista')).map(x => x.textContent.trim());
+            const possuiBatidas = batidas.length > 0;
+            const isBusinessDay = (weekDay !== 0 && weekDay !== 6 && !isHoliday) || possuiBatidas;
+
+            const trabalhado = batidas.length > 0 ? calcularTrabalhado(batidas) : 0;
+            const saldo = isBusinessDay ? trabalhado - CONFIG.CARGA_DIARIA : 0;
+            const inconsistencia = !isFuture && isBusinessDay && batidas.length > 0 && (batidas.length % 2 !== 0);
+
+            resultado.push({ data, dateKey: formatDateKey(data), isToday, isFuture, isHoliday, isBusinessDay, batidas, trabalhado, saldo, inconsistencia });
+        });
+
+        return resultado;
+    }
+
+    function extrairBancoHoras() {
+        const bancoEl = document.querySelector('.ahg-banco-horas, [data-testid="banco-horas"], .banco-horas');
+        if (bancoEl) {
+            const texto = bancoEl.textContent.trim();
+            const match = texto.match(/([+-]?\d+):(\d+)/);
+            if (match) {
+                const horas = parseInt(match[1]), minutos = parseInt(match[2]);
+                return (horas * 60 + minutos) * (texto.includes('-') ? -1 : 1);
+            }
+        }
+        const elements = document.querySelectorAll('*');
+        for (const el of elements) {
+            const text = el.textContent;
+            if (/Banco\s*de\s*Horas/i.test(text) || /Saldo\s*Acumulado/i.test(text)) {
+                const parent = el.parentElement;
+                if (parent) {
+                    const siblingText = parent.textContent;
+                    const match = siblingText.match(/([+-]?\d+):(\d+)/);
+                    if (match) {
+                        const horas = parseInt(match[1]), minutos = parseInt(match[2]);
+                        return (horas * 60 + minutos) * (siblingText.includes('-') ? -1 : 1);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /* =========================================================
+       SECAO 11: PAINEL DO ESPELHO (Mirror UI)
+    ========================================================= */
+
+    function renderMirrorPanel() {
         try {
+            const r = calcularResumo();
+            if (!r) return;
+            checarNotifsMirror(r);
 
-            applyPrivacyState();
+            const p = document.getElementById('ahg-panel');
+            if (!p) return;
 
-            const r =
-                calcularResumo();
+            const cfg = ConfigStore.get();
+            const anomalyDaysLabel = r.punchAnomalyDays.length ? r.punchAnomalyDays.slice(0, 4).map(x => `${formatDayMonth(x.date)} (${x.count})`).join(' · ') : 'Sem inconsistências';
 
-            if (!r) {
-                return;
-            }
-
-            checarNotifs(r);
-
-            const mirrorGuidance = buildPunchGuidance(r.hoje.batidas || [], r.saldoSemana);
-            const day8WindowLabel = mirrorGuidance.day8WithIntervalMin !== null && mirrorGuidance.day8WithIntervalMax !== null
-                ? `${renderClock(mirrorGuidance.day8WithIntervalMin)} → ${renderClock(mirrorGuidance.day8WithIntervalMax)}`
-                : '--:--';
-            const day10WindowLabel = mirrorGuidance.day10WithIntervalMin !== null && mirrorGuidance.day10WithIntervalMax !== null
-                ? `${renderClock(mirrorGuidance.day10WithIntervalMin)} → ${renderClock(mirrorGuidance.day10WithIntervalMax)}`
-                : '--:--';
-            const anomalyDaysLabel = r.punchAnomalyDays.length
-                ? r.punchAnomalyDays
-                    .slice(0, 4)
-                    .map(x => `${formatDayMonth(x.date)} (${x.count})`)
-                    .join(' · ')
-                : 'Sem inconsistências recentes';
-            const violationDaysSummary = buildViolationDaysSummary(r);
-            const nonComplianceLabel = violationDaysSummary.length
-                ? violationDaysSummary.slice(0, 4).join(' | ')
-                : `Sem violações (intervalo <= ${fmtMin(CONFIG.INTERVALO_MAXIMO)}, turno <= ${fmtMin(CONFIG.MAX_HORAS_TURNO)}, dia <= ${fmtMin(CONFIG.MAX_HORAS_DIA)})`;
-
-            const p =
-                document.getElementById('ahg-panel');
-
-            if (!p) {
-                return;
-            }
-
-            p.innerHTML = `
+            let html = `
             <div class="a-tit">
-                ⏱ Painel Inteligente
-                <span class="ahg-privacy-btn" id="ahg-privacy-toggle" title="Alternar privacidade">👁</span>
+                ⏱ Painel Inteligente v${CONFIG.VERSAO}
+                <span class="ahg-privacy-btn" id="ahg-privacy-toggle" title="Alternar privacidade">${privacyIcon()}</span>
                 <span class="a-x" id="ahg-min">–</span>
             </div>
-
             <div class="a-body">
-
-                <div class="a-sec">
-                    Status atual
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Situação
-                    </span>
-
-                    <span class="a-val neu">
-                        ${r.status}
-                    </span>
-                </div>
-
-                <div class="a-row ${r.hojePunchHealth.level === 'neg' ? 'danger' : r.hojePunchHealth.level === 'warn' ? 'warn' : 'ok'}">
-                    <span class="a-lbl">
-                        ${r.hojePunchHealth.icon} Batidas hoje
-                    </span>
-
-                    <span class="a-val ${r.hojePunchHealth.level === 'neg' ? 'neg' : r.hojePunchHealth.level === 'warn' ? 'warn' : 'pos'}">
-                        ${r.hoje.batidas.length} · ${r.hojePunchHealth.short}
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Dias com atenção
-                    </span>
-
-                    <span class="a-val neu">
-                        <small>${anomalyDaysLabel}</small>
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Não conformidades
-                    </span>
-
-                    <span class="a-val warn">
-                        <small>${nonComplianceLabel}</small>
-                    </span>
-                </div>
-
-                ${r.alerta ? `
-                <div class="a-row danger">
-                    <span class="a-lbl">
-                        Alerta
-                    </span>
-
-                    <span class="a-val neg">
-                        ${r.alerta}
-                    </span>
-                </div>
-                ` : ''}
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Hoje
-                </div>
-
-                ${r.turno1 ? `
-                <div class="a-row ${r.turno1.classe}">
-
-                    <span class="a-lbl">
-                        1º turno
-                    </span>
-
-                    <span class="a-val neu">
-
-                        ${renderText(r.turno1.entrada)}
-                        →
-                        ${renderText(r.turno1.saida)}
-
-                        <small>
-                            ${renderMinutes(r.turno1.total)}
-                            ${r.turno1.aberto ? '· em andamento' : ''}
-                        </small>
-
-                    </span>
-
-                </div>
-                ` : ''}
-
-                ${r.turno2 ? `
-                <div class="a-row ${r.turno2.classe}">
-
-                    <span class="a-lbl">
-                        2º turno
-                    </span>
-
-                    <span class="a-val neu">
-
-                        ${renderText(r.turno2.entrada)}
-                        →
-                        ${renderText(r.turno2.saida)}
-
-                        <small>
-                            ${renderMinutes(r.turno2.total)}
-                            ${r.turno2.aberto ? '· em andamento' : ''}
-                        </small>
-
-                    </span>
-
-                </div>
-                ` : ''}
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Trabalhado
-                    </span>
-
-                    <span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'warn'}">
-                        ${renderMinutes(r.hoje.trabalhado)}
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        Saldo do dia
-                    </span>
-
-                    <span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'neg'}">
-                        ${renderMinutes(r.hoje.saldo)}
-                    </span>
-                </div>
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Saídas
-                </div>
-
-                <div class="a-row warn" >
-                    <span class="a-lbl">
-                        ⚠️ 6h
-                    </span>
-
-                    <span class="a-val warn">
-                        ${renderClock(r.h6)}
-                    </span>
-                </div>
-
-                <div class="a-row ok">
-                    <span class="a-lbl">
-                        ✅ 8h
-                    </span>
-
-                    <span class="a-val pos">
-                        ${renderClock(r.h8)}
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        8h com intervalo
-                    </span>
-
-                    <span class="a-val neu">
-                        ${day8WindowLabel}
-                    </span>
-                </div>
-
-                <div class="a-row danger">
-                    <span class="a-lbl">
-                      ⛔️ 10h
-                    </span>
-
-                    <span class="a-val neg">
-                        ${renderClock(r.h10)}
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        10h com intervalo
-                    </span>
-
-                    <span class="a-val neu">
-                        ${day10WindowLabel}
-                    </span>
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        🏆 Saída ideal
-                    </span>
-
-                    <span class="a-val neu">
-                        ${renderClock(r.saidaIdeal)}
-                    </span>
-                </div>
-
-                ${r.retornoMinimo ? `
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Intervalo
-                </div>
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        ⏳ Retorno mínimo
-                    </span>
-
-                    <span class="a-val neu">
-                        ${renderClock(r.retornoMinimo)}
-                    </span>
-                </div>
-
-                <div class="a-row warn">
-                    <span class="a-lbl">
-                        ⚠️ Retorno máximo
-                    </span>
-
-                    <span class="a-val warn">
-                        ${renderClock(r.retornoMaximo)}
-                    </span>
-                </div>
-                ` : ''}
-
-                <div class="a-row infos">
-                    <span class="a-lbl">
-                        🛌 Retorne depois das
-                    </span>
-
-                    <span class="a-val neu">
-                        ${renderClock(r.retorno11h)}
-                    </span>
-                </div>
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Semanal — sem. ${getWeekNumber(new Date())}
-                </div>
-
-                <div class="a-row ${r.saldoSemana >= 0 ? 'ok' : 'warn'}">
-                    <span class="a-lbl">
-                        Saldo semanal
-                    </span>
-
-                    <span class="a-val ${r.saldoSemana >= 0 ? 'pos' : 'neg'}">
-                        ${renderMinutes(r.saldoSemana)}
-
-                        <small>
-                            ${renderMinutes(r.totalSemana)} trabalhadas · ${r.diasRegistrados} dias registrados
-                        </small>
-                    </span>
-                </div>
-
-                <hr class="a-div">
-
-                <div class="a-sec">
-                    Mensal
-                </div>
-
-                <div class="a-row ${r.saldoMes >= 0 ? 'ok' : 'warn'}">
-                    <span class="a-lbl">
-                        Saldo mensal
-                    </span>
-
-                    <span class="a-val ${r.saldoMes >= 0 ? 'pos' : 'neg'}">
-                        ${renderMinutes(r.saldoMes)}
-
-                        <small>
-                            ${r.diasRestantesMes} úteis restantes
-                        </small>
-                    </span>
-                </div>
-                <div class="a-row infos clickable" id="ahg-open-details">
-                        <span class="a-lbl">
-                            📊 Horas realizadas
-                        </span>
-
-                        <span class="a-val neu">
-                            ${renderMinutes(r.totalMes)}
-                        </span>
-                    </div>
-
-                <div class="a-row infos clickable" id="ahg-export-csv" title="Exportar relatório mensal em CSV">
-                        <span class="a-lbl">
-                            📥 Exportar CSV
-                        </span>
-
-                        <span class="a-val neu">
-                            <small>relatório do mês</small>
-                        </span>
-                    </div>
-
-            </div>
-
-            <div class="a-foot">
-                Atualizado ${fmtHour(nowMin())}
-    ·
-    Reload em ${fmtCountdown(
-                NEXT_REFRESH - Date.now()
-            )}
-            </div>
             `;
 
-            document.getElementById('ahg-min')
-                ?.addEventListener('click', () => {
+            html += `<div class="a-sec">Status atual</div>
+                <div class="a-row infos"><span class="a-lbl">Situação</span><span class="a-val neu">${r.status}</span></div>
+                <div class="a-row ${r.hojePunchHealth.level === 'neg' ? 'danger' : r.hojePunchHealth.level === 'warn' ? 'warn' : 'ok'}">
+                    <span class="a-lbl">${r.hojePunchHealth.icon} Batidas hoje</span>
+                    <span class="a-val ${r.hojePunchHealth.level === 'neg' ? 'neg' : r.hojePunchHealth.level === 'warn' ? 'warn' : 'pos'}">${r.hoje.batidas.length} · ${r.hojePunchHealth.short}</span>
+                </div>`;
 
-                    p.style.display = 'none';
+            if (cfg.flags.F006_inconsistencias && r.punchAnomalyDays.length > 0) {
+                html += `<div class="a-row warn"><span class="a-lbl">⚠️ Atenção</span><span class="a-val warn"><small>${anomalyDaysLabel}</small></span></div>`;
+            }
 
-                    document
-                        .getElementById('ahg-fab')
-                        .style.display = 'flex';
-                });
-            document.getElementById('ahg-privacy-toggle')
-                ?.addEventListener('click', () => {
+            if (cfg.flags.F012_descanso_semanal && r.dsrStatus) {
+                const dsrClass = r.dsrStatus.nivel === 'critico' ? 'danger' : r.dsrStatus.nivel === 'alerta' ? 'warn' : 'infos';
+                html += `<div class="a-row ${dsrClass}"><span class="a-lbl">🛌 DSR</span><span class="a-val ${dsrClass === 'danger' ? 'neg' : dsrClass === 'warn' ? 'warn' : 'neu'}"><small>${r.dsrStatus.mensagem}</small></span></div>`;
+            }
 
-                    togglePrivacyHidden();
-                    render();
-                });
-            document.getElementById('ahg-open-details')?.addEventListener('click', () => {
-                abrirDetalhes(r);
-            });
-            document.getElementById('ahg-export-csv')?.addEventListener('click', () => {
-                exportarCsvMensal(r.dias);
-            });
+            if (r.alerta) html += `<div class="a-row danger"><span class="a-lbl">Alerta</span><span class="a-val neg">${r.alerta}</span></div>`;
 
-        } catch (e) {
+            html += `<hr class="a-div"><div class="a-sec">Hoje</div>`;
+            if (r.turno1) html += `<div class="a-row ${r.turno1.classe}"><span class="a-lbl">1º turno</span><span class="a-val neu">${renderText(r.turno1.entrada)} → ${renderText(r.turno1.saida)}<small>${renderMin(r.turno1.total)} ${r.turno1.aberto ? '· em andamento' : ''}</small></span></div>`;
+            if (r.turno2) html += `<div class="a-row ${r.turno2.classe}"><span class="a-lbl">2º turno</span><span class="a-val neu">${renderText(r.turno2.entrada)} → ${renderText(r.turno2.saida)}<small>${renderMin(r.turno2.total)} ${r.turno2.aberto ? '· em andamento' : ''}</small></span></div>`;
 
-            console.error(
-                '[AHGORA PANEL]',
-                e
-            );
-        }
+            html += `<div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'warn'}">${renderMin(r.hoje.trabalhado)}</span></div>
+                <div class="a-row infos"><span class="a-lbl">Saldo do dia</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'neg'}">${renderMin(r.hoje.saldo)}</span></div>`;
+
+            html += `<hr class="a-div"><div class="a-sec">Saídas</div>
+                <div class="a-row warn"><span class="a-lbl">⚠️ 6h</span><span class="a-val warn">${renderClock(r.h6)}</span></div>
+                <div class="a-row ok"><span class="a-lbl">✅ 8h</span><span class="a-val pos">${renderClock(r.h8)}</span></div>
+                <div class="a-row danger"><span class="a-lbl">⛔️ 10h</span><span class="a-val neg">${renderClock(r.h10)}</span></div>
+                <div class="a-row infos"><span class="a-lbl">🏆 Saída ideal</span><span class="a-val neu">${renderClock(r.saidaIdeal)}</span></div>`;
+
+            if (r.retornoMinimo) {
+                html += `<hr class="a-div"><div class="a-sec">Intervalo</div>
+                    <div class="a-row infos"><span class="a-lbl">⏳ Retorno mínimo</span><span class="a-val neu">${renderClock(r.retornoMinimo)}</span></div>
+                    <div class="a-row warn"><span class="a-lbl">⚠️ Retorno máximo</span><span class="a-val warn">${renderClock(r.retornoMaximo)}</span></div>`;
+            }
+            html += `<div class="a-row infos"><span class="a-lbl">🛌 Retorne depois das</span><span class="a-val neu">${renderClock(r.retorno11h)}</span></div>`;
+
+            html += `<hr class="a-div"><div class="a-sec">Semanal — sem. ${getWeekNumber(new Date())}</div>
+                <div class="a-row ${r.saldoSemana >= 0 ? 'ok' : 'warn'}"><span class="a-lbl">Saldo semanal</span>
+                <span class="a-val ${r.saldoSemana >= 0 ? 'pos' : 'neg'}">${renderMin(r.saldoSemana)}<small>${renderMin(r.totalSemana)} trabalhadas · ${r.diasRegistrados} dias</small></span></div>`;
+
+            html += `<hr class="a-div"><div class="a-sec">Mensal</div>
+                <div class="a-row ${r.saldoMes >= 0 ? 'ok' : 'warn'}"><span class="a-lbl">Saldo mensal</span>
+                <span class="a-val ${r.saldoMes >= 0 ? 'pos' : 'neg'}">${renderMin(r.saldoMes)}<small>${r.diasRestantesMes} úteis restantes</small></span></div>
+                <div class="a-row infos clickable" id="ahg-open-details"><span class="a-lbl">📊 Horas realizadas</span><span class="a-val neu">${renderMin(r.totalMes)}</span></div>
+                <div class="a-row infos clickable" id="ahg-export-csv"><span class="a-lbl">📥 Exportar CSV</span><span class="a-val neu"><small>relatório do mês</small></span></div>`;
+
+            if (cfg.flags.F009_banco_horas && r.bancoHoras !== null) {
+                html += `<hr class="a-div"><div class="a-sec">Banco de Horas</div>
+                    <div class="a-row ${r.bancoHoras >= 0 ? 'ok' : 'warn'}"><span class="a-lbl">💰 Saldo acumulado</span>
+                    <span class="a-val ${r.bancoHoras >= 0 ? 'pos' : 'neg'}">${renderMin(r.bancoHoras)}</span></div>`;
+            }
+
+            html += `<hr class="a-div"><div class="a-sec">Configurações</div>
+                <div class="ahg-config-grid" style="padding:4px 0;">
+                    <div class="ahg-config-item"><span class="ahg-config-label">Tema</span>
+                        <select class="ahg-config-select" id="ahg-tema-select">
+                            <option value="auto" ${cfg.tema === 'auto' ? 'selected' : ''}>Auto</option>
+                            <option value="light" ${cfg.tema === 'light' ? 'selected' : ''}>Claro</option>
+                            <option value="dark" ${cfg.tema === 'dark' ? 'selected' : ''}>Escuro</option>
+                        </select>
+                    </div>
+                    <div class="ahg-config-item">
+                        <label class="ahg-toggle"><input type="checkbox" id="ahg-zen-toggle" ${cfg.modoZen ? 'checked' : ''}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span>Modo Zen</label>
+                    </div>
+                </div>`;
+
+            html += `</div><div class="a-foot">Atualizado ${fmtHour(nowMin())}</div>`;
+            p.innerHTML = html;
+
+            $.on($.qs('#ahg-min', p), 'click', () => { p.style.display = 'none'; $.qs('#ahg-fab').style.display = 'flex'; });
+            $.on($.qs('#ahg-privacy-toggle', p), 'click', () => { togglePrivacyHidden(); renderMirrorPanel(); });
+            $.on($.qs('#ahg-open-details', p), 'click', () => abrirDetalhes(r));
+            $.on($.qs('#ahg-export-csv', p), 'click', () => exportarCsvMensal(r.dias));
+            $.on($.qs('#ahg-tema-select', p), 'change', (e) => { ConfigStore.patch({ tema: e.target.value }); Tema.atualizar(); renderMirrorPanel(); });
+            $.on($.qs('#ahg-zen-toggle', p), 'change', (e) => { ConfigStore.patch({ modoZen: e.target.checked }); renderMirrorPanel(); });
+
+            if (cfg.modoZen) p.classList.add('ahg-zen'); else p.classList.remove('ahg-zen');
+
+        } catch (e) { Logger.error('MirrorUI', 'Erro ao renderizar painel', e); }
     }
 
-    function abrirDetalhes(r) {
-
-        const antigo =
-            document.getElementById('ahg-details');
-
-        if (antigo) {
-            antigo.remove();
-        }
-
-        const modal =
-            document.createElement('div');
-
-        modal.id = 'ahg-details';
-
-        modal.style = `
-        position:fixed;
-        inset:0;
-        background:rgba(0,0,0,.7);
-        z-index:999999;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-    `;
-
-        const box =
-            document.createElement('div');
-
-        box.style = `
-            width:min(900px,95vw);
-            max-height:90vh;
-
-            overflow-y:auto;
-            overflow-x:auto;
-
-            background:#111827;
-
-            border-radius:14px;
-
-            padding:20px;
-
-            color:#dde;
-
-            font-family:Segoe UI,sans-serif;
-`;
-
-        const diasSemana = [
-            'Dom',
-            'Seg',
-            'Ter',
-            'Qua',
-            'Qui',
-            'Sex',
-            'Sáb'
-        ];
-
-        let html = `
-        <div style="
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            margin-bottom:16px;
-        ">
-            <h2 style="margin:0;">
-                📊 Detalhamento Mensal
-            </h2>
-
-            <button id="ahg-close-details">
-                Fechar
-            </button>
-        </div>
-
-        <div style="
-            margin-bottom:12px;
-            font-size:12px;
-            opacity:.75;
-        ">
-            ⚪ Tolerância de ±${CONFIG.TOLERANCIA}min — saldo dentro desse intervalo não é contabilizado nos totais
-        </div>
-    `;
-
-        let semanaAtual = null;
-        let totalSemana = 0;
-        let saldoSemana = 0;
-
-        r.dias
-            .filter(x =>
-                !x.isFuture &&
-                x.isBusinessDay
-            )
-            .sort((a, b) => a.data - b.data)
-            .forEach((d, idx, arr) => {
-
-                const semana =
-                    getWeekNumber(d.data);
-
-                if (
-                    semanaAtual !== null &&
-                    semana !== semanaAtual
-                ) {
-
-                    /* html += `
-                         <tr style="
-                             background:#1f2937;
-                             font-weight:bold;
-                         ">
-                             <td colspan="2">
-                                 TOTAL SEMANA
-                             </td>
-                             <td>
-                                 ${fmtMin(totalSemana)}
-                             </td>
-                             <td>
-                                 ${fmtMin(saldoSemana)}
-                             </td>
-                         </tr>
-                         <tr>
-                             <td colspan="4" style="height:18px"></td>
-                         </tr>
-                     `; */
-
-                    totalSemana = 0;
-                    saldoSemana = 0;
-                }
-
-                if (semana !== semanaAtual) {
-
-                    html += `
-                    <h3>
-                        Semana ${semana}
-                    </h3>
-
-                    <table style="
-                        width:100%;
-                        border-collapse:collapse;
-                        margin-bottom:12px;
-                    ">
-                        <thead>
-                            <tr>
-                                <th style="text-align:left;padding:6px 4px;">
-                                    Dia
-                                </th>
-
-                                <th style="text-align:left;padding:6px 4px;">
-                                    Data
-                                </th>
-
-                                <th style="text-align:right;padding:6px 4px;">
-                                    Horas
-                                </th>
-
-                                <th style="text-align:right;padding:6px 4px;">
-                                    Saldo
-                                </th>
-                            </tr>
-                        </thead>
-
-                        <tbody>
-                `;
-
-                    semanaAtual = semana;
-                }
-
-                const saldoEfetivo =
-                    saldoComTolerancia(d);
-
-                const emTolerancia =
-                    saldoEfetivo !== d.saldo;
-
-                totalSemana += d.trabalhado;
-                saldoSemana += saldoEfetivo;
-
-                html += `
-                <tr ${emTolerancia ? `title="Tolerância: ${Math.abs(d.saldo)}min dentro do limite de ${CONFIG.TOLERANCIA}min — não contabilizado"` : ''}>
-                    <td>
-                        ${diasSemana[d.data.getDay()]}
-                    </td>
-
-                    <td>
-                        ${d.data.toLocaleDateString('pt-BR')}
-                    </td>
-
-                    <td align="right">
-                        ${fmtMin(d.trabalhado)}
-                    </td>
-
-                    <td align="right">
-                        ${fmtMin(d.saldo)}${emTolerancia ? ' ⚪' : ''}
-                    </td>
-                </tr>
-            `;
-
-                const next = arr[idx + 1];
-
-                if (
-                    !next ||
-                    getWeekNumber(next.data) !== semana
-                ) {
-
-                    html += `
-                    <tr style="
-                        background:#1f2937;
-                        font-weight:bold;
-                    ">
-                        <td colspan="2">
-                            TOTAL SEMANA
-                        </td>
-
-                        <td align="right">
-                            ${fmtMin(totalSemana)}
-                        </td>
-
-                        <td align="right">
-                            ${fmtMin(saldoSemana)}
-                        </td>
-                    </tr>
-
-                    </tbody>
-                    </table>
-                `;
-                }
-            });
-
-        box.innerHTML = html;
-
-        modal.appendChild(box);
-
-        document.body.appendChild(modal);
-
-        document
-            .getElementById('ahg-close-details')
-            .onclick = () => modal.remove();
-
-        modal.onclick = e => {
-
-            if (e.target === modal) {
-                modal.remove();
-            }
+    function checarNotifsMirror(resumo) {
+        const now = nowMin(), A = CONFIG.NOTIFICAR_ANTES;
+        const chk = (h, id, tit, msg, urgente) => {
+            if (h === null) return;
+            const f = h - now;
+            if (f >= A - 1 && f <= A + 2) notif(`${id}-av`, `⏰ ${tit}`, `${msg}\nFaltam ~${A}min`, urgente);
+            if (f >= -1 && f <= 1) notif(`${id}-ok`, `✅ ${tit}`, msg, urgente);
         };
+        chk(resumo.h6, '6h', '6h atingidas', 'Você completou o mínimo de 6h.', true);
+        chk(resumo.h8, '8h', 'Meta diária', 'Você completou as 8h.', false);
+        chk(resumo.h10, '10h', 'Limite diário', '⚠ Limite diário atingido.', true);
+        chk(resumo.saidaIdeal, 'ideal', 'Saída ideal', 'Saldo semanal compensado.', false);
     }
 
     /* =========================================================
-       EXPORTAÇÃO CSV
+       SECAO 12: DETALHAMENTO MENSAL (Modal)
+    ========================================================= */
+
+    function abrirDetalhes(r) {
+        const antigo = document.getElementById('ahg-details');
+        if (antigo) antigo.remove();
+
+        const isDark = Tema.get() === 'dark';
+        const modal = $.el('div', { id: 'ahg-details', style: 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999999;display:flex;align-items:center;justify-content:center;' });
+        const box = $.el('div', { style: `width:min(900px,95vw);max-height:90vh;overflow-y:auto;overflow-x:auto;background:${isDark ? '#111827' : '#fff'};border-radius:14px;padding:20px;color:${isDark ? '#dde' : '#1f2937'};font-family:Segoe UI,sans-serif;` });
+
+        const diasSemana = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;"><h2 style="margin:0;">📊 Detalhamento Mensal</h2><button id="ahg-close-details" style="background:transparent;border:1px solid var(--ahg-border);color:${isDark ? '#dde' : '#1f2937'};padding:6px 12px;border-radius:6px;cursor:pointer;">Fechar</button></div>
+            <div style="margin-bottom:12px;font-size:12px;opacity:.75;">⚪ Tolerância de ±${CONFIG.TOLERANCIA}min</div>`;
+
+        let semanaAtual = null, totalSemana = 0, saldoSemana = 0;
+        r.dias.filter(x => !x.isFuture && x.isBusinessDay).sort((a, b) => a.data - b.data).forEach((d, idx, arr) => {
+            const semana = getWeekNumber(d.data);
+            if (semana !== semanaAtual) {
+                if (semanaAtual !== null) {
+                    html += `<tr style="background:${isDark ? '#1f2937' : '#f3f4f6'};font-weight:bold;"><td colspan="2">TOTAL SEMANA</td><td align="right">${fmtMin(totalSemana)}</td><td align="right">${fmtMin(saldoSemana)}</td></tr></tbody></table>`;
+                }
+                html += `<h3>Semana ${semana}</h3><table style="width:100%;border-collapse:collapse;margin-bottom:12px;"><thead><tr><th style="text-align:left;padding:6px 4px;">Dia</th><th style="text-align:left;padding:6px 4px;">Data</th><th style="text-align:right;padding:6px 4px;">Horas</th><th style="text-align:right;padding:6px 4px;">Saldo</th></tr></thead><tbody>`;
+                semanaAtual = semana; totalSemana = 0; saldoSemana = 0;
+            }
+            const saldoEf = saldoComTolerancia(d);
+            const emTolerancia = saldoEf !== d.saldo;
+            totalSemana += d.trabalhado; saldoSemana += saldoEf;
+            html += `<tr ${emTolerancia ? `title="Tolerância aplicada"` : ''}><td>${diasSemana[d.data.getDay()]}</td><td>${d.data.toLocaleDateString('pt-BR')}</td><td align="right">${fmtMin(d.trabalhado)}</td><td align="right">${fmtMin(d.saldo)}${emTolerancia ? ' ⚪' : ''}</td></tr>`;
+
+            const next = arr[idx + 1];
+            if (!next || getWeekNumber(next.data) !== semana) {
+                html += `<tr style="background:${isDark ? '#1f2937' : '#f3f4f6'};font-weight:bold;"><td colspan="2">TOTAL SEMANA</td><td align="right">${fmtMin(totalSemana)}</td><td align="right">${fmtMin(saldoSemana)}</td></tr></tbody></table>`;
+            }
+        });
+
+        box.innerHTML = html;
+        modal.appendChild(box);
+        document.body.appendChild(modal);
+        $.on($.qs('#ahg-close-details', box), 'click', () => modal.remove());
+        $.on(modal, 'click', (e) => { if (e.target === modal) modal.remove(); });
+    }
+
+    /* =========================================================
+       SECAO 13: EXPORTACAO CSV
     ========================================================= */
 
     function exportarCsvMensal(dias) {
-
         const hoje = new Date();
-
-        const diasSemana = [
-            'Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'
-        ];
-
-        const registros = dias
-            .filter(x =>
-                !x.isFuture &&
-                x.data.getMonth() === hoje.getMonth()
-            )
-            .sort((a, b) => a.data - b.data);
-
-        const comBatidas =
-            registros.filter(x => x.batidas.length > 0);
-
-        const uteis =
-            registros.filter(x => x.isBusinessDay);
-
-        const totalMes =
-            uteis.reduce((a, b) => a + b.trabalhado, 0);
-
-        const saldoMes =
-            uteis.reduce((a, b) => a + saldoComTolerancia(b), 0);
-
-        const trabalhos =
-            comBatidas.map(x => x.trabalhado);
-
-        const media =
-            comBatidas.length > 0
-                ? totalMes / comBatidas.length
-                : 0;
-
+        const diasSemana = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        const registros = dias.filter(x => !x.isFuture && x.data.getMonth() === hoje.getMonth()).sort((a, b) => a.data - b.data);
+        const comBatidas = registros.filter(x => x.batidas.length > 0);
+        const uteis = registros.filter(x => x.isBusinessDay);
+        const totalMes = uteis.reduce((a, b) => a + b.trabalhado, 0);
+        const saldoMes = uteis.reduce((a, b) => a + saldoComTolerancia(b), 0);
+        const media = comBatidas.length > 0 ? totalMes / comBatidas.length : 0;
         const sep = ';';
 
         const cabecalhoResumo = [
             ['Período', `${String(hoje.getMonth() + 1).padStart(2, '0')}/${hoje.getFullYear()}`],
-            ['Gerado em', hoje.toLocaleString('pt-BR')],
-            ['Carga diária', fmtMin(CONFIG.CARGA_DIARIA)],
-            ['Máx. turno', fmtMin(CONFIG.MAX_HORAS_TURNO)],
-            ['Máx. dia', fmtMin(CONFIG.MAX_HORAS_DIA)],
-            ['Tolerância diária (min)', CONFIG.TOLERANCIA],
-            ['Horas realizadas', fmtMin(totalMes)],
-            ['Saldo mensal', fmtMin(saldoMes)],
-            ['Dias registrados', comBatidas.length],
-            ['Dias úteis', uteis.length],
-            ['Média diária', fmtMin(media)],
-            ['Maior jornada', fmtMin(trabalhos.length ? Math.max(...trabalhos) : 0)],
-            ['Menor jornada', fmtMin(trabalhos.length ? Math.min(...trabalhos) : 0)]
+            ['Carga diária', fmtMin(CONFIG.CARGA_DIARIA)], ['Máx. turno', fmtMin(CONFIG.MAX_HORAS_TURNO)],
+            ['Máx. dia', fmtMin(CONFIG.MAX_HORAS_DIA)], ['Tolerância (min)', CONFIG.TOLERANCIA],
+            ['Horas realizadas', fmtMin(totalMes)], ['Saldo mensal', fmtMin(saldoMes)],
+            ['Dias registrados', comBatidas.length], ['Dias úteis', uteis.length], ['Média diária', fmtMin(media)]
         ].map(([k, v]) => `"${k}"${sep}"${v}"`);
 
-        const cabecalhoDados = [
-            'Data', 'Dia', 'Semana', 'Útil', 'Feriado',
-            'Batida 1', 'Batida 2', 'Batida 3', 'Batida 4',
-            '1º Turno', '2º Turno', 'Intervalo',
-            'Trabalhado', 'Saldo dia', 'Saldo semana', 'Saldo mês'
-        ].map(v => `"${v}"`).join(sep);
+        const cabecalhoDados = ['Data', 'Dia', 'Semana', 'Útil', 'Feriado', 'Batida 1', 'Batida 2', 'Batida 3', 'Batida 4', '1º Turno', '2º Turno', 'Intervalo', 'Trabalhado', 'Saldo dia', 'Saldo semana', 'Saldo mês'].map(v => `"${v}"`).join(sep);
 
-        let saldoMesAcum = 0;
-        let saldoSemAcum = 0;
-        let semanaAnterior = null;
-
+        let saldoMesAcum = 0, saldoSemAcum = 0, semanaAnterior = null;
         const linhas = registros.map(d => {
-
-            const semana =
-                getWeekNumber(d.data);
-
-            if (semana !== semanaAnterior) {
-                saldoSemAcum = 0;
-                semanaAnterior = semana;
-            }
-
+            const semana = getWeekNumber(d.data);
+            if (semana !== semanaAnterior) { saldoSemAcum = 0; semanaAnterior = semana; }
             const b = d.batidas;
-
-            const turno1Min =
-                (b[0] && b[1])
-                    ? toMin(b[1]) - toMin(b[0])
-                    : null;
-
-            const turno2Min =
-                (b[2] && b[3])
-                    ? toMin(b[3]) - toMin(b[2])
-                    : null;
-
-            const intervMin =
-                (b[1] && b[2])
-                    ? toMin(b[2]) - toMin(b[1])
-                    : null;
-
-            const saldoEfetivo =
-                saldoComTolerancia(d);
-
-            saldoMesAcum += saldoEfetivo;
-            saldoSemAcum += saldoEfetivo;
-
-            return [
-                d.data.toLocaleDateString('pt-BR'),
-                diasSemana[d.data.getDay()],
-                semana,
-                d.isBusinessDay ? 'Sim' : 'Não',
-                d.isHoliday ? 'Sim' : 'Não',
-                b[0] || '', b[1] || '', b[2] || '', b[3] || '',
-                turno1Min !== null ? fmtMin(turno1Min) : '',
-                turno2Min !== null ? fmtMin(turno2Min) : '',
-                intervMin !== null ? fmtMin(intervMin) : '',
-                b.length > 0 ? fmtMin(d.trabalhado) : '',
-                d.isBusinessDay ? fmtMin(d.saldo) : '',
-                fmtMin(saldoSemAcum),
-                fmtMin(saldoMesAcum)
-            ].map(v => `"${v}"`).join(sep);
+            const turno1Min = (b[0] && b[1]) ? toMin(b[1]) - toMin(b[0]) : null;
+            const turno2Min = (b[2] && b[3]) ? toMin(b[3]) - toMin(b[2]) : null;
+            const intervMin = (b[1] && b[2]) ? toMin(b[2]) - toMin(b[1]) : null;
+            const saldoEfetivo = saldoComTolerancia(d);
+            saldoMesAcum += saldoEfetivo; saldoSemAcum += saldoEfetivo;
+            return [d.data.toLocaleDateString('pt-BR'), diasSemana[d.data.getDay()], semana, d.isBusinessDay ? 'Sim' : 'Não', d.isHoliday ? 'Sim' : 'Não', b[0] || '', b[1] || '', b[2] || '', b[3] || '', turno1Min !== null ? fmtMin(turno1Min) : '', turno2Min !== null ? fmtMin(turno2Min) : '', intervMin !== null ? fmtMin(intervMin) : '', b.length > 0 ? fmtMin(d.trabalhado) : '', d.isBusinessDay ? fmtMin(d.saldo) : '', fmtMin(saldoSemAcum), fmtMin(saldoMesAcum)].map(v => `"${v}"`).join(sep);
         });
 
-        const conteudo = [
-            ...cabecalhoResumo,
-            '',
-            cabecalhoDados,
-            ...linhas
-        ].join('\r\n');
-
-        const nomeArquivo =
-            `Ahgora_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}.csv`;
-
-        const blob =
-            new Blob(
-                ['\uFEFF' + conteudo],
-                { type: 'text/csv;charset=utf-8;' }
-            );
-
-        const url =
-            URL.createObjectURL(blob);
-
-        const link =
-            document.createElement('a');
-
-        link.href = url;
-        link.download = nomeArquivo;
-
-        document.body.appendChild(link);
-
-        link.click();
-
-        document.body.removeChild(link);
-
+        const conteudo = [...cabecalhoResumo, '', cabecalhoDados, ...linhas].join('\r\n');
+        const blob = new Blob(['\uFEFF' + conteudo], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = $.el('a', { href: url, download: `Ahgora_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}.csv` });
+        document.body.appendChild(link); link.click(); document.body.removeChild(link);
         setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
     /* =========================================================
-       PUNCH EDITOR — CALENDAR DAY
+       SECAO 14: ICS GENERATOR (F-004)
     ========================================================= */
 
-    function getPunchHint(working, idx) {
+    function gerarICS(titulo, descricao, startMinute, endMinute, baseDate) {
+        if (startMinute === null) return null;
+        const start = minuteToDate(baseDate, startMinute);
+        const end = endMinute !== null ? minuteToDate(baseDate, endMinute) : new Date(start.getTime() + 60000);
+        const uid = `ahgora-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const dtstamp = fmtGoogleCalendarDate(new Date());
 
-        if (idx === 0) return null;
-
-        const t = toMin(working[idx]);
-        if (t === null) return null;
-
-        if (idx === 1 && working[0]) {
-
-            const e = toMin(working[0]);
-            if (e === null) return null;
-            const min = e + CONFIG.MIN_TURNO_COM_INTERVALO;
-            const max = e + CONFIG.MAX_HORAS_TURNO;
-
-            if (t < min) return { level: 'error', text: `Turno < 2h — mínimo ${fmtHour(min)}` };
-            if (t > max) return { level: 'warn',  text: `Turno > 6h — máximo ${fmtHour(max)}` };
-            return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
-        }
-
-        if (idx === 2 && working[1]) {
-
-            const s1 = toMin(working[1]);
-            if (s1 === null) return null;
-            const min = s1 + CONFIG.INTERVALO_MINIMO;
-            const max = s1 + CONFIG.INTERVALO_MAXIMO;
-
-            if (t < min) return { level: 'error', text: `Intervalo < 30min — retornar após ${fmtHour(min)}` };
-            if (t > max) return { level: 'warn',  text: `Intervalo > 3h30 — máximo ${fmtHour(max)}` };
-            return { level: 'ok', hint: `Janela: ${fmtHour(min)} – ${fmtHour(max)}` };
-        }
-
-        if (idx === 3 && working.length >= 3) {
-
-            const e1 = toMin(working[0]);
-            const s1 = toMin(working[1]);
-            const e2 = toMin(working[2]);
-            if (e1 === null || s1 === null || e2 === null) return null;
-
-            const worked1 = s1 - e1;
-            const h8  = e2 + (CONFIG.CARGA_DIARIA  - worked1);
-            const h10 = e2 + (CONFIG.MAX_HORAS_DIA - worked1);
-
-            if (t < h8)  return { level: 'warn',  text: `Abaixo de 8h — ideal ${fmtHour(h8)}` };
-            if (t > h10) return { level: 'error', text: `Acima de 10h — máximo ${fmtHour(h10)}` };
-            return { level: 'ok', hint: `8h: ${fmtHour(h8)} · 10h: ${fmtHour(h10)}` };
-        }
-
-        return null;
+        return [
+            'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ahgora Smart Panel//PT', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+            'BEGIN:VEVENT', `UID:${uid}`, `DTSTAMP:${dtstamp}Z`,
+            `DTSTART;TZID=America/Sao_Paulo:${fmtGoogleCalendarDate(start)}`,
+            `DTEND;TZID=America/Sao_Paulo:${fmtGoogleCalendarDate(end)}`,
+            `SUMMARY:${titulo}`, `DESCRIPTION:${descricao}`,
+            'END:VEVENT', 'END:VCALENDAR'
+        ].join('\r\n');
     }
 
-    function openPunchEditor(dayInfo, targetEl) {
+    function downloadICS(titulo, descricao, startMinute, endMinute) {
+        const ics = gerarICS(titulo, descricao, startMinute, endMinute, new Date());
+        if (!ics) return;
+        const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = $.el('a', { href: url, download: `ahgora-${formatDateKey()}.ics` });
+        document.body.appendChild(link); link.click(); document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
 
-        const wasPinned = _peState ? _peState.pinned : false;
+    /* =========================================================
+       SECAO 15: EXPORTACAO MULTI-FORMATO (F-016)
+    ========================================================= */
 
-        _peEditingIdx = null;
+    function exportarTextoPlain(dados) {
+        const { data, batidas, trabalhado, saldo } = dados;
+        const dataStr = new Date(data).toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        let text = `📅 ${dataStr}\n`;
+        const labels = ['Entrada', 'Saída intervalo', 'Retorno', 'Saída'];
+        for (let i = 0; i < batidas.length; i++) {
+            text += `${labels[i] || 'Batida'}: ${batidas[i]}\n`;
+        }
+        text += `⏸ Intervalo: ${batidas[1] && batidas[2] ? batidas[1] + ' - ' + batidas[2] : 'N/A'}\n`;
+        text += `📊 Trabalhado: ${fmtMin(trabalhado)} | Saldo: ${fmtMin(saldo)}\n`;
+        return text;
+    }
 
-        _peState = {
-            dateKey: dayInfo.dateKey,
-            dateLabel: dayInfo.dateLabel,
-            mirrorPunches: dayInfo.mirrorPunches || [],
-            working: (() => {
-                const ov = getLocalDayPunchOverrides(dayInfo.dateKey);
-                return ov ? [...ov] : [...(dayInfo.mirrorPunches || [])];
-            })(),
-            pinned: wasPinned
-        };
+    function exportarMarkdown(dias, periodo) {
+        const hoje = new Date();
+        const diasSemana = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+        let md = `# 📊 Relatório Ahgora — ${periodo}\n\n`;
+        md += `**Período:** ${String(hoje.getMonth() + 1).padStart(2, '0')}/${hoje.getFullYear()}\n\n`;
+        md += '| Data | Dia | Batidas | Trabalhado | Saldo |\n';
+        md += '|------|-----|---------|------------|-------|\n';
+        dias.filter(d => !d.isFuture).sort((a, b) => a.data - b.data).forEach(d => {
+            md += `| ${d.data.toLocaleDateString('pt-BR')} | ${diasSemana[d.data.getDay()]} | ${d.batidas.join(', ') || '-'} | ${fmtMin(d.trabalhado)} | ${d.isBusinessDay ? fmtMin(d.saldo) : '-'} |\n`;
+        });
+        return md;
+    }
 
-        let panel = document.getElementById('ahg-punch-editor');
+    function compartilharWebShare(dados) {
+        if (!navigator.share) { Logger.warn('Export', 'Web Share API não suportada'); return; }
+        navigator.share({ title: 'Jornada Ahgora', text: exportarTextoPlain(dados) }).catch(() => { });
+    }
 
-        if (!panel) {
+    /* =========================================================
+       SECAO 16: ESTRUTURA DO PAINEL DO ESPELHO
+    ========================================================= */
 
-            panel = document.createElement('div');
-            panel.id = 'ahg-punch-editor';
-            document.body.appendChild(panel);
+    function criarEstruturaMirror() {
+        if (document.getElementById('ahg-panel')) return;
 
-            // Initial position (centered top)
-            panel.style.top = '80px';
-            panel.style.left = '50%';
-            panel.style.transform = 'translateX(-50%)';
+        const eyeFab = $.el('div', { id: 'ahg-eye-fab-mirror', class: 'ahg-eye-fab', title: 'Alternar privacidade', text: privacyIcon() });
+        eyeFab.style.bottom = '80px';
+        $.on(eyeFab, 'click', () => { togglePrivacyHidden(); renderMirrorPanel(); });
+        document.body.appendChild(eyeFab);
 
-            if (!_peDragListenersAdded) {
+        const fab = $.el('div', { id: 'ahg-fab', text: '⏱' });
+        $.on(fab, 'click', () => { $.qs('#ahg-panel').style.display = ''; fab.style.display = 'none'; });
+        document.body.appendChild(fab);
 
-                _peDragListenersAdded = true;
+        const panel = $.el('div', { id: 'ahg-panel' });
+        panel.style.display = 'none';
+        document.body.appendChild(panel);
 
-                document.addEventListener('mousemove', e => {
+        let drag = false, ox = 0, oy = 0;
+        $.on(panel, 'mousedown', (e) => { if (!e.target.closest('.a-tit')) return; drag = true; const r = panel.getBoundingClientRect(); ox = e.clientX - r.left; oy = e.clientY - r.top; });
+        $.on(document, 'mousemove', (e) => { if (!drag) return; panel.style.left = `${e.clientX - ox}px`; panel.style.top = `${e.clientY - oy}px`; panel.style.bottom = 'auto'; });
+        $.on(document, 'mouseup', () => { drag = false; });
+    }
 
-                    if (!_peDrag.active) return;
+    /* =========================================================
+       SECAO 17: PAINEL DE BATIDA (F-001, F-002, F-003, F-005)
+    ========================================================= */
 
-                    const p = document.getElementById('ahg-punch-editor');
+    const BatidaUI = {
+        panel: null, fab: null, expanded: false, alarmeInterval: null,
 
-                    if (!p) { _peDrag.active = false; return; }
+        init() { this.criarFAB(); this.criarPanel(); this.iniciarAlarmeLoop(); Logger.registerModule('BatidaUI', 'ok', 'Painel de batida inicializado'); },
 
-                    p.style.left = `${e.clientX - _peDrag.ox}px`;
-                    p.style.top = `${e.clientY - _peDrag.oy}px`;
-                });
+        criarFAB() {
+            if (document.getElementById('ahg-batida-fab')) return;
+            this.fab = $.el('div', { id: 'ahg-batida-fab', text: '⏱', title: 'Painel de Jornada' });
+            $.on(this.fab, 'click', () => this.toggle());
+            document.body.appendChild(this.fab);
+        },
 
-                document.addEventListener('mouseup', () => {
-                    _peDrag.active = false;
-                });
+        criarPanel() {
+            if (document.getElementById('ahg-batida-panel')) return;
+            this.panel = $.el('div', { id: 'ahg-batida-panel' });
+            document.body.appendChild(this.panel);
+            this.render();
+        },
+
+        toggle() { this.expanded = !this.expanded; this.panel.classList.toggle('visible', this.expanded); if (this.expanded) this.render(); },
+
+        render() {
+            if (!this.panel || !this.expanded) return;
+            const cfg = ConfigStore.get();
+            const shared = readSharedTruth();
+            const interjornada = this.calcularInterjornada(shared);
+            const intrajornada = this.calcularIntrajornada(shared);
+            const estadoJornada = this.detectarEstadoJornada(shared);
+
+            let html = `
+            <div class="a-tit">
+                ⏱ Jornada
+                <span class="ahg-privacy-btn" id="ahg-privacy-batida" title="Alternar privacidade">${privacyIcon()}</span>
+                <span class="a-x" id="ahg-close-batida">–</span>
+            </div>
+            <div class="a-body">`;
+
+            const cards = cfg.cardsAtivos;
+            const zen = cfg.modoZen;
+
+            // F-001: Interjornada
+            if (cards.includes('interjornada') || zen) {
+                const active = zen && estadoJornada === 'nao-iniciado' ? 'ahg-card-active' : '';
+                html += `<div class="ahg-card ${active}" data-card="interjornada">
+                    <div class="ahg-card-tit">🛌 Interjornada (Art. 66 CLT)</div>
+                    <div class="ahg-card-val ${interjornada.podeBater ? 'ok' : 'warn'}">${interjornada.texto}</div>
+                    <div class="ahg-card-sub">${interjornada.sub}</div>
+                </div>`;
             }
 
-            panel.addEventListener('mousedown', e => {
+            // F-002: Intrajornada
+            if ((cards.includes('intrajornada') || zen) && intrajornada.visivel) {
+                const active = zen && estadoJornada === 'intervalo' ? 'ahg-card-active' : '';
+                html += `<div class="ahg-card ${active}" data-card="intrajornada">
+                    <div class="ahg-card-tit">⏸ Intrajornada (Art. 71 CLT)</div>
+                    <div class="ahg-card-val neu">${intrajornada.retornoMin} → ${intrajornada.retornoMax}</div>
+                    <div class="ahg-card-sub">Retorno permitido: 30min a 2h de intervalo</div>
+                </div>`;
+            }
 
-                if (!e.target.closest('.ahg-pe-hdr')) return;
+            // F-003: Alarme
+            if (cards.includes('alarme') || zen) {
+                const active = zen ? 'ahg-card-active' : '';
+                html += `<div class="ahg-card ${active}" data-card="alarme">
+                    <div class="ahg-card-tit">🔔 Alarmes</div>
+                    ${this.renderAlarmeControls(cfg)}
+                </div>`;
+            }
 
-                _peDrag.active = true;
-                panel.style.transform = '';
+            // Card: Saldo
+            if (cards.includes('saldo') || zen) {
+                const active = zen && estadoJornada === 'encerrado' ? 'ahg-card-active' : '';
+                const saldo = shared.dayBalance || 0;
+                html += `<div class="ahg-card ${active}" data-card="saldo">
+                    <div class="ahg-card-tit">📊 Saldo do Dia</div>
+                    <div class="ahg-card-val ${saldo >= 0 ? 'ok' : 'neg'}">${renderMin(saldo)}</div>
+                    <div class="ahg-card-sub">Trabalhado: ${renderMin(shared.workedToday || 0)}</div>
+                </div>`;
+            }
 
-                const r = panel.getBoundingClientRect();
-                _peDrag.ox = e.clientX - r.left;
-                _peDrag.oy = e.clientY - r.top;
+            // F-019: Historico
+            if (cards.includes('historico')) {
+                const historico = this.getHistoricoBatidas(shared);
+                html += `<div class="ahg-card" data-card="historico">
+                    <div class="ahg-card-tit">📝 Últimas Batidas</div>
+                    <div style="font-size:11px; max-height:120px; overflow-y:auto;">${historico}</div>
+                </div>`;
+            }
+
+            // F-016: Exportacao
+            html += `<hr class="a-div"><div class="a-sec">Exportar</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="ahg-btn ahg-btn-sm" id="ahg-export-ics">📅 Calendário (.ics)</button>
+                    <button class="ahg-btn ahg-btn-sm" id="ahg-export-text">📋 Copiar texto</button>
+                </div>`;
+
+            // F-017/F-020: Config
+            html += `<hr class="a-div"><div class="a-sec">Configurações</div>
+                <div class="ahg-config-grid" style="padding:4px 0;">
+                    <div class="ahg-config-item"><span class="ahg-config-label">Tema</span>
+                        <select class="ahg-config-select" id="ahg-tema-batida">
+                            <option value="auto" ${cfg.tema === 'auto' ? 'selected' : ''}>Auto</option>
+                            <option value="light" ${cfg.tema === 'light' ? 'selected' : ''}>Claro</option>
+                            <option value="dark" ${cfg.tema === 'dark' ? 'selected' : ''}>Escuro</option>
+                        </select>
+                    </div>
+                    <div class="ahg-config-item">
+                        <label class="ahg-toggle"><input type="checkbox" id="ahg-zen-batida" ${cfg.modoZen ? 'checked' : ''}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span>Modo Zen</label>
+                    </div>
+                </div>`;
+
+            html += `</div>`;
+            this.panel.innerHTML = html;
+
+            // Listeners
+            $.on($.qs('#ahg-close-batida', this.panel), 'click', () => this.toggle());
+            $.on($.qs('#ahg-privacy-batida', this.panel), 'click', () => { togglePrivacyHidden(); this.render(); });
+            $.on($.qs('#ahg-export-ics', this.panel), 'click', () => this.exportarICS(shared));
+            $.on($.qs('#ahg-export-text', this.panel), 'click', () => this.copiarTexto(shared));
+            $.on($.qs('#ahg-tema-batida', this.panel), 'change', (e) => { ConfigStore.patch({ tema: e.target.value }); Tema.atualizar(); this.render(); });
+            $.on($.qs('#ahg-zen-batida', this.panel), 'change', (e) => { ConfigStore.patch({ modoZen: e.target.checked }); this.render(); });
+
+            const masterToggle = $.qs('#ahg-alarme-master', this.panel);
+            if (masterToggle) {
+                $.on(masterToggle, 'change', (e) => { ConfigStore.patch({ alarmeAtivo: e.target.checked }); this.render(); });
+            }
+
+            if (cfg.modoZen) this.panel.classList.add('ahg-zen'); else this.panel.classList.remove('ahg-zen');
+        },
+
+        calcularInterjornada(shared) {
+            const ultimaSaida = shared.lastPunch ? toMin(shared.lastPunch) : null;
+            if (!ultimaSaida) return { podeBater: true, texto: 'ℹ️ Primeiro acesso', sub: 'Verifique o espelho para sincronizar dados', minutosRestantes: null };
+            const agora = nowMin();
+            const minutosDescanso = ((agora - ultimaSaida) + 1440) % 1440;
+            const minutosRestantes = Math.max(0, CONFIG.DESCANSO_MINIMO - minutosDescanso);
+            if (minutosRestantes <= 0) return { podeBater: true, texto: '✅ Já pode bater ponto', sub: `Descanso: ${fmtMin(Math.round(minutosDescanso))}`, minutosRestantes: 0 };
+            return { podeBater: false, texto: `⏳ ${fmtMin(Math.round(minutosRestantes))}`, sub: `Próxima batida: ${fmtHour(ultimaSaida + CONFIG.DESCANSO_MINIMO)} (11h de descanso)`, minutosRestantes };
+        },
+
+        calcularIntrajornada(shared) {
+            const batidas = shared.todayPunches || [];
+            if (batidas.length === 2) {
+                const saida1 = toMin(batidas[1]);
+                return { visivel: true, retornoMin: renderClock(saida1 + CONFIG.INTERVALO_MINIMO), retornoMax: renderClock(saida1 + CONFIG.INTERVALO_MAXIMO) };
+            }
+            return { visivel: false, retornoMin: null, retornoMax: null };
+        },
+
+        detectarEstadoJornada(shared) {
+            const batidas = shared.todayPunches || [];
+            if (batidas.length === 0) return 'nao-iniciado';
+            if (batidas.length === 1) return 'primeiro-turno';
+            if (batidas.length === 2) return 'intervalo';
+            if (batidas.length === 3) return 'segundo-turno';
+            return 'encerrado';
+        },
+
+        renderAlarmeControls(cfg) {
+            const ativo = cfg.alarmeAtivo;
+            return `
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <label class="ahg-toggle"><input type="checkbox" id="ahg-alarme-master" ${ativo ? 'checked' : ''}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span></label>
+                    <span style="font-size:11px;">${ativo ? 'Alarmes ativos' : 'Alarmes desativados'}</span>
+                </div>
+                <div style="font-size:10px;color:var(--ahg-text-label);opacity:.7;">
+                    ${ativo ? '✅ 8h · ⛔ 10h · 🚨 12h' : 'Clique para ativar alarmes de jornada'}
+                </div>`;
+        },
+
+        getHistoricoBatidas(shared) {
+            const batidas = shared.todayPunches || [];
+            if (batidas.length === 0) return '<span style="opacity:.5;">Nenhuma batida hoje</span>';
+            const labels = ['Entrada', 'Saída intervalo', 'Retorno', 'Saída'];
+            return batidas.map((b, i) => `<div style="display:flex;justify-content:space-between;padding:2px 0;"><span>${labels[i] || 'Batida ' + (i + 1)}</span><span style="font-weight:700;">${renderText(b)}</span></div>`).join('');
+        },
+
+        exportarICS(shared) {
+            const batidas = shared.todayPunches || [];
+            if (batidas.length < 2) { Logger.warn('ICS', 'Sem batidas suficientes'); return; }
+            const entrada = toMin(batidas[0]);
+            const saida = batidas.length >= 4 ? toMin(batidas[3]) : (shared.idealExit ? toMin(shared.idealExit) : entrada + CONFIG.CARGA_DIARIA);
+            downloadICS('Jornada Ahgora', `Jornada do dia ${formatDateKey()}`, entrada, saida);
+            Logger.info('ICS', 'Arquivo .ics gerado para download');
+        },
+
+        copiarTexto(shared) {
+            const dados = { data: new Date(), batidas: shared.todayPunches || [], trabalhado: shared.workedToday || 0, saldo: shared.dayBalance || 0 };
+            if (navigator.clipboard) navigator.clipboard.writeText(exportarTextoPlain(dados)).then(() => Logger.info('Export', 'Texto copiado')).catch(() => { });
+        },
+
+        iniciarAlarmeLoop() { this.alarmeInterval = setInterval(() => this.avaliarAlarmes(), 30000); },
+
+        avaliarAlarmes() {
+            const cfg = ConfigStore.get();
+            if (!cfg.alarmeAtivo) return;
+            const shared = readSharedTruth();
+            const trabalhado = shared.workedToday || 0;
+
+            const limites = [
+                { id: 'h6', min: CONFIG.MAX_HORAS_TURNO, titulo: '6h de turno', msg: 'Você completou 6h de turno', urgente: false },
+                { id: 'h8', min: CONFIG.CARGA_DIARIA, titulo: '8h diárias', msg: 'Meta de 8h atingida', urgente: false },
+                { id: 'h10', min: CONFIG.MAX_HORAS_DIA, titulo: '10h limite', msg: '⚠️ Limite de 10h atingido (Art. 59 CLT)', urgente: true },
+                { id: 'h12', min: CONFIG.MAX_HORAS_DIA + 120, titulo: '12h ILEGAL', msg: '🚨 JORNADA ILEGAL! Art. 61 CLT. Informe RH imediatamente.', urgente: true }
+            ];
+
+            limites.forEach(lim => {
+                if (!cfg.alarmes[lim.id]?.ativo) return;
+                const diff = lim.min - trabalhado;
+                if (diff >= 0 && diff <= 5) notif(`batida-${lim.id}`, `⏰ ${lim.titulo}`, `${lim.msg}\nFaltam ~${diff}min`, lim.urgente);
             });
+
+            if (cfg.alarmes.dsr?.ativo && shared.diasConsecutivos >= 5) {
+                notif('batida-dsr', '🛌 DSR Próximo', `Você trabalhou ${shared.diasConsecutivos} dias consecutivos. Art. 67 CLT.`, true);
+            }
+        },
+
+        destroy() {
+            if (this.alarmeInterval) clearInterval(this.alarmeInterval);
+            this.fab?.remove(); this.panel?.remove();
         }
+    };
 
-        // When not pinned, position panel near the clicked day cell
-        if (!wasPinned && targetEl) {
+    /* =========================================================
+       SECAO 18: DIAGNOSTICO (F-026)
+    ========================================================= */
 
-            panel.style.transform = '';
+    const Diagnostico = {
+        SCHEMA_VERSION: '1.0',
 
-            const dayEl = targetEl.closest('.v-calendar-weekly__day') || targetEl;
-            const r = dayEl.getBoundingClientRect();
-            const panelW = 270;
-            const leftCandidate = r.right + 10;
-            const left = leftCandidate + panelW + 10 > window.innerWidth
-                ? Math.max(r.left - panelW - 10, 10)
-                : leftCandidate;
+        gerar() {
+            const cfg = ConfigStore.get();
+            const shared = readSharedTruth();
+            const page = PageAdapter.detect();
+            const modulos = [..._moduleStatus];
+            const todosModulos = ['CONFIG', 'STATE', 'Hora', 'DataHelper', 'Jornada', 'Logger', 'Tema', 'ConfigStore', 'BatidaUI', 'MirrorUI', 'Diagnostico', 'Notificacoes'];
+            todosModulos.forEach(nome => { if (!modulos.find(m => m.nome === nome)) modulos.push({ nome, status: 'na', mensagem: `Módulo ${nome} não carregado nesta página`, stack: null }); });
 
-            panel.style.left = `${left}px`;
-            panel.style.top = `${Math.max(r.top, 10)}px`;
+            return {
+                meta: { schema_version: this.SCHEMA_VERSION, script_version: CONFIG.VERSAO, timestamp: new Date().toISOString(), url: window.location.href, page: page, pagina_titulo: document.title },
+                ambiente: { userAgent: navigator.userAgent, platform: navigator.platform, language: navigator.language, viewport: `${window.innerWidth}x${window.innerHeight}`, tema_detectado: Tema.get(), tema_configurado: cfg.tema, tampermonkey: typeof GM_getValue === 'function', notification_permission: 'Notification' in window ? Notification.permission : 'unsupported' },
+                modulos: modulos.map(m => ({ nome: m.nome, status: m.status, mensagem: m.mensagem, stack: m.stack })),
+                config: cfg, localStorage_snapshot: this._snapshotLocalStorage(),
+                error_log: parseJson(localStorage.getItem('@ahgora-panel/error-log') || '[]', []),
+                jornada_atual: { estado: shared.status || 'DESCONHECIDO', batidas_hoje: shared.todayPunches || [], trabalhado_min: shared.workedToday || 0, saldo_min: shared.dayBalance || 0, proxima_batida_permitida: null, saida_ideal: shared.idealExit || null },
+                auto_analysis: this._autoAnalysis(modulos)
+            };
+        },
+
+        _snapshotLocalStorage() {
+            const snapshot = {};
+            try { for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (key && key.startsWith('@ahgora-panel')) snapshot[key] = localStorage.getItem(key); } } catch (_) { }
+            return snapshot;
+        },
+
+        _autoAnalysis(modulos) {
+            const erros = modulos.filter(m => m.status === 'erro');
+            return { problema_detectado: erros.length > 0, modulos_com_erro: erros.map(m => m.nome), sugestao_acao: erros.length > 0 ? `${erros.length} módulo(s) com erro. Verifique o console para detalhes.` : 'Nenhum problema detectado.', acoes_sugeridas: erros.length > 0 ? ['Recarregar a página', 'Verificar se o espelho está carregado', 'Verificar conexão com a Ahgora'] : [] };
+        },
+
+        abrirModal() {
+            const existente = document.getElementById('ahg-diag-modal');
+            if (existente) existente.remove();
+            const diag = this.gerar();
+            const modal = $.el('div', { id: 'ahg-diag-modal' });
+            const jsonStr = JSON.stringify(diag, null, 2);
+            const modulosHtml = diag.modulos.map(m => { const icon = m.status === 'ok' ? '✅' : m.status === 'erro' ? '❌' : '⬜'; return `<div class="ahg-diag-mod ${m.status}">${icon} <strong>${m.nome}</strong> — ${m.mensagem}</div>`; }).join('');
+
+            modal.innerHTML = `
+                <div id="ahg-diag-box">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                        <h2 style="margin:0;font-size:16px;">🔧 Diagnóstico Ahgora Smart Panel</h2>
+                        <button id="ahg-diag-close" style="background:transparent;border:1px solid var(--ahg-border);color:var(--ahg-text);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">Fechar</button>
+                    </div>
+                    <div style="font-size:11px;opacity:.7;margin-bottom:12px;">
+                        📋 v${diag.meta.script_version} | 🌐 ${diag.meta.page} | 🎨 ${diag.ambiente.tema_detectado}
+                        ${diag.auto_analysis.problema_detectado ? '| ⚠️ ' + diag.auto_analysis.modulos_com_erro.length + ' módulos com erro' : ''}
+                    </div>
+                    <div class="ahg-diag-sec"><h3>Módulos</h3>${modulosHtml}</div>
+                    <div class="ahg-diag-sec"><h3>JSON de Diagnóstico</h3><div class="ahg-diag-json">${escapeHtml(jsonStr.substring(0, 8000))}${jsonStr.length > 8000 ? '\n... (truncado)' : ''}</div></div>
+                    <div style="display:flex;gap:8px;margin-top:12px;">
+                        <button class="ahg-btn" id="ahg-diag-copy">📋 Copiar JSON</button>
+                        <button class="ahg-btn" id="ahg-diag-download">⬇️ Download JSON</button>
+                        <button class="ahg-btn ahg-btn-danger" id="ahg-diag-clear">🗑 Limpar Logs</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+            $.on($.qs('#ahg-diag-close', modal), 'click', () => modal.remove());
+            $.on($.qs('#ahg-diag-copy', modal), 'click', () => { if (navigator.clipboard) navigator.clipboard.writeText(jsonStr).then(() => alert('JSON copiado!')).catch(() => { }); });
+            $.on($.qs('#ahg-diag-download', modal), 'click', () => { const blob = new Blob([jsonStr], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = $.el('a', { href: url, download: `ahgora-diagnostico-${formatDateKey()}.json` }); document.body.appendChild(link); link.click(); document.body.removeChild(link); setTimeout(() => URL.revokeObjectURL(url), 5000); });
+            $.on($.qs('#ahg-diag-clear', modal), 'click', () => { localStorage.removeItem('@ahgora-panel/error-log'); Logger.info('Diagnostico', 'Logs limpos'); this.abrirModal(); });
         }
+    };
 
-        renderPunchEditor();
-    }
+    window.ahgDiagnostico = () => Diagnostico.gerar();
 
-    function renderPunchEditor() {
+    /* =========================================================
+       SECAO 19: PAGE ADAPTER
+    ========================================================= */
 
-        const panel = document.getElementById('ahg-punch-editor');
+    const PageAdapter = {
+        detect() {
+            const url = window.location.href;
+            if (url.includes('mirror.app.ahgora.com.br')) return 'mirror';
+            if (url.includes('novabatidaonline') || url.includes('app.ahgora.com.br')) return 'batida';
+            return 'unknown';
+        },
 
-        if (!panel || !_peState) return;
+        init() {
+            const page = this.detect();
+            injectCSS();
+            if (page === 'mirror') { Logger.info('PageAdapter', 'Página detectada: mirror'); this.initMirror(); }
+            else if (page === 'batida') { Logger.info('PageAdapter', 'Página detectada: batida'); this.initBatida(); }
+            else Logger.warn('PageAdapter', 'Página desconhecida', { url: window.location.href });
 
-        const { dateKey, dateLabel, mirrorPunches, working, pinned } = _peState;
-        const hasOverrides = Boolean(getLocalDayPunchOverrides(dateKey));
-        const mirrorSet = new Set(mirrorPunches);
-        const trabalhado = working.length >= 2 ? calcularTrabalhado(working) : 0;
-        const saldo = trabalhado - CONFIG.CARGA_DIARIA;
-        const violations = getDayRuleViolations({ batidas: working, trabalhado });
+            if (ConfigStore.isFeatureEnabled('F026_diagnostico')) {
+                $.on(document, 'keydown', (e) => { if (e.ctrlKey && e.shiftKey && e.key === 'D') { e.preventDefault(); Diagnostico.abrirModal(); } });
+            }
+        },
 
-        const punchRows = working.length
-            ? working.map((t, i) => {
-
-                const isMirror = mirrorSet.has(t);
-                const isEditing = _peEditingIdx === i && !isMirror;
-                const hint = getPunchHint(working, i);
-
-                const hintColor = hint
-                    ? (hint.level === 'error' ? '#ff8888' : hint.level === 'warn' ? '#ffd08a' : '#9ef0bf')
-                    : '';
-                const hintHtml = hint
-                    ? `<div style="font-size:9px;padding:0 2px 4px 6px;color:${hintColor};${hint.level === 'ok' ? 'opacity:.55;' : ''}">${hint.level === 'ok' ? '✓' : '⚠'} ${hint.text || hint.hint}</div>`
-                    : '';
-                const rowBorder = hint && hint.level === 'error'
-                    ? 'border-left:2px solid #ff8888;padding-left:4px;'
-                    : hint && hint.level === 'warn'
-                        ? 'border-left:2px solid #ffd08a;padding-left:4px;'
-                        : '';
-
-                if (isEditing) {
-                    return `<div class="ahg-pe-punch" style="${rowBorder}">
-                        <input class="ahg-pe-inline-input" data-idx="${i}" value="${escapeHtml(t)}" maxlength="5" placeholder="HH:MM" style="width:54px;font-size:12px;font-weight:700;background:var(--bg-input);color:var(--text-main);border:1px solid var(--primary);border-radius:var(--radius);padding:2px 5px;font-family:inherit;">
-                        <button class="btn-icon btn-success ahg-pe-confirm" data-idx="${i}" title="Confirmar (Enter)" style="padding:1px 5px;font-size:12px;line-height:1;">✓</button>
-                        <button class="btn-icon ahg-pe-cancel" data-idx="${i}" title="Cancelar (Esc)" style="padding:1px 5px;font-size:12px;line-height:1;">✗</button>
-                    </div>${hintHtml}`;
+        initMirror() {
+            const checkCalendar = setInterval(() => {
+                if (document.querySelector('.v-calendar-weekly')) {
+                    clearInterval(checkCalendar);
+                    criarEstruturaMirror();
+                    renderMirrorPanel();
+                    agendarRenderMinutoMirror();
+                    if (ConfigStore.isFeatureEnabled('F006_inconsistencias')) destacarInconsistencias();
+                    Logger.registerModule('MirrorUI', 'ok', 'Painel do espelho inicializado');
                 }
+            }, 1000);
 
-                const timeSpan = isMirror
-                    ? `<span class="ahg-pe-punch-time">${escapeHtml(t)}</span>`
-                    : `<span class="ahg-pe-punch-time ahg-pe-edit-time" data-idx="${i}" title="Clique para editar" style="cursor:pointer;text-decoration:underline dotted rgba(122,108,255,.5);">${escapeHtml(t)}</span>`;
+            const observer = new MutationObserver(() => { if (ConfigStore.isFeatureEnabled('F006_inconsistencias')) destacarInconsistencias(); });
+            $.ready(() => { const cal = document.querySelector('.v-calendar-weekly'); if (cal) observer.observe(cal, { childList: true, subtree: true }); });
+        },
 
-                return `<div class="ahg-pe-punch" style="${rowBorder}">
-                    ${timeSpan}
-                    <span class="ahg-pe-punch-src">${isMirror ? '🔒' : '📍'} ${isMirror ? 'mirror' : 'local'}</span>
-                    ${!isMirror ? `<button class="btn-icon ahg-pe-edit-inline" data-idx="${i}" title="Editar" style="padding:1px 4px;font-size:10px;line-height:1;opacity:.65;border-color:rgba(122,108,255,.3);">✏</button>` : ''}
-                    <button class="btn-icon btn-danger ahg-pe-remove" data-idx="${i}" title="Remover" style="padding:1px 6px;font-size:13px;line-height:1;">×</button>
-                </div>${hintHtml}`;
-            }).join('')
-            : '<div style="font-size:10px;opacity:.45;padding:4px 0;">Nenhuma batida</div>';
+        initBatida() { if (ConfigStore.isFeatureEnabled('F005_overlay')) BatidaUI.init(); Logger.registerModule('BatidaUI', 'ok', 'Painel de batida inicializado'); }
+    };
 
-        const violationsHtml = violations.length
-            ? `<div style="font-size:9px;color:#ffd08a;margin-top:2px;">${violations.map(v => `⚠ ${v.label}`).join(' · ')}</div>`
-            : '';
+    /* =========================================================
+       SECAO 20: FUNCOES AUXILIARES ESPELHO
+    ========================================================= */
 
-        panel.className = pinned ? 'is-pinned' : '';
+    function agendarRenderMinutoMirror() {
+        const agora = new Date();
+        const msAteProximoMinuto = (60 - agora.getSeconds()) * 1000 - agora.getMilliseconds();
+        setTimeout(() => { if (document.visibilityState === 'visible') renderMirrorPanel(); agendarRenderMinutoMirror(); }, msAteProximoMinuto);
+    }
 
-        panel.innerHTML = `
-            <div class="ahg-pe-hdr">
-                ✏ ${escapeHtml(dateLabel)}
-                <span style="flex:1"></span>
-                <button id="ahg-pe-pin" class="btn-icon${pinned ? ' btn-success' : ''}" title="${pinned ? 'Desprender' : 'Fixar posição'}">📌</button>
-                <button id="ahg-pe-close" class="btn-icon btn-danger" title="Fechar" style="margin-left:2px;">×</button>
-            </div>
-            <div class="ahg-pe-body">
-                <div style="font-size:9px;color:var(--text-label);margin-bottom:2px;">
-                    ${mirrorPunches.length} no mirror${hasOverrides ? ' · ✏ ajustado localmente' : ''}
-                </div>
-                ${punchRows}
-                <div class="ahg-pe-add-row">
-                    <input id="ahg-pe-add-input" type="text" placeholder="HH:MM" maxlength="5">
-                    <button id="ahg-pe-add-btn" class="btn btn-success" style="padding:4px 10px;font-size:14px;line-height:1;">+</button>
-                </div>
-                <div class="ahg-pe-totals">
-                    <div class="ahg-pe-total-item">
-                        <div class="ahg-pe-total-lbl">Trabalhado</div>
-                        <div class="ahg-pe-total-val" style="color:${saldo >= 0 ? '#3ddc84' : '#ff6b6b'};">${fmtMin(trabalhado)}</div>
-                    </div>
-                    <div class="ahg-pe-total-item">
-                        <div class="ahg-pe-total-lbl">Saldo</div>
-                        <div class="ahg-pe-total-val" style="color:${saldo >= 0 ? '#3ddc84' : '#ff6b6b'};">${fmtMin(saldo)}</div>
-                    </div>
-                </div>
-                ${violationsHtml}
-                <div style="display:flex;gap:4px;margin-top:6px;">
-                    <button id="ahg-pe-save" class="btn btn-primary" style="flex:1;font-size:10px;">💾 Salvar</button>
-                    ${hasOverrides ? `<button id="ahg-pe-reset" class="btn btn-danger" title="Resetar para dados do mirror" style="font-size:10px;">↺ Reset</button>` : ''}
-                </div>
-            </div>
-        `;
-
-        document.getElementById('ahg-pe-close')?.addEventListener('click', () => {
-            panel.remove();
-            _peState = null;
-        });
-
-        document.getElementById('ahg-pe-pin')?.addEventListener('click', () => {
-            _peState.pinned = !_peState.pinned;
-            renderPunchEditor();
-        });
-
-        document.getElementById('ahg-pe-add-btn')?.addEventListener('click', () => {
-
-            const inp = document.getElementById('ahg-pe-add-input');
-            const time = normalizePunchTime(inp?.value || '');
-
-            if (!time) { showLoggerToast('Horário inválido (HH:MM).'); return; }
-
-            if (_peState.working.includes(time)) {
-                showLoggerToast(`Batida ${time} já existe.`);
-                return;
+    function destacarInconsistencias() {
+        const dias = document.querySelectorAll('.v-calendar-weekly__day');
+        dias.forEach(day => {
+            if (day.classList.contains('v-outside')) return;
+            const label = day.querySelector('.v-calendar-weekly__day-label');
+            if (!label) return;
+            const batidas = [...day.querySelectorAll('.batida')].filter(x => !x.classList.contains('prevista'));
+            const isFuture = day.classList.contains('v-future');
+            const isWeekend = day.classList.contains('v-weekend');
+            if (!isFuture && !isWeekend && batidas.length > 0 && batidas.length % 2 !== 0) {
+                if (!day.querySelector('.ahg-cal-overlay')) {
+                    const overlay = $.el('div', { class: 'ahg-cal-overlay inconsistencia', text: '⚠️', title: 'Batida ímpar — justificativa necessária' });
+                    day.appendChild(overlay);
+                }
             }
-
-            _peState.working = [..._peState.working, time]
-                .sort((a, b) => toMin(a) - toMin(b));
-
-            renderPunchEditor();
-
-            document.getElementById('ahg-pe-add-input')?.focus();
-        });
-
-        document.getElementById('ahg-pe-add-input')?.addEventListener('keydown', e => {
-            if (e.key === 'Enter') document.getElementById('ahg-pe-add-btn')?.click();
-        });
-
-        document.getElementById('ahg-pe-save')?.addEventListener('click', () => {
-            setLocalDayPunchOverrides(_peState.dateKey, _peState.working);
-            showLoggerToast(`Batidas de ${_peState.dateLabel} salvas.`);
-            render();
-            renderPunchEditor();
-        });
-
-        document.getElementById('ahg-pe-reset')?.addEventListener('click', () => {
-            clearLocalDayPunchOverrides(_peState.dateKey);
-            _peState.working = [..._peState.mirrorPunches];
-            showLoggerToast(`${_peState.dateLabel}: resetado para dados do mirror.`);
-            render();
-            renderPunchEditor();
-        });
-
-        const startInlineEdit = (idx) => {
-            _peEditingIdx = idx;
-            renderPunchEditor();
-            setTimeout(() => {
-                const inp = panel.querySelector(`.ahg-pe-inline-input[data-idx="${idx}"]`);
-                if (inp) { inp.focus(); inp.select(); }
-            }, 0);
-        };
-
-        const confirmInlineEdit = (idx) => {
-            const inp = panel.querySelector(`.ahg-pe-inline-input[data-idx="${idx}"]`);
-            const newTime = normalizePunchTime(inp?.value || '');
-            if (!newTime) { showLoggerToast('Horário inválido (HH:MM).'); return; }
-            const others = _peState.working.filter((_, i) => i !== idx);
-            if (others.includes(newTime)) { showLoggerToast(`Batida ${newTime} já existe.`); return; }
-            _peState.working[idx] = newTime;
-            _peState.working = [..._peState.working].sort((a, b) => toMin(a) - toMin(b));
-            _peEditingIdx = null;
-            renderPunchEditor();
-        };
-
-        panel.querySelectorAll('.ahg-pe-edit-time, .ahg-pe-edit-inline').forEach(el => {
-            el.addEventListener('click', () => startInlineEdit(Number(el.dataset.idx)));
-        });
-
-        panel.querySelectorAll('.ahg-pe-confirm').forEach(btn => {
-            btn.addEventListener('click', () => confirmInlineEdit(Number(btn.dataset.idx)));
-        });
-
-        panel.querySelectorAll('.ahg-pe-cancel').forEach(btn => {
-            btn.addEventListener('click', () => { _peEditingIdx = null; renderPunchEditor(); });
-        });
-
-        panel.querySelectorAll('.ahg-pe-inline-input').forEach(inp => {
-            inp.addEventListener('keydown', e => {
-                const idx = Number(inp.dataset.idx);
-                if (e.key === 'Enter')  { e.preventDefault(); confirmInlineEdit(idx); }
-                if (e.key === 'Escape') { _peEditingIdx = null; renderPunchEditor(); }
-            });
-        });
-
-        panel.querySelectorAll('.ahg-pe-remove').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const idx = Number(btn.dataset.idx);
-                if (_peEditingIdx === idx) _peEditingIdx = null;
-                _peState.working = _peState.working.filter((_, i) => i !== idx);
-                renderPunchEditor();
-            });
         });
     }
 
     /* =========================================================
-       LOGGER - NOVABATIDAONLINE
+       SECAO 21: INICIALIZACAO
     ========================================================= */
 
-    let _loggerAlarmLastCheckAt = 0;
-    let _loggerAlarmFiredCache = null;
-    let _loggerAlarmSoundWarned = false;
-    let _loggerAlarmSettingsExpanded = false;
+    if (document.readyState !== 'loading') PageAdapter.init();
+    else document.addEventListener('DOMContentLoaded', () => PageAdapter.init());
 
-    function parseJson(text, fallback) {
-
-        try {
-            return JSON.parse(text);
-        } catch (_) {
-            return fallback;
-        }
-    }
-
-    /* ─── Local per-day punch overrides ─── */
-
-    const LOCAL_DAY_PUNCHES_KEY = 'ahgora_local_day_punches_v1';
-
-    let _peState = null;
-    let _peDrag = { active: false, ox: 0, oy: 0 };
-    let _peDragListenersAdded = false;
-    let _peEditingIdx = null;
-
-    function getLocalDayPunchOverrides(dateKey) {
-
-        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
-        const raw = store[dateKey];
-
-        if (!Array.isArray(raw)) {
-            return null;
-        }
-
-        const valid = raw.map(normalizePunchTime).filter(Boolean);
-
-        return valid.length ? valid : null;
-    }
-
-    function setLocalDayPunchOverrides(dateKey, punches) {
-
-        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
-        const valid = (punches || [])
-            .map(normalizePunchTime)
-            .filter(Boolean)
-            .sort((a, b) => toMin(a) - toMin(b));
-
-        if (valid.length === 0) {
-            delete store[dateKey];
-        } else {
-            store[dateKey] = valid;
-        }
-
-        gmSetValue(LOCAL_DAY_PUNCHES_KEY, JSON.stringify(store));
-    }
-
-    function clearLocalDayPunchOverrides(dateKey) {
-
-        const store = parseJson(gmGetValue(LOCAL_DAY_PUNCHES_KEY, '{}'), {});
-        delete store[dateKey];
-        gmSetValue(LOCAL_DAY_PUNCHES_KEY, JSON.stringify(store));
-    }
-
-    function showLoggerToast(message) {
-
-        let toast = document.getElementById('ahg-toast');
-
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.id = 'ahg-toast';
-            toast.style = `
-                position: fixed;
-                right: 24px;
-                bottom: 170px;
-                z-index: 100000;
-                background: #1e1b4b;
-                color: #dde;
-                border: 1px solid #4a3faf;
-                border-radius: 8px;
-                padding: 8px 10px;
-                font-family: 'Segoe UI', sans-serif;
-                font-size: 12px;
-            `;
-            document.body.appendChild(toast);
-        }
-
-        toast.textContent = message;
-        toast.style.display = 'block';
-
-        setTimeout(() => {
-            if (toast) toast.style.display = 'none';
-        }, 2200);
-    }
-
-    function getLoggerAlarmDefaults() {
-
-        return {
-            enabled: false,
-            mode: '10h',
-            leadMinutes: CONFIG.LOGGER_ALARM_LEAD_MINUTES,
-            channels: {
-                sound: true,
-                desktop: true
-            },
-            soundRepeat: CONFIG.LOGGER_ALARM_REPEAT,
-            gcalUserPath: CONFIG.GCAL_USER_PATH,
-            quickGcalEnabled: true,
-            quickCalendarProvider: 'both',
-            quickGcalOffsetMinutes: 10,
-            quickGcalAutoOpenEnabled: false,
-            quickGcalAutoOpenStage: 'off'
-        };
-    }
-
-    function normalizeLoggerAlarmConfig(raw) {
-
-        const defaults = getLoggerAlarmDefaults();
-        const src = raw && typeof raw === 'object' ? raw : {};
-
-        const mode = ['10h', 'interval', 'complete'].includes(src.mode)
-            ? src.mode
-            : defaults.mode;
-
-        const leadCandidates = [1, 3, 5, 10, 15];
-        const leadMinutes = leadCandidates.includes(Number(src.leadMinutes))
-            ? Number(src.leadMinutes)
-            : defaults.leadMinutes;
-
-        const soundRepeat = ['once', 'triple', 'loop'].includes(src.soundRepeat)
-            ? src.soundRepeat
-            : defaults.soundRepeat;
-
-        const channelsRaw = src.channels && typeof src.channels === 'object'
-            ? src.channels
-            : {};
-
-        const gcalUserPath = normalizeGoogleCalendarUserPath(src.gcalUserPath || defaults.gcalUserPath);
-        const quickGcalOffsetCandidates = [5, 10, 15];
-        const quickGcalOffsetMinutes = quickGcalOffsetCandidates.includes(Number(src.quickGcalOffsetMinutes))
-            ? Number(src.quickGcalOffsetMinutes)
-            : defaults.quickGcalOffsetMinutes;
-        const quickGcalAutoOpenStage = ['off', 'interval', 'return', 'exit', 'any'].includes(String(src.quickGcalAutoOpenStage || 'off'))
-            ? String(src.quickGcalAutoOpenStage)
-            : defaults.quickGcalAutoOpenStage;
-        const quickCalendarProvider = ['google', 'outlook', 'both'].includes(String(src.quickCalendarProvider || 'both'))
-            ? String(src.quickCalendarProvider)
-            : defaults.quickCalendarProvider;
-
-        return {
-            enabled: Boolean(src.enabled),
-            mode,
-            leadMinutes,
-            channels: {
-                sound: channelsRaw.sound !== false,
-                desktop: channelsRaw.desktop !== false
-            },
-            soundRepeat,
-            gcalUserPath,
-            quickGcalEnabled: src.quickGcalEnabled !== false,
-            quickCalendarProvider,
-            quickGcalOffsetMinutes,
-            quickGcalAutoOpenEnabled: Boolean(src.quickGcalAutoOpenEnabled),
-            quickGcalAutoOpenStage
-        };
-    }
-
-    function readLoggerAlarmConfig() {
-
-        const raw = parseJson(
-            gmGetValue(LOGGER_ALARM_CONFIG_KEY, '{}'),
-            {}
-        );
-
-        return normalizeLoggerAlarmConfig(raw);
-    }
-
-    function writeLoggerAlarmConfig(nextConfig) {
-
-        const normalized = normalizeLoggerAlarmConfig(nextConfig);
-
-        gmSetValue(
-            LOGGER_ALARM_CONFIG_KEY,
-            JSON.stringify(normalized)
-        );
-
-        return normalized;
-    }
-
-    function patchLoggerAlarmConfig(patch) {
-
-        const current = readLoggerAlarmConfig();
-        const merged = {
-            ...current,
-            ...patch,
-            channels: {
-                ...current.channels,
-                ...(patch.channels || {})
-            }
-        };
-
-        return writeLoggerAlarmConfig(merged);
-    }
-
-    function getLoggerAlarmModeLabel(mode) {
-
-        if (mode === 'interval') {
-            return 'Intervalo';
-        }
-
-        if (mode === 'complete') {
-            return 'Completo';
-        }
-
-        return '10h';
-    }
-
-    function getGuidanceStageLabel(stage) {
-
-        if (stage === 'interval') {
-            return 'Intervalo (saída do 1º turno)';
-        }
-
-        if (stage === 'return') {
-            return 'Retorno do intervalo';
-        }
-
-        if (stage === 'exit') {
-            return 'Saída do dia';
-        }
-
-        if (stage === 'entry') {
-            return 'Entrada';
-        }
-
-        if (stage === 'done') {
-            return 'Jornada encerrada';
-        }
-
-        return 'Fase atual';
-    }
-
-    function getQuickCalendarProviderLabel(provider) {
-
-        if (provider === 'google') {
-            return 'Google Calendar';
-        }
-
-        if (provider === 'outlook') {
-            return 'Outlook';
-        }
-
-        return 'Google + Outlook';
-    }
-
-    function readLoggerGcalAutoOpenState() {
-
-        const raw = parseJson(
-            gmGetValue(LOGGER_GCAL_AUTOPEN_STATE_KEY, '[]'),
-            []
-        );
-
-        if (!Array.isArray(raw)) {
-            return [];
-        }
-
-        return raw
-            .filter(entry => entry && typeof entry === 'object' && typeof entry.token === 'string')
-            .slice(-120);
-    }
-
-    function hasLoggerGcalAutoOpenToken(token) {
-
-        const state = readLoggerGcalAutoOpenState();
-        return state.some(entry => entry.token === token);
-    }
-
-    function markLoggerGcalAutoOpenToken(token, status) {
-
-        const state = readLoggerGcalAutoOpenState();
-        state.push({
-            token,
-            status: status === 'accepted' ? 'accepted' : 'dismissed',
-            at: Date.now()
-        });
-
-        gmSetValue(
-            LOGGER_GCAL_AUTOPEN_STATE_KEY,
-            JSON.stringify(state.slice(-120))
-        );
-    }
-
-    function getLoggerAlarmFiredState(todayKey) {
-
-        if (_loggerAlarmFiredCache && _loggerAlarmFiredCache.dayKey === todayKey) {
-            return _loggerAlarmFiredCache;
-        }
-
-        const raw = parseJson(
-            gmGetValue(LOGGER_ALARM_FIRED_STATE_KEY, '{}'),
-            {}
-        );
-
-        const state = {
-            dayKey: todayKey,
-            fired: []
-        };
-
-        if (
-            raw &&
-            typeof raw === 'object' &&
-            raw.dayKey === todayKey &&
-            Array.isArray(raw.fired)
-        ) {
-            state.fired = raw.fired.filter(Boolean);
-        }
-
-        _loggerAlarmFiredCache = state;
-        return state;
-    }
-
-    function hasLoggerAlarmFired(todayKey, token) {
-
-        const state = getLoggerAlarmFiredState(todayKey);
-        return state.fired.includes(token);
-    }
-
-    function markLoggerAlarmFired(todayKey, token) {
-
-        const state = getLoggerAlarmFiredState(todayKey);
-
-        if (state.fired.includes(token)) {
-            return;
-        }
-
-        state.fired.push(token);
-
-        gmSetValue(
-            LOGGER_ALARM_FIRED_STATE_KEY,
-            JSON.stringify(state)
-        );
-    }
-
-    function playLoggerAlarmSound(repeatMode) {
-
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-
-        if (!AudioCtx) {
-            return;
-        }
-
-        let context;
-
-        try {
-            context = new AudioCtx();
-        } catch (_) {
-            return;
-        }
-
-        const totalBeeps = repeatMode === 'loop'
-            ? 8
-            : repeatMode === 'triple'
-                ? 3
-                : 1;
-
-        for (let i = 0; i < totalBeeps; i += 1) {
-
-            const startAt = context.currentTime + (i * 0.42);
-            const osc = context.createOscillator();
-            const gain = context.createGain();
-
-            osc.type = 'sine';
-            osc.frequency.value = i % 2 === 0 ? 880 : 740;
-            gain.gain.value = 0.0001;
-
-            osc.connect(gain);
-            gain.connect(context.destination);
-
-            gain.gain.setValueAtTime(0.0001, startAt);
-            gain.gain.exponentialRampToValueAtTime(0.05, startAt + 0.02);
-            gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.28);
-
-            osc.start(startAt);
-            osc.stop(startAt + 0.3);
-        }
-
-        const closeAfter = (totalBeeps * 450) + 700;
-
-        setTimeout(() => {
-            if (context && typeof context.close === 'function') {
-                context.close().catch(() => { });
-            }
-        }, closeAfter);
-    }
-
-    function buildLoggerAlarmTargets(guidance, mode) {
-
-        const targets = [];
-        const seen = new Set();
-
-        const add = (id, label, minute, urgent = false) => {
-
-            if (minute === null || minute === undefined || !Number.isFinite(minute)) {
-                return;
-            }
-
-            const normalizedMinute = Math.round(minute);
-            const dedupeKey = `${id}:${normalizedMinute}`;
-
-            if (seen.has(dedupeKey)) {
-                return;
-            }
-
-            seen.add(dedupeKey);
-            targets.push({
-                id,
-                label,
-                minute: normalizedMinute,
-                urgent
-            });
-        };
-
-        if (mode === '10h' || mode === 'complete') {
-            add('day10', 'Saída 10h', guidance.day10h, true);
-            add('day10-int-min', `Saída 10h +${CONFIG.INTERVALO_MINIMO}m`, guidance.day10WithIntervalMin, true);
-            add('day10-int-max', `Saída 10h +${CONFIG.INTERVALO_MAXIMO}m`, guidance.day10WithIntervalMax, true);
-        }
-
-        if (mode === 'interval' || mode === 'complete') {
-            add('first-exit-min', 'Saída mínima do intervalo', guidance.firstExitMin);
-            add('first-exit-max', 'Saída máxima do intervalo', guidance.firstExitMax, true);
-            add('return-min', 'Retorno mínimo', guidance.intervalMin);
-            add('return-max', 'Retorno máximo', guidance.intervalMax, true);
-        }
-
-        if (mode === 'complete') {
-            add('day8', 'Saída 8h', guidance.day8h);
-            add('day8-int-min', `Saída 8h +${CONFIG.INTERVALO_MINIMO}m`, guidance.day8WithIntervalMin);
-            add('day8-int-max', `Saída 8h +${CONFIG.INTERVALO_MAXIMO}m`, guidance.day8WithIntervalMax);
-            add('return30-min-exit', 'Retorno +30m (saída mínima)', guidance.firstExitMinPause30);
-            add('return210-min-exit', 'Retorno +210m (saída mínima)', guidance.firstExitMinPause210, true);
-            add('return30-max-exit', 'Retorno +30m (saída máxima)', guidance.firstExitMaxPause30);
-            add('return210-max-exit', 'Retorno +210m (saída máxima)', guidance.firstExitMaxPause210, true);
-        }
-
-        return targets;
-    }
-
-    function evaluateLoggerAlarms() {
-
-        const nowTs = Date.now();
-
-        if ((nowTs - _loggerAlarmLastCheckAt) < 10000) {
-            return;
-        }
-
-        _loggerAlarmLastCheckAt = nowTs;
-
-        const alarmConfig = readLoggerAlarmConfig();
-
-        if (!alarmConfig.enabled) {
-            return;
-        }
-
-        const sharedTruth = readSharedTruth();
-        const { todayKey, startMs, endMs } = getTodayBounds();
-
-        const {
-            mirrorPunches
-        } = getMirrorTodayContext(sharedTruth, todayKey);
-
-        const saldoSemanaAnt = Number(
-            sharedTruth.weekBalance ?? gmGetValue('ahgora_saldo_semana_anterior', '0')
-        );
-
-        const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
-            []
-        );
-
-        const {
-            combinedPunches
-        } = buildLoggerPunchTimeline(
-            history,
-            mirrorPunches,
-            startMs,
-            endMs
-        );
-
-        const guidance = buildPunchGuidance(combinedPunches, saldoSemanaAnt);
-        const targets = buildLoggerAlarmTargets(guidance, alarmConfig.mode);
-
-        if (!targets.length) {
-            return;
-        }
-
-        const lead = alarmConfig.leadMinutes;
-        const now = nowMin();
-
-        targets.forEach(target => {
-
-            const token = `${todayKey}:${target.id}:${target.minute}:${lead}`;
-
-            if (hasLoggerAlarmFired(todayKey, token)) {
-                return;
-            }
-
-            const diff = target.minute - now;
-            const minWindow = Math.max(0, lead - 1);
-            const maxWindow = lead + 1;
-
-            if (diff < minWindow || diff > maxWindow) {
-                return;
-            }
-
-            markLoggerAlarmFired(todayKey, token);
-
-            if (alarmConfig.channels.desktop) {
-                notif(
-                    `logger-alarm-${token}`,
-                    `⏰ ${target.label}`,
-                    `Previsto para ${fmtHour(target.minute)}. Faltam ~${Math.max(diff, 0)} min.`,
-                    target.urgent
-                );
-            }
-
-            if (alarmConfig.channels.sound) {
-                try {
-                    playLoggerAlarmSound(alarmConfig.soundRepeat);
-                } catch (_) {
-                    if (!_loggerAlarmSoundWarned) {
-                        _loggerAlarmSoundWarned = true;
-                        showLoggerToast('Som bloqueado pelo navegador. Interaja com a página e tente novamente.');
-                    }
-                }
-            }
-
-            showLoggerToast(`Alarme: ${target.label} às ${fmtHour(target.minute)}.`);
-        });
-    }
-
-    function copyText(text) {
-
-        if (
-            navigator.clipboard &&
-            typeof navigator.clipboard.writeText === 'function'
-        ) {
-
-            navigator.clipboard
-                .writeText(text)
-                .then(() => showLoggerToast(`Copiado: ${text}`))
-                .catch(() => showLoggerToast('Não foi possível copiar.'));
-
-            return;
-        }
-
-        showLoggerToast('Área de transferência indisponível.');
-    }
-
-    function savePunch(time, date, timestamp = Date.now()) {
-
-        const normalizedTime = normalizePunchTime(time);
-
-        if (!normalizedTime) {
-            return false;
-        }
-
-        const normalizedTimestamp = Number.isFinite(Number(timestamp))
-            ? Number(timestamp)
-            : Date.now();
-
-        const fallbackDate = new Date(normalizedTimestamp).toLocaleDateString('pt-BR');
-        const normalizedDate = String(date || fallbackDate).trim() || fallbackDate;
-
-        const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
-            []
-        );
-
-        const hasDuplicate = history.some(entry =>
-            normalizePunchTime(entry?.time) === normalizedTime &&
-            String(entry?.date || '').trim() === normalizedDate
-        );
-
-        if (hasDuplicate) {
-            return false;
-        }
-
-        history.push({
-            time: normalizedTime,
-            date: normalizedDate,
-            timestamp: normalizedTimestamp
-        });
-
-        if (history.length > 100) {
-            history.shift();
-        }
-
-        gmSetValue(
-            'ahgora_history_v6',
-            JSON.stringify(history)
-        );
-
-        renderUILogger();
-
-        return true;
-    }
-
-    function deleteLastSavedPunch() {
-
-        const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
-            []
-        );
-
-        if (!history.length) {
-            showLoggerToast('Nenhuma batida local para excluir.');
-            return;
-        }
-
-        const last = history[history.length - 1];
-        const label = `${last.time || '--:--'} · ${last.date || '--/--/--'}`;
-
-        const confirmed = window.confirm(
-            `Excluir a última batida salva?\n\n${label}\n\nEssa ação remove apenas a batida local do novabatidaonline.`
-        );
-
-        if (!confirmed) {
-            return;
-        }
-
-        history.pop();
-
-        gmSetValue(
-            'ahgora_history_v6',
-            JSON.stringify(history)
-        );
-
-        showLoggerToast('Última batida local removida.');
-        renderUILogger();
-
-        if (document.getElementById('ahg-panel')) {
-            render();
-        }
-    }
-
-    function updateTodayLocalPunch(oldTime, newTime, startMs, endMs) {
-
-        const from = normalizePunchTime(oldTime);
-        const to = normalizePunchTime(newTime);
-
-        if (!from || !to) {
-            return {
-                ok: false,
-                message: 'Horário inválido para ajuste.'
-            };
-        }
-
-        const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
-            []
-        );
-
-        const isToday = entry => {
-            const ts = Number(entry?.timestamp);
-            return Number.isFinite(ts) && ts >= startMs && ts < endMs;
-        };
-
-        const targetIndex = history.findIndex(entry =>
-            isToday(entry) && normalizePunchTime(entry?.time) === from
-        );
-
-        if (targetIndex < 0) {
-            return {
-                ok: false,
-                message: `Batida ${from} não encontrada no histórico local de hoje.`
-            };
-        }
-
-        const hasConflict = history.some((entry, idx) =>
-            idx !== targetIndex &&
-            isToday(entry) &&
-            normalizePunchTime(entry?.time) === to
-        );
-
-        if (hasConflict) {
-            return {
-                ok: false,
-                message: `Já existe batida local ${to} hoje.`
-            };
-        }
-
-        history[targetIndex].time = to;
-        history[targetIndex].timestamp = startMs + (toMin(to) * 60000);
-        history[targetIndex].date = new Date(startMs).toLocaleDateString('pt-BR');
-
-        gmSetValue(
-            'ahgora_history_v6',
-            JSON.stringify(history)
-        );
-
-        renderUILogger();
-
-        if (document.getElementById('ahg-panel')) {
-            render();
-        }
-
-        return {
-            ok: true,
-            message: `Batida local ajustada: ${from} → ${to}.`
-        };
-    }
-
-    function removeTodayLocalPunch(time, startMs, endMs) {
-
-        const target = normalizePunchTime(time);
-
-        if (!target) {
-            return {
-                ok: false,
-                message: 'Selecione um horário válido para remover.'
-            };
-        }
-
-        const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
-            []
-        );
-
-        const isToday = entry => {
-            const ts = Number(entry?.timestamp);
-            return Number.isFinite(ts) && ts >= startMs && ts < endMs;
-        };
-
-        const targetIndex = history.findIndex(entry =>
-            isToday(entry) && normalizePunchTime(entry?.time) === target
-        );
-
-        if (targetIndex < 0) {
-            return {
-                ok: false,
-                message: `Batida ${target} não encontrada no histórico local de hoje.`
-            };
-        }
-
-        history.splice(targetIndex, 1);
-
-        gmSetValue(
-            'ahgora_history_v6',
-            JSON.stringify(history)
-        );
-
-        renderUILogger();
-
-        if (document.getElementById('ahg-panel')) {
-            render();
-        }
-
-        return {
-            ok: true,
-            message: `Batida local ${target} removida.`
-        };
-    }
-
-    function reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, todayStartMs, todayEndMs) {
-
-        if (!Array.isArray(history) || !history.length) {
-            return {
-                history,
-                removedCount: 0
-            };
-        }
-
-        if (!Array.isArray(mirrorPunches) || !mirrorPunches.length) {
-            return {
-                history,
-                removedCount: 0
-            };
-        }
-
-        const mirrorSet = new Set(
-            mirrorPunches
-                .map(x => String(x || '').trim())
-                .filter(Boolean)
-        );
-
-        const nextHistory = history.filter(entry => {
-
-            const ts = Number(entry?.timestamp);
-            const time = String(entry?.time || '').trim();
-
-            const isTodayByTimestamp =
-                Number.isFinite(ts) &&
-                ts >= todayStartMs &&
-                ts < todayEndMs;
-
-            if (!isTodayByTimestamp) {
-                return true;
-            }
-
-            if (!time) {
-                return true;
-            }
-
-            return !mirrorSet.has(time);
-        });
-
-        return {
-            history: nextHistory,
-            removedCount: history.length - nextHistory.length
-        };
-    }
-
-    function getTodayBounds() {
-
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
-        const todayEnd = new Date(todayStart);
-        todayEnd.setDate(todayEnd.getDate() + 1);
-
-        return {
-            todayKey: formatDateKey(todayStart),
-            startMs: todayStart.getTime(),
-            endMs: todayEnd.getTime()
-        };
-    }
-
-    function getMirrorTodayContext(sharedTruth, todayKey) {
-
-        const sharedTodayKey = String(sharedTruth.todayKey || '');
-        const mirrorTodayKey = String(gmGetValue('ahgora_mirror_today_ref', ''));
-        const mirrorCachedPunches = parseJson(
-            gmGetValue('ahgora_mirror_today', '[]'),
-            []
-        );
-
-        const hasSharedTodayPunches =
-            Array.isArray(sharedTruth.todayPunches) &&
-            sharedTruth.todayPunches.length > 0;
-
-        const hasSharedStaleCache =
-            hasSharedTodayPunches &&
-            sharedTodayKey &&
-            sharedTodayKey !== todayKey;
-
-        const hasMirrorStaleCache =
-            Array.isArray(mirrorCachedPunches) &&
-            mirrorCachedPunches.length > 0 &&
-            mirrorTodayKey &&
-            mirrorTodayKey !== todayKey;
-
-        const rawMirrorPunches = (
-            Array.isArray(sharedTruth.todayPunches) &&
-            sharedTodayKey === todayKey
-        )
-            ? sharedTruth.todayPunches
-            : (
-                mirrorTodayKey === todayKey
-                    ? mirrorCachedPunches
-                    : []
-            );
-
-        const mirrorPunches = Array.from(new Set(
-            rawMirrorPunches
-                .map(normalizePunchTime)
-                .filter(Boolean)
-        )).sort((a, b) => toMin(a) - toMin(b));
-
-        const hasMirrorData = (
-            sharedTruth &&
-            sharedTruth.source === 'mirror' &&
-            sharedTodayKey === todayKey
-        ) || mirrorTodayKey === todayKey;
-
-        return {
-            sharedTodayKey,
-            mirrorTodayKey,
-            mirrorPunches,
-            hasMirrorData,
-            hasSharedStaleCache,
-            hasMirrorStaleCache
-        };
-    }
-
-    function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
-
-        const reconciled = reconcileTodayLocalHistoryWithMirror(
-            history,
-            mirrorPunches,
-            startMs,
-            endMs
-        );
-
-        const effectiveHistory = reconciled.history;
-
-        const todayLocalHistory = effectiveHistory
-            .filter(p =>
-                p.timestamp &&
-                p.timestamp >= startMs &&
-                p.timestamp < endMs
-            );
-
-        const todayLocalPunches = todayLocalHistory
-            .map(p => normalizePunchTime(p.time))
-            .filter(Boolean);
-
-        const mirrorSet = new Set(mirrorPunches);
-        const localOnlyPunches = todayLocalPunches
-            .filter(time => !mirrorSet.has(time));
-
-        const displayPunches = [
-            ...mirrorPunches.map(time => ({
-                time,
-                source: 'mirror'
-            })),
-            ...localOnlyPunches.map(time => ({
-                time,
-                source: 'local'
-            }))
-        ].sort((a, b) => toMin(a.time) - toMin(b.time));
-
-        const combinedPunches = displayPunches.map(p => p.time);
-        const combinedLastPunch = combinedPunches.length
-            ? combinedPunches[combinedPunches.length - 1]
-            : null;
-
-        const localPendingSet = new Set(localOnlyPunches);
-        const pendingLocalHistoryEntries = todayLocalHistory
-            .filter(entry => {
-                const normalized = normalizePunchTime(entry.time);
-                return normalized && localPendingSet.has(normalized);
-            });
-
-        const todayDate = new Date(startMs);
-        const todayDateLabel = todayDate.toLocaleDateString('pt-BR');
-
-        const todayTimelineEntries = displayPunches
-            .map(entry => ({
-                source: entry.source,
-                time: entry.time,
-                timestamp: startMs + ((toMin(entry.time) || 0) * 60000),
-                dateLabel: todayDateLabel
-            }));
-
-        const previousTimelineEntries = effectiveHistory
-            .filter(entry => {
-                const ts = Number(entry?.timestamp);
-                return Number.isFinite(ts) && (ts < startMs || ts >= endMs);
-            })
-            .map(entry => {
-                const normalized = normalizePunchTime(entry.time);
-
-                if (!normalized) {
-                    return null;
-                }
-
-                const ts = Number(entry.timestamp);
-
-                return {
-                    source: 'history',
-                    time: normalized,
-                    timestamp: ts,
-                    dateLabel: entry.date || new Date(ts).toLocaleDateString('pt-BR')
-                };
-            })
-            .filter(Boolean);
-
-        const historyTimelineEntries = [
-            ...previousTimelineEntries,
-            ...todayTimelineEntries
-        ].sort((a, b) => a.timestamp - b.timestamp);
-
-        return {
-            reconciled,
-            effectiveHistory,
-            historyTimelineEntries,
-            localOnlyPunches,
-            combinedPunches,
-            combinedLastPunch,
-            pendingLocalHistoryEntries
-        };
-    }
-
-    function getLatestTodayKnownPunchMinute() {
-
-        const sharedTruth = readSharedTruth();
-        const { todayKey, startMs, endMs } = getTodayBounds();
-        const { mirrorPunches } = getMirrorTodayContext(sharedTruth, todayKey);
-        const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
-            []
-        );
-
-        const { combinedPunches } = buildLoggerPunchTimeline(
-            history,
-            mirrorPunches,
-            startMs,
-            endMs
-        );
-
-        if (!combinedPunches.length) {
-            return null;
-        }
-
-        return toMin(combinedPunches[combinedPunches.length - 1]);
-    }
-
-    function getClockingInIntervalState(nextTime) {
-
-        const nextMinute = toMin(nextTime);
-
-        if (!Number.isFinite(nextMinute)) {
-            return null;
-        }
-
-        const lastMinute = getLatestTodayKnownPunchMinute();
-
-        if (!Number.isFinite(lastMinute)) {
-            return {
-                nextMinute,
-                lastMinute: null,
-                minMinute: null,
-                diff: null,
-                isBlocked: false
-            };
-        }
-
-        const diff = nextMinute - lastMinute;
-
-        return {
-            nextMinute,
-            lastMinute,
-            minMinute: lastMinute + CONFIG.INTERVALO_MINIMO,
-            diff,
-            isBlocked: diff >= 0 && diff < CONFIG.INTERVALO_MINIMO
-        };
-    }
-
-    function getClockingInIntervalViolation(nextTime) {
-
-        const state = getClockingInIntervalState(nextTime);
-
-        if (state && state.isBlocked) {
-            return {
-                lastMinute: state.lastMinute,
-                minMinute: state.minMinute,
-                diff: state.diff
-            };
-        }
-
-        return null;
-    }
-
-    function upsertClockingInModalHint(confirmBtn) {
-
-        const modalRoot = confirmBtn.closest('[role="dialog"]') || document;
-        const titleText = String(
-            modalRoot.querySelector('#server-modal-title')?.textContent || ''
-        ).trim().toLowerCase();
-        const buttonLabelText = String(
-            confirmBtn.textContent || ''
-        ).trim().toLowerCase();
-
-        const isClockingInConfirmModal =
-            titleText.includes('confirm your punch-in') &&
-            buttonLabelText.includes('clocking in');
-
-        const staleHint = modalRoot.querySelector('#ahg-clocking-in-hint');
-
-        if (!isClockingInConfirmModal) {
-
-            if (staleHint) {
-                staleHint.remove();
-            }
-
-            confirmBtn.removeAttribute('aria-disabled');
-            confirmBtn.style.opacity = '';
-            confirmBtn.style.filter = '';
-            confirmBtn.style.pointerEvents = '';
-
-            return;
-        }
-
-        const timeParts = modalRoot.querySelectorAll('.jss77');
-        const datePart = modalRoot.querySelector('.jss79');
-
-        if (!datePart || timeParts.length < 2) {
-            return;
-        }
-
-        const hours = String(timeParts[0].innerText || '').trim();
-        const minutes = String(timeParts[1].innerText || '').trim();
-        const time = normalizePunchTime(`${hours}:${minutes}`);
-
-        if (!time) {
-            return;
-        }
-
-        const state = getClockingInIntervalState(time);
-
-        let hint = staleHint;
-
-        if (!hint) {
-            hint = document.createElement('p');
-            hint.id = 'ahg-clocking-in-hint';
-            hint.style.margin = '8px 0 0';
-            hint.style.fontSize = '12px';
-            hint.style.lineHeight = '1.35';
-            hint.style.fontWeight = '700';
-            datePart.insertAdjacentElement('afterend', hint);
-        }
-
-        if (!state || !Number.isFinite(state.lastMinute)) {
-            hint.textContent = `Sem referencia anterior para validar intervalo minimo de ${CONFIG.INTERVALO_MINIMO}min.`;
-            hint.style.color = '#8cb6ff';
-            confirmBtn.removeAttribute('aria-disabled');
-            confirmBtn.style.opacity = '';
-            confirmBtn.style.filter = '';
-            confirmBtn.style.pointerEvents = '';
-            return;
-        }
-
-        if (state.isBlocked) {
-            hint.textContent = `Aguarde: ultima batida ${fmtHour(state.lastMinute)}. Permitido apos ${fmtHour(state.minMinute)}.`;
-            hint.style.color = '#ff8888';
-            confirmBtn.setAttribute('aria-disabled', 'true');
-            confirmBtn.style.opacity = '.55';
-            confirmBtn.style.filter = 'grayscale(0.2)';
-            confirmBtn.style.pointerEvents = 'none';
-            return;
-        }
-
-        hint.textContent = `Intervalo OK: ultima batida ${fmtHour(state.lastMinute)} (minimo ${CONFIG.INTERVALO_MINIMO}min respeitado).`;
-        hint.style.color = '#9ef0bf';
-        confirmBtn.removeAttribute('aria-disabled');
-        confirmBtn.style.opacity = '';
-        confirmBtn.style.filter = '';
-        confirmBtn.style.pointerEvents = '';
-    }
-
-    function monitorModal() {
-
-        const confirmBtn = Array.from(document.querySelectorAll('.jss83')).find(btn => {
-
-            const modalRoot = btn.closest('[role="dialog"]') || document;
-            const titleText = String(
-                modalRoot.querySelector('#server-modal-title')?.textContent || ''
-            ).trim().toLowerCase();
-            const buttonLabelText = String(btn.textContent || '').trim().toLowerCase();
-
-            return (
-                titleText.includes('confirm your punch-in') &&
-                buttonLabelText.includes('clocking in')
-            );
-        });
-
-        const staleHints = document.querySelectorAll('#ahg-clocking-in-hint');
-
-        staleHints.forEach(hint => {
-
-            const modalRoot = hint.closest('[role="dialog"]') || document;
-            const titleText = String(
-                modalRoot.querySelector('#server-modal-title')?.textContent || ''
-            ).trim().toLowerCase();
-
-            if (!titleText.includes('confirm your punch-in')) {
-                hint.remove();
-            }
-        });
-
-        if (confirmBtn) {
-            upsertClockingInModalHint(confirmBtn);
-        }
-
-        if (confirmBtn && !confirmBtn.dataset.hooked) {
-
-            confirmBtn.dataset.hooked = 'true';
-
-            confirmBtn.addEventListener('click', (event) => {
-
-                const timeParts = document.querySelectorAll('.jss77');
-                const datePart = document.querySelector('.jss79');
-
-                if (timeParts.length >= 2 && datePart) {
-
-                    const hours = String(timeParts[0].innerText || '').trim();
-                    const minutes = String(timeParts[1].innerText || '').trim();
-                    const time = normalizePunchTime(`${hours}:${minutes}`);
-                    const date = String(datePart.innerText).replace(/from\s/g, '').trim();
-
-                    if (!time) {
-                        return;
-                    }
-
-                    const violation = getClockingInIntervalViolation(time);
-
-                    if (violation) {
-
-                        event.preventDefault();
-                        event.stopImmediatePropagation();
-
-                        const message =
-                            `Intervalo minimo de ${CONFIG.INTERVALO_MINIMO} minutos entre batidas. ` +
-                            `Ultima: ${fmtHour(violation.lastMinute)}. ` +
-                            `Permitido apos: ${fmtHour(violation.minMinute)}.`;
-
-                        showLoggerToast(message);
-                        alert(message);
-
-                        return;
-                    }
-
-                    savePunch(time, date);
-                }
-            }, true);
-        }
-    }
-
-    function renderUILogger() {
-
-        applyPrivacyState();
-
-        let container = document.getElementById('ahg-punch-log');
-
-        if (!container) {
-
-            container = document.createElement('div');
-            container.id = 'ahg-punch-log';
-            document.body.appendChild(container);
-        }
-
-        const sharedTruth = readSharedTruth();
-
-        const { todayKey, startMs, endMs } = getTodayBounds();
-
-        const {
-            sharedTodayKey,
-            mirrorTodayKey,
-            mirrorPunches,
-            hasMirrorData,
-            hasSharedStaleCache,
-            hasMirrorStaleCache
-        } = getMirrorTodayContext(sharedTruth, todayKey);
-
-        const saldoSemanaAnt = Number(
-            sharedTruth.weekBalance ?? gmGetValue('ahgora_saldo_semana_anterior', '0')
-        );
-
-        const history = parseJson(
-            gmGetValue('ahgora_history_v6', '[]'),
-            []
-        );
-
-        const {
-            reconciled,
-            effectiveHistory,
-            historyTimelineEntries,
-            localOnlyPunches,
-            combinedPunches,
-            combinedLastPunch,
-            pendingLocalHistoryEntries
-        } = buildLoggerPunchTimeline(
-            history,
-            mirrorPunches,
-            startMs,
-            endMs
-        );
-
-        if (reconciled.removedCount > 0) {
-            gmSetValue(
-                'ahgora_history_v6',
-                JSON.stringify(effectiveHistory)
-            );
-        }
-
-        const lastPunch = pendingLocalHistoryEntries[pendingLocalHistoryEntries.length - 1] || {
-            time: '--:--',
-            date: '--/--/--'
-        };
-
-        const guidance = buildPunchGuidance(combinedPunches, saldoSemanaAnt);
-        const loggerPunchHealth = getPunchCountHealth(combinedPunches.length, { isToday: true });
-        const alarmConfig = readLoggerAlarmConfig();
-
-        const buildQuickCalendarLinks = (title, startMinute, endMinute = null, userPath = null) => {
-
-            if (startMinute === null || startMinute === undefined) {
-                return null;
-            }
-
-            return {
-                gcal: buildGoogleCalendarUrl({
-                    title,
-                    details: title,
-                    startMinute,
-                    endMinute,
-                    userPath
-                }),
-                outlook: buildOutlookCalendarUrl({
-                    title,
-                    details: title,
-                    startMinute,
-                    endMinute
-                })
-            };
-        };
-
-        const buildAutoGcalMaxMinusLink = () => {
-
-            const leadMinutes = alarmConfig.quickGcalOffsetMinutes;
-            let maxMinute = null;
-            let maxLabel = 'horário máximo';
-
-            if (guidance.stage === 'return' && Number.isFinite(guidance.intervalMax)) {
-                maxMinute = guidance.intervalMax;
-                maxLabel = 'retorno máximo';
-            } else if (guidance.stage === 'interval' && Number.isFinite(guidance.firstExitMax)) {
-                maxMinute = guidance.firstExitMax;
-                maxLabel = 'saída máxima do 1º turno';
-            } else if (guidance.stage === 'exit' && Number.isFinite(guidance.day10WithIntervalMin)) {
-                maxMinute = guidance.day10WithIntervalMin;
-                maxLabel = 'saída de 10h';
-            } else if (Number.isFinite(guidance.day10WithIntervalMax)) {
-                maxMinute = guidance.day10WithIntervalMax;
-                maxLabel = 'saída de 10h + intervalo máximo';
-            } else if (Number.isFinite(guidance.day10h)) {
-                maxMinute = guidance.day10h;
-                maxLabel = 'saída de 10h';
-            }
-
-            if (!Number.isFinite(maxMinute)) {
-                return null;
-            }
-
-            const startMinute = maxMinute - leadMinutes;
-            const title = `Alerta: ${maxLabel} -${leadMinutes}m`;
-            const details = `Início: ${fmtHour(startMinute)} · limite: ${fmtHour(maxMinute)}.`;
-
-            const gcal = buildGoogleCalendarUrl({
-                title,
-                details,
-                startMinute,
-                endMinute: maxMinute,
-                userPath: alarmConfig.gcalUserPath
-            });
-
-            const outlook = buildOutlookCalendarUrl({
-                title,
-                details,
-                startMinute,
-                endMinute: maxMinute
-            });
-
-            if (!gcal && !outlook) {
-                return null;
-            }
-
-            return {
-                gcal,
-                outlook,
-                leadMinutes,
-                startMinute,
-                maxMinute,
-                maxLabel,
-                stage: guidance.stage
-            };
-        };
-
-        const canAutoOpenQuickGcal = autoLink => {
-
-            if (!autoLink || !autoLink.gcal) {
-                return false;
-            }
-
-            if (!alarmConfig.quickGcalAutoOpenEnabled) {
-                return false;
-            }
-
-            if (alarmConfig.quickCalendarProvider === 'outlook') {
-                return false;
-            }
-
-            const desiredStage = alarmConfig.quickGcalAutoOpenStage;
-
-            if (!desiredStage || desiredStage === 'off') {
-                return false;
-            }
-
-            if (desiredStage === 'any') {
-                return ['interval', 'return', 'exit'].includes(autoLink.stage);
-            }
-
-            return autoLink.stage === desiredStage;
-        };
-
-        const timeWithCalendarEmojis = (time, gcalUrl, outlookUrl, tone = 'neu') => {
-
-            if (!time) {
-                return '';
-            }
-
-            const color = tone === 'warn'
-                ? '#ffd08a'
-                : tone === 'pos'
-                    ? '#9ef0bf'
-                    : '#d6d6ff';
-
-            const links = (gcalUrl && outlookUrl)
-                ? `<span style="display:inline-flex;align-items:center;gap:4px;"><a href="${gcalUrl}" target="_blank" rel="noopener noreferrer" title="Google Calendar" style="text-decoration:none;line-height:1;">📅</a><a href="${outlookUrl}" target="_blank" rel="noopener noreferrer" title="Outlook" style="text-decoration:none;line-height:1;">📧</a></span>`
-                : '';
-
-            return `<span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;"><span style="font-weight:700;color:${color};">${time}</span>${links}</span>`;
-        };
-
-        const forecastRowRange = (label, time1, gcalUrl1, outlookUrl1, time2, gcalUrl2, outlookUrl2, tone = 'neu') => {
-
-            if (!time1 || !time2) {
-                return '';
-            }
-
-            const val1 = timeWithCalendarEmojis(time1, gcalUrl1, outlookUrl1, tone);
-            const val2 = timeWithCalendarEmojis(time2, gcalUrl2, outlookUrl2, tone);
-
-            return `<div style="display:grid;grid-template-columns:minmax(120px,1fr) auto;gap:10px;align-items:center;font-size:11px;">
-                <span style="opacity:.72;">${label}</span>
-                <span style="display:inline-flex;align-items:center;justify-content:flex-end;gap:8px;white-space:nowrap;">${val1}<span style="opacity:.7;">→</span>${val2}</span>
-            </div>`;
-        };
-
-        const forecastRow = (label, value, tone = 'neu', calendarLinks = null) => {
-
-            if (!value) {
-                return '';
-            }
-
-            const buttonColor = tone === 'warn'
-                ? '255,165,0'
-                : tone === 'pos'
-                    ? '61,220,132'
-                    : '121,162,255';
-
-            const iconButtons = (calendarLinks && calendarLinks.gcal && calendarLinks.outlook)
-                ? `<a href="${calendarLinks.gcal}" target="_blank" rel="noopener noreferrer" title="Google Calendar" style="border:1px solid rgba(${buttonColor},.38);background:rgba(${buttonColor},.12);color:${buttonColor === '61,220,132' ? '#c8ffe2' : buttonColor === '255,165,0' ? '#ffd08a' : '#d7e3ff'};border-radius:5px;padding:2px 5px;text-decoration:none;font-size:12px;line-height:1;">📅</a><a href="${calendarLinks.outlook}" target="_blank" rel="noopener noreferrer" title="Outlook" style="border:1px solid rgba(${buttonColor},.38);background:rgba(${buttonColor},.12);color:${buttonColor === '61,220,132' ? '#c8ffe2' : buttonColor === '255,165,0' ? '#ffd08a' : '#d7e3ff'};border-radius:5px;padding:2px 5px;text-decoration:none;font-size:12px;line-height:1;">📧</a>`
-                : '';
-
-            return `<div style="display:flex;justify-content:space-between;gap:10px;align-items:center; font-size:11px;">
-                <span style="opacity:.72;">${label}</span>
-                <span style="display:flex;align-items:center;gap:6px;">
-                    <span style="font-weight:700;color:${tone === 'warn' ? '#ffd08a' : tone === 'pos' ? '#9ef0bf' : '#d6d6ff'};">${value}</span>
-                    ${iconButtons}
-                </span>
-            </div>`;
-        };
-
-        const sourceLabel = hasMirrorData
-            ? (localOnlyPunches.length > 0
-                ? 'Mirror sincronizado com pendências locais'
-                : 'Mirror sincronizado')
-            : 'Usando local (mirror pendente)';
-
-        const workedToday = combinedPunches.length
-            ? calcularTrabalhado(combinedPunches)
-            : (hasMirrorData && typeof sharedTruth.workedToday === 'number'
-                ? sharedTruth.workedToday
-                : null);
-
-        const jornadaDiaDiff = workedToday === null
-            ? null
-            : CONFIG.CARGA_DIARIA - workedToday;
-
-        const jornadaDiaStatus = jornadaDiaDiff === null
-            ? { label: '--:--', tone: 'neu', detail: 'Sem dados para prever jornada.' }
-            : jornadaDiaDiff > 0
-                ? {
-                    label: `Faltam ${renderMinutes(jornadaDiaDiff)}`,
-                    tone: 'warn',
-                    detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)} · trabalhado: ${renderMinutes(workedToday)}`
-                }
-                : jornadaDiaDiff < 0
-                    ? {
-                        label: `Excedente ${renderMinutes(Math.abs(jornadaDiaDiff))}`,
-                        tone: 'pos',
-                        detail: `Meta diária superada · trabalhado: ${renderMinutes(workedToday)}`
-                    }
-                    : {
-                        label: 'Meta diária concluída',
-                        tone: 'pos',
-                        detail: `Meta diária: ${renderMinutes(CONFIG.CARGA_DIARIA)}`
-                    };
-
-        const dayBalance = workedToday === null
-            ? null
-            : workedToday - CONFIG.CARGA_DIARIA;
-
-        const weekWorked = hasMirrorData && typeof sharedTruth.weekWorked === 'number'
-            ? sharedTruth.weekWorked
-            : (combinedPunches.length ? calcularTrabalhado(combinedPunches) : null);
-
-        const weekBalance = hasMirrorData && typeof sharedTruth.weekBalance === 'number'
-            ? sharedTruth.weekBalance
-            : (weekWorked === null ? null : weekWorked - CONFIG.CARGA_DIARIA);
-
-        const mirrorSyncHint = hasMirrorData
-            ? `Mirror atualizado às ${new Date(sharedTruth.updatedAt || Date.now()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-            : 'Abra o mirror para sincronizar totais oficiais.';
-
-        container.style = `
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            background: #0f0f1e;
-            color: #dde;
-            padding: 14px;
-            border-radius: 12px;
-            border-top: 4px solid #4a3faf;
-            box-shadow: 0 10px 30px rgba(0,0,0,.6);
-            font-family: 'Segoe UI', sans-serif;
-            z-index: 99999;
-            min-width: 280px;
-            max-width: 360px;
-            border: 1px solid rgba(255,255,255,.06);
-        `;
-
-        const recentHistoryEntries = historyTimelineEntries.slice(-CONFIG.LOGGER_HISTORY_SIZE);
-        const day8h = guidance.day8h !== null ? renderClock(guidance.day8h) : null;
-        const day10h = guidance.day10h !== null ? renderClock(guidance.day10h) : null;
-        const intervalReturnMin = guidance.intervalMin !== null ? renderClock(guidance.intervalMin) : null;
-        const intervalReturnMax = guidance.intervalMax !== null ? renderClock(guidance.intervalMax) : null;
-        const day8WindowMin = guidance.day8WithIntervalMin !== null ? renderClock(guidance.day8WithIntervalMin) : null;
-        const day8WindowMax = guidance.day8WithIntervalMax !== null ? renderClock(guidance.day8WithIntervalMax) : null;
-        const day10WindowMin = guidance.day10WithIntervalMin !== null ? renderClock(guidance.day10WithIntervalMin) : null;
-        const day10WindowMax = guidance.day10WithIntervalMax !== null ? renderClock(guidance.day10WithIntervalMax) : null;
-        const firstExitMin = guidance.firstExitMin !== null ? renderClock(guidance.firstExitMin) : null;
-        const firstExitMax = guidance.firstExitMax !== null ? renderClock(guidance.firstExitMax) : null;
-        const firstExitMinPause30 = guidance.firstExitMinPause30 !== null ? renderClock(guidance.firstExitMinPause30) : null;
-        const firstExitMinPause210 = guidance.firstExitMinPause210 !== null ? renderClock(guidance.firstExitMinPause210) : null;
-        const firstExitMaxPause30 = guidance.firstExitMaxPause30 !== null ? renderClock(guidance.firstExitMaxPause30) : null;
-        const firstExitMaxPause210 = guidance.firstExitMaxPause210 !== null ? renderClock(guidance.firstExitMaxPause210) : null;
-
-        const recentHistoryHtml = recentHistoryEntries.length
-            ? recentHistoryEntries
-                .slice()
-                .reverse()
-                .map(entry => {
-
-                    let sourceIcon = '🗂';
-                    let sourceLabel = 'histórico';
-
-                    if (entry.source === 'mirror') {
-                        sourceIcon = '🔄';
-                        sourceLabel = 'mirror';
-                    } else if (entry.source === 'local') {
-                        sourceIcon = '⏳';
-                        sourceLabel = 'local pendente';
-                    }
-
-                    const dateLabel = renderText(entry.dateLabel || '--/--/--');
-                    const timeLabel = renderText(entry.time || '--:--');
-                    const rawTime = normalizePunchTime(entry.time);
-                    const isEditableLocal = entry.source === 'local' && Boolean(rawTime);
-                    const editButton = isEditableLocal
-                        ? `<button class="ahg-history-edit" data-time="${escapeHtml(rawTime)}" title="Editar batida local" style="border:1px solid rgba(122,108,255,.35); background:rgba(122,108,255,.12); color:#d7e3ff; border-radius:5px; padding:1px 5px; font-size:11px; cursor:pointer; line-height:1;">✏</button>`
-                        : '';
-                    const minusFiveButton = isEditableLocal
-                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="-5" title="-5 min" style="border:1px solid rgba(255,165,0,.35); background:rgba(255,165,0,.12); color:#ffd08a; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">-5</button>`
-                        : '';
-                    const plusFiveButton = isEditableLocal
-                        ? `<button class="ahg-history-shift" data-time="${escapeHtml(rawTime)}" data-delta="5" title="+5 min" style="border:1px solid rgba(61,220,132,.35); background:rgba(61,220,132,.12); color:#c8ffe2; border-radius:5px; padding:1px 4px; font-size:11px; cursor:pointer; line-height:1;">+5</button>`
-                        : '';
-
-                    return `<div style="font-size:11px; display:flex; justify-content:space-between; margin-top:4px;">
-                        <span style="display:flex; align-items:center; gap:4px; opacity:.62;"><span>${dateLabel} · ${sourceIcon} ${sourceLabel}</span>${editButton}${minusFiveButton}${plusFiveButton}</span>
-                        <span style="font-weight:700; color:#ffd166; text-align:right; min-width:46px;">${timeLabel}</span>
-                    </div>`;
-                })
-                .join('')
-            : '<div style="font-size:10px; opacity:.4;">Aguardando primeira batida...</div>';
-
-        const forecastBlock = [
-            guidance.stage === 'interval' && firstExitMin ? forecastRow('Saída mín. (2h)', firstExitMin, 'pos', buildQuickCalendarLinks('Saída mínima (2h)', guidance.firstExitMin, null, alarmConfig.gcalUserPath)) : '',
-            guidance.stage === 'interval' && firstExitMax ? forecastRow('Saída máx. (6h)', firstExitMax, 'warn', buildQuickCalendarLinks('Saída máxima (6h)', guidance.firstExitMax, null, alarmConfig.gcalUserPath)) : '',
-            guidance.stage === 'interval' && (firstExitMinPause30 && firstExitMinPause210)
-                ? forecastRowRange(
-                    `Retorno 2h+ (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`,
-                    firstExitMinPause30,
-                    buildGoogleCalendarUrl({ title: 'Retorno +30m (saída mínima)', startMinute: guidance.firstExitMinPause30, userPath: alarmConfig.gcalUserPath }),
-                    buildOutlookCalendarUrl({ title: 'Retorno +30m (saída mínima)', startMinute: guidance.firstExitMinPause30 }),
-                    firstExitMinPause210,
-                    buildGoogleCalendarUrl({ title: 'Retorno +210m (saída mínima)', startMinute: guidance.firstExitMinPause210, userPath: alarmConfig.gcalUserPath }),
-                    buildOutlookCalendarUrl({ title: 'Retorno +210m (saída mínima)', startMinute: guidance.firstExitMinPause210 }),
-                    'pos'
-                )
-                : '',
-            guidance.stage === 'interval' && (firstExitMaxPause30 && firstExitMaxPause210)
-                ? forecastRowRange(
-                    `Retorno 6h+ (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`,
-                    firstExitMaxPause30,
-                    buildGoogleCalendarUrl({ title: 'Retorno +30m (saída máxima)', startMinute: guidance.firstExitMaxPause30, userPath: alarmConfig.gcalUserPath }),
-                    buildOutlookCalendarUrl({ title: 'Retorno +30m (saída máxima)', startMinute: guidance.firstExitMaxPause30 }),
-                    firstExitMaxPause210,
-                    buildGoogleCalendarUrl({ title: 'Retorno +210m (saída máxima)', startMinute: guidance.firstExitMaxPause210, userPath: alarmConfig.gcalUserPath }),
-                    buildOutlookCalendarUrl({ title: 'Retorno +210m (saída máxima)', startMinute: guidance.firstExitMaxPause210 }),
-                    'warn'
-                )
-                : '',
-            day8WindowMin && day8WindowMax ? forecastRowRange(`Saída 8h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, day8WindowMin, buildGoogleCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMin, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMin }), day8WindowMax, buildGoogleCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMax, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 8h', startMinute: guidance.day8WithIntervalMax }), 'neu') : '',
-            day10WindowMin && day10WindowMax ? forecastRowRange(`Saída 10h (${CONFIG.INTERVALO_MINIMO}m-${CONFIG.INTERVALO_MAXIMO}m)`, day10WindowMin, buildGoogleCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMin, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMin }), day10WindowMax, buildGoogleCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMax, userPath: alarmConfig.gcalUserPath }), buildOutlookCalendarUrl({ title: 'Saída 10h', startMinute: guidance.day10WithIntervalMax }), 'warn') : '',
-            intervalReturnMin ? forecastRow('Retorno mín.', intervalReturnMin, 'neu', buildQuickCalendarLinks('Retorno mínimo', guidance.intervalMin, null, alarmConfig.gcalUserPath)) : '',
-            intervalReturnMax ? forecastRow('Retorno máx.', intervalReturnMax, 'warn', buildQuickCalendarLinks('Retorno máximo', guidance.intervalMax, null, alarmConfig.gcalUserPath)) : ''
-        ].filter(Boolean).join('');
-
-        const forecastBlockHtml = forecastBlock
-            ? `<div style="display:grid;gap:4px;">${forecastBlock}</div>`
-            : '';
-
-        const syncBadge = hasMirrorData
-            ? '<span style="padding:2px 8px;border-radius:999px;background:rgba(61,220,132,.12);color:#9ef0bf;border:1px solid rgba(61,220,132,.28);">mirror ok</span>'
-            : '<span style="padding:2px 8px;border-radius:999px;background:rgba(255,165,0,.12);color:#ffd08a;border:1px solid rgba(255,165,0,.3);">sync pendente</span>';
-
-        const mirrorCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:rgba(121,162,255,.14);color:#d7e3ff;border:1px solid rgba(121,162,255,.32);">mirror: ${mirrorPunches.length}</span>`;
-        const localPendingCountBadge = `<span style="padding:2px 8px;border-radius:999px;background:${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.12)' : 'rgba(61,220,132,.12)'};color:${localOnlyPunches.length > 0 ? '#ffd08a' : '#9ef0bf'};border:1px solid ${localOnlyPunches.length > 0 ? 'rgba(255,165,0,.3)' : 'rgba(61,220,132,.28)'};">pendente local: ${localOnlyPunches.length}</span>`;
-        const alarmToggleIcon = alarmConfig.enabled ? '🔔' : '🔕';
-        const alarmToggleTitle = alarmConfig.enabled
-            ? `Alarmes ativos (${getLoggerAlarmModeLabel(alarmConfig.mode)})`
-            : 'Alarmes desativados - clique para ligar';
-        const alarmModeOptions = [
-            { value: '10h', label: '10h apenas' },
-            { value: 'interval', label: 'Intervalo' },
-            { value: 'complete', label: 'Completo' }
-        ].map(item => `<option value="${item.value}" ${item.value === alarmConfig.mode ? 'selected' : ''}>${item.label}</option>`).join('');
-        const alarmLeadOptions = [1, 3, 5, 10, 15]
-            .map(min => `<option value="${min}" ${min === alarmConfig.leadMinutes ? 'selected' : ''}>${min} min</option>`)
-            .join('');
-        const alarmRepeatOptions = [
-            { value: 'once', label: '1x (padrão)' },
-            { value: 'triple', label: '3x' },
-            { value: 'loop', label: 'Contínuo curto' }
-        ].map(item => `<option value="${item.value}" ${item.value === alarmConfig.soundRepeat ? 'selected' : ''}>${item.label}</option>`).join('');
-        const alarmRepeatLabel = alarmConfig.soundRepeat === 'triple'
-            ? 'som 3x'
-            : alarmConfig.soundRepeat === 'loop'
-                ? 'som contínuo'
-                : 'som 1x';
-        const quickGcalOffsetOptions = [5, 10, 15]
-            .map(min => `<option value="${min}" ${min === alarmConfig.quickGcalOffsetMinutes ? 'selected' : ''}>-${min} min</option>`)
-            .join('');
-        const quickGcalAutoOpenStageOptions = [
-            { value: 'off', label: 'Desligado' },
-            { value: 'interval', label: 'Intervalo' },
-            { value: 'return', label: 'Retorno' },
-            { value: 'exit', label: 'Saída' },
-            { value: 'any', label: 'Qualquer fase útil' }
-        ]
-            .map(item => `<option value="${item.value}" ${item.value === alarmConfig.quickGcalAutoOpenStage ? 'selected' : ''}>${item.label}</option>`)
-            .join('');
-        const quickCalendarProviderOptions = [
-            { value: 'google', label: 'Somente Google Calendar' },
-            { value: 'outlook', label: 'Somente Outlook' },
-            { value: 'both', label: 'Google + Outlook' }
-        ]
-            .map(item => `<option value="${item.value}" ${item.value === alarmConfig.quickCalendarProvider ? 'selected' : ''}>${item.label}</option>`)
-            .join('');
-        const alarmChannelsSummary = `${alarmConfig.channels.sound ? alarmRepeatLabel : 'som off'} · ${alarmConfig.channels.desktop ? 'desktop on' : 'desktop off'}`;
-        const quickGcalSummary = `botão ${alarmConfig.quickGcalEnabled ? 'on' : 'off'} · ${getQuickCalendarProviderLabel(alarmConfig.quickCalendarProvider)} · -${alarmConfig.quickGcalOffsetMinutes}m · auto ${alarmConfig.quickGcalAutoOpenEnabled ? 'on' : 'off'}`;
-        const alarmSummary = `${alarmConfig.enabled ? 'Ligado' : 'Desligado'} · ${getLoggerAlarmModeLabel(alarmConfig.mode)} · ${alarmConfig.leadMinutes} min antes · ${alarmChannelsSummary} · ${quickGcalSummary}`;
-        const alarmSettingsToggleLabel = _loggerAlarmSettingsExpanded ? 'Ocultar' : 'Configurar';
-
-        const historyBlock = `
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px;">
-                <div style="font-size:10px; opacity:.55;">Histórico recente (mirror + local)</div>
-                <button id="ahg-history-add" title="Adicionar batida local" style="border:1px solid rgba(61,220,132,.4); background:rgba(61,220,132,.14); color:#c8ffe2; border-radius:6px; padding:1px 7px; font-size:13px; cursor:pointer; line-height:1;">+</button>
-            </div>
-            <div style="padding:8px 10px; border:1px solid #34344c; border-radius:8px; background:rgba(255,255,255,.03);">
-                ${recentHistoryHtml}
-            </div>
-        `;
-
-        const requestMirrorSyncButton = `<a id="ahg-request-mirror-sync" href="javascript:void(0)" style="display:block; border:1px solid rgba(255,255,255,.16); background:rgba(255,255,255,.03); color:#cfd7ff; border-radius:7px; padding:6px 8px; cursor:pointer; text-decoration:none; text-align:center; font-weight:600; font-size:11px; letter-spacing:.2px;">↻ Sincronizar mirror</a>`;
-
-        const buildActionButtons = () => {
-
-            const btnSmall = (color) => `border:1px solid rgba(${color},.38); background:rgba(${color},.12); color:${color === '61,220,132' ? '#c8ffe2' : '#ffd08a'}; border-radius:5px; padding:4px 6px; text-decoration:none; font-size:13px; transition:.15s;`;
-
-            if (guidance.stage === 'interval' && guidance.firstExitMin !== null && guidance.firstExitMax !== null) {
-
-                const url8hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url8hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                const url10hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url10hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
-                ];
-            }
-
-            if (guidance.stage === 'return' && guidance.intervalMin !== null && guidance.intervalMax !== null) {
-
-                const urlMinGcal = buildGoogleCalendarUrl({
-                    title: 'Retorno mínimo',
-                    details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
-                    startMinute: guidance.intervalMin,
-                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const urlMinOutlook = buildOutlookCalendarUrl({
-                    title: 'Retorno mínimo',
-                    details: `Retorno mínimo (+30m): ${fmtHour(guidance.intervalMin)}`,
-                    startMinute: guidance.intervalMin,
-                    endMinute: guidance.intervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                const urlMaxGcal = buildGoogleCalendarUrl({
-                    title: 'Retorno máximo',
-                    details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
-                    startMinute: guidance.intervalMax,
-                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const urlMaxOutlook = buildOutlookCalendarUrl({
-                    title: 'Retorno máximo',
-                    details: `Retorno máximo (+210m): ${fmtHour(guidance.intervalMax)}`,
-                    startMinute: guidance.intervalMax,
-                    endMinute: guidance.intervalMax + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Retorno mín. +30m: <b style=\"color:#c8ffe2;\">${renderClock(guidance.intervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${urlMinGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${urlMinOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Retorno máx. +210m: <b style=\"color:#ffd08a;\">${renderClock(guidance.intervalMax)}</b></span><div style="display:flex; gap:4px;"><a href="${urlMaxGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${urlMaxOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
-                ];
-            }
-
-            if (guidance.stage === 'exit' && guidance.day8WithIntervalMin !== null && guidance.day10WithIntervalMin !== null) {
-
-                const url8hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url8hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 8h + intervalo',
-                    details: `Saída 8h mínima: ${fmtHour(guidance.day8WithIntervalMin)}`,
-                    startMinute: guidance.day8WithIntervalMin,
-                    endMinute: guidance.day8WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                const url10hGcal = buildGoogleCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN,
-                    userPath: alarmConfig.gcalUserPath
-                });
-                const url10hOutlook = buildOutlookCalendarUrl({
-                    title: 'Saída 10h + intervalo',
-                    details: `Saída 10h mínima: ${fmtHour(guidance.day10WithIntervalMin)}`,
-                    startMinute: guidance.day10WithIntervalMin,
-                    endMinute: guidance.day10WithIntervalMin + CONFIG.GCAL_EVENT_DURATION_MIN
-                });
-
-                return [
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 8h: <b style=\"color:#c8ffe2;\">${renderClock(guidance.day8WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url8hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📅</a><a href="${url8hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('61,220,132')}" onmouseover="this.style.background='rgba(61,220,132,.18)'" onmouseout="this.style.background='rgba(61,220,132,.12)'">📧</a></div></div>`,
-                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 8px; background:rgba(255,255,255,.03); border-radius:6px;"><span style="font-size:11px; color:#7880aa;">Saída 10h: <b style=\"color:#ffd08a;\">${renderClock(guidance.day10WithIntervalMin)}</b></span><div style="display:flex; gap:4px;"><a href="${url10hGcal}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📅</a><a href="${url10hOutlook}" target="_blank" rel="noopener noreferrer" style="${btnSmall('255,165,0')}" onmouseover="this.style.background='rgba(255,165,0,.18)'" onmouseout="this.style.background='rgba(255,165,0,.12)'">📧</a></div></div>`
-                ];
-            }
-
-            return [];
-        };
-
-        const actionButtonsHtml = buildActionButtons().join('');
-        const autoGcalMaxMinusLink = buildAutoGcalMaxMinusLink();
-        const quickProvider = alarmConfig.quickCalendarProvider;
-        const showQuickGoogle = quickProvider === 'both' || quickProvider === 'google';
-        const showQuickOutlook = quickProvider === 'both' || quickProvider === 'outlook';
-        const autoQuickCalendarButtonsHtml = (alarmConfig.quickGcalEnabled && autoGcalMaxMinusLink)
-            ? `<div style="display:grid;grid-template-columns:${showQuickGoogle && showQuickOutlook ? '1fr 1fr' : '1fr'};gap:6px;margin-top:6px;">${showQuickGoogle && autoGcalMaxMinusLink.gcal ? `<a id="ahg-gcal-max-minus" href="${autoGcalMaxMinusLink.gcal}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(61,220,132,.45); background:rgba(61,220,132,.14); color:#c8ffe2; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">⚡ Google -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}${showQuickOutlook && autoGcalMaxMinusLink.outlook ? `<a id="ahg-outlook-max-minus" href="${autoGcalMaxMinusLink.outlook}" target="_blank" rel="noopener noreferrer" style="display:block; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.14); color:#d7e3ff; border-radius:7px; padding:7px 8px; text-decoration:none; text-align:center; font-weight:700; font-size:11px;">📧 Outlook -${autoGcalMaxMinusLink.leadMinutes}m</a>` : ''}</div><div style="font-size:10px; color:#9fa7d6; opacity:.82; margin-top:4px; text-align:center;">Início: ${renderClock(autoGcalMaxMinusLink.startMinute)} · limite: ${renderClock(autoGcalMaxMinusLink.maxMinute)} · ${autoGcalMaxMinusLink.maxLabel}</div>`
-            : '';
-
-        const criticalNotes = [
-            !hasMirrorData ? 'Mirror pendente: totais podem divergir.' : null,
-            loggerPunchHealth.level !== 'ok' ? loggerPunchHealth.text : null,
-            localOnlyPunches.length > 0 ? `${localOnlyPunches.length} batida(s) local(is) aguardando sync.` : null,
-            reconciled.removedCount > 0 ? `${reconciled.removedCount} batida(s) local(is) reconciliada(s) com mirror.` : null,
-            hasSharedStaleCache ? `Cache local compartilhado de ${sharedTodayKey} ignorado (hoje: ${todayKey}).` : null,
-            hasMirrorStaleCache ? `Cache do mirror de ${mirrorTodayKey} ignorado (hoje: ${todayKey}).` : null
-        ].filter(Boolean);
-
-        const notesHtml = criticalNotes.length
-            ? `<div class="a-row warn" style="background:rgba(255,165,0,.12); border-left-color:orange; padding:8px 8px; border-radius:7px; margin:0;"><span style="color:#ffd08a; font-size:10px; font-weight:700;">${criticalNotes.slice(0, 2).map(x => `<div style="margin:2px 0;">• ${x}</div>`).join('')}</span></div>`
-            : '';
-
-        container.innerHTML = `
-            <div class="a-body" style="gap:6px; padding-top:10px;">
-                <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:10px; margin-bottom:4px;">
-                    <span style="color:#7880aa; text-transform:uppercase; font-weight:700; letter-spacing:.5px;">${sourceLabel}</span>
-                    <span style="display:flex; align-items:center; gap:6px;">${syncBadge}<span id="ahg-alarm-toggle-logger" class="ahg-privacy-btn" title="${alarmToggleTitle}" aria-pressed="${alarmConfig.enabled ? 'true' : 'false'}">${alarmToggleIcon}</span><span id="ahg-privacy-toggle-logger" class="ahg-privacy-btn" title="Alternar privacidade">👁</span></span>
-                </div>
-
-                <div style="font-size:28px; font-weight:800; line-height:1; letter-spacing:.3px; color:#fff; margin:4px 0;">${renderText(combinedLastPunch || lastPunch.time)}</div>
-
-                <div style="font-size:10px; color:#7880aa; display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
-                    ${mirrorCountBadge}
-                    ${localPendingCountBadge}
-                </div>
-
-                <div style="display:grid; gap:2px;">
-                    ${actionButtonsHtml}
-                </div>
-
-                ${autoQuickCalendarButtonsHtml}
-
-                ${notesHtml ? `<div style="margin-top:6px;">${notesHtml}</div>` : ''}
-
-                <div id="ahg-logger-details-toggle" data-open="true" style="cursor:pointer; padding:6px 8px; border-radius:7px; background:rgba(122,108,255,.15); border:1px solid rgba(122,108,255,.2); display:flex; align-items:center; gap:6px; user-select:none; transition:.15s; margin-top:8px;">
-                    <span style="font-size:12px;">▼</span>
-                    <span style="color:#7a6cff; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.3px;">Detalhes</span>
-                </div>
-
-                <div id="ahg-logger-details-content" style="display:block; border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:6px; font-size:11px;">
-                    <div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin-bottom:4px;">Hoje</div>
-                    <div class="a-row ${jornadaDiaStatus.tone === 'warn' ? 'warn' : jornadaDiaStatus.tone === 'pos' ? 'ok' : 'neu'}" style="margin-bottom:4px;">
-                        <span class="a-lbl">Previsão da jornada</span>
-                        <span class="a-val ${jornadaDiaStatus.tone === 'warn' ? 'warn' : jornadaDiaStatus.tone === 'pos' ? 'pos' : 'neu'}">${jornadaDiaStatus.label}</span>
-                    </div>
-                    <div style="font-size:10px; color:#9fa7d6; opacity:.82; margin:0 2px 6px;">${jornadaDiaStatus.detail}</div>
-                    <div class="a-row neu" style="background:rgba(122,108,255,.08); border-left-color:#7a6cff; margin-bottom:4px;">
-                        <span class="a-lbl">Trabalhado</span>
-                        <span class="a-val neu">${workedToday === null ? '--:--' : renderMinutes(workedToday)}</span>
-                    </div>
-                    ${dayBalance !== null ? `<div class="a-row"><span class="a-lbl">Saldo: </span><span class="a-val ${dayBalance >= 0 ? 'pos' : 'neg'}">${renderMinutes(dayBalance)}</span></div>` : ''}
-
-                    <div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin:8px 0 4px;">Semana</div>
-                    <div class="a-row neu" style="background:rgba(122,108,255,.08); border-left-color:#7a6cff; margin-bottom:4px;">
-                        <span class="a-lbl">Trabalhado</span>
-                        <span class="a-val neu">${weekWorked === null ? '--:--' : renderMinutes(weekWorked)}</span>
-                    </div>
-                    ${weekBalance !== null ? `<div class="a-row"><span class="a-lbl">Saldo: </span><span class="a-val ${weekBalance >= 0 ? 'pos' : 'neg'}">${renderMinutes(weekBalance)}</span></div>` : ''}
-
-                    <div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin:8px 0 4px;">Alarmes</div>
-                    <div style="padding:8px 10px; border:1px solid #34344c; border-radius:8px; background:rgba(255,255,255,.03); display:grid; gap:6px;">
-                        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-                            <div style="font-size:10px; color:#9fa7d6; line-height:1.35;">${alarmSummary}</div>
-                            <button id="ahg-alarm-settings-toggle" class="toggle-btn">${alarmSettingsToggleLabel}</button>
-                        </div>
-                        ${_loggerAlarmSettingsExpanded ? `<div style="display:grid; gap:4px; border-top:1px solid rgba(255,255,255,.07); padding-top:6px;">
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <label for="ahg-alarm-mode" class="form-label">Modo</label>
-                                <select id="ahg-alarm-mode" class="form-select">${alarmModeOptions}</select>
-                            </div>
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <label for="ahg-alarm-lead" class="form-label">Antecedência</label>
-                                <select id="ahg-alarm-lead" class="form-select">${alarmLeadOptions}</select>
-                            </div>
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <label for="ahg-alarm-repeat" class="form-label">Som</label>
-                                <select id="ahg-alarm-repeat" class="form-select">${alarmRepeatOptions}</select>
-                            </div>
-                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
-                                <input id="ahg-alarm-sound" type="checkbox" ${alarmConfig.channels.sound ? 'checked' : ''}>
-                                <span>Tocar som no navegador</span>
-                            </label>
-                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
-                                <input id="ahg-alarm-desktop" type="checkbox" ${alarmConfig.channels.desktop ? 'checked' : ''}>
-                                <span>Notificação desktop</span>
-                            </label>
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <label for="ahg-alarm-gcal" style="font-size:10px; opacity:.78;">Google Calendar</label>
-                                <input id="ahg-alarm-gcal" type="text" placeholder="0 ou 1" value="${escapeHtml(alarmConfig.gcalUserPath)}" style="font-size:10px; background:#16162a; color:#dde; border:1px solid rgba(255,255,255,.2); border-radius:6px; padding:3px 6px; flex:1; max-width:120px;">
-                            </div>
-                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
-                                <input id="ahg-gcal-quick-enabled" type="checkbox" ${alarmConfig.quickGcalEnabled ? 'checked' : ''}>
-                                <span>Mostrar botão rápido Google Calendar</span>
-                            </label>
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <label for="ahg-calendar-provider" class="form-label">Botão rápido</label>
-                                <select id="ahg-calendar-provider" class="form-select">${quickCalendarProviderOptions}</select>
-                            </div>
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <label for="ahg-gcal-offset" class="form-label">Offset do botão</label>
-                                <select id="ahg-gcal-offset" class="form-select">${quickGcalOffsetOptions}</select>
-                            </div>
-                            <label style="font-size:10px; display:flex; align-items:center; gap:6px; cursor:pointer;">
-                                <input id="ahg-gcal-auto-open" type="checkbox" ${alarmConfig.quickGcalAutoOpenEnabled ? 'checked' : ''}>
-                                <span>Abrir automaticamente (com confirmação)</span>
-                            </label>
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
-                                <label for="ahg-gcal-auto-stage" class="form-label">Fase para autoabrir</label>
-                                <select id="ahg-gcal-auto-stage" class="form-select" ${alarmConfig.quickGcalAutoOpenEnabled ? '' : 'disabled'}>${quickGcalAutoOpenStageOptions}</select>
-                            </div>
-                            <div style="font-size:10px; color:#9fa7d6; opacity:.78;">Quando a fase escolhida for detectada, o script pede confirmação e abre o evento uma única vez por detecção.</div>
-                            <button id="ahg-alarm-test" style="margin-top:2px; width:100%; border:1px solid rgba(121,162,255,.45); background:rgba(121,162,255,.12); color:#d7e3ff; border-radius:6px; padding:5px 6px; cursor:pointer; font-size:10px; font-weight:700;">Testar alarme</button>
-                        </div>` : ''}
-                    </div>
-
-                    ${forecastBlockHtml ? `<div style="font-size:11px; color:#7880aa; text-transform:uppercase; letter-spacing:.3px; font-weight:700; margin:8px 0 4px;">Próximos horários</div>${forecastBlockHtml}` : ''}
-
-                    ${mirrorSyncHint ? `<div style="font-size:10px; color:#7a6cff; margin-top:8px; opacity:.7;">${mirrorSyncHint}</div>` : ''}
-                </div>
-                ${historyBlock ? `<div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px;">${historyBlock}</div>` : ''}
-
-                <div style="border-top:1px solid rgba(255,255,255,.07); padding-top:8px; margin-top:8px;">
-                    ${requestMirrorSyncButton}
-                </div>
-            </div>
-        `;
-
-        document.getElementById('ahg-logger-details-toggle')
-            ?.addEventListener('click', () => {
-                const toggle = document.getElementById('ahg-logger-details-toggle');
-                const content = document.getElementById('ahg-logger-details-content');
-                const isOpen = toggle.getAttribute('data-open') === 'true';
-                toggle.setAttribute('data-open', isOpen ? 'false' : 'true');
-                content.style.display = isOpen ? 'none' : 'block';
-                toggle.style.background = isOpen ? 'rgba(122,108,255,.08)' : 'rgba(122,108,255,.15)';
-                toggle.querySelector('span').textContent = isOpen ? '▶' : '▼';
-            });
-
-        document.getElementById('ahg-request-mirror-sync')
-            ?.addEventListener('click', () => {
-
-                showLoggerToast('Sincronizando com mirror...');
-                const opened = window.open(CONFIG.URL_REFRESH, '_blank', 'noopener,noreferrer');
-
-                if (opened) {
-                    opened.opener = null;
-                }
-            });
-
-        document.getElementById('ahg-gcal-max-minus')
-            ?.addEventListener('click', () => {
-
-                showLoggerToast(`Abrindo Google Calendar com evento em máximo -${autoGcalMaxMinusLink?.leadMinutes || alarmConfig.quickGcalOffsetMinutes}m.`);
-            });
-
-        document.getElementById('ahg-outlook-max-minus')
-            ?.addEventListener('click', () => {
-
-                showLoggerToast(`Abrindo Outlook com evento em máximo -${autoGcalMaxMinusLink?.leadMinutes || alarmConfig.quickGcalOffsetMinutes}m.`);
-            });
-
-        if (canAutoOpenQuickGcal(autoGcalMaxMinusLink)) {
-
-            const autoToken = `${todayKey}:${autoGcalMaxMinusLink.stage}:${alarmConfig.quickGcalAutoOpenStage}:${autoGcalMaxMinusLink.maxMinute}:${autoGcalMaxMinusLink.leadMinutes}`;
-
-            if (!hasLoggerGcalAutoOpenToken(autoToken)) {
-
-                const stageLabel = getGuidanceStageLabel(autoGcalMaxMinusLink.stage);
-                const shouldOpen = window.confirm(
-                    `Fase detectada: ${stageLabel}.\n\nAbrir evento no Google Calendar para ${renderClock(autoGcalMaxMinusLink.startMinute)} (máximo -${autoGcalMaxMinusLink.leadMinutes}m)?`
-                );
-
-                if (shouldOpen) {
-                    const opened = window.open(autoGcalMaxMinusLink.gcal, '_blank', 'noopener,noreferrer');
-
-                    if (opened) {
-                        opened.opener = null;
-                    }
-
-                    markLoggerGcalAutoOpenToken(autoToken, 'accepted');
-                    showLoggerToast(`Evento aberto automaticamente para ${renderClock(autoGcalMaxMinusLink.startMinute)}.`);
-                } else {
-                    markLoggerGcalAutoOpenToken(autoToken, 'dismissed');
-                    showLoggerToast('Autoabertura cancelada nesta detecção.');
-                }
-            }
-        }
-
-        const tryAddHistoryPunch = () => {
-
-            const suggested = normalizePunchTime(combinedLastPunch) || '';
-            const typed = window.prompt('Nova batida local (HH:MM):', suggested);
-
-            if (typed === null) {
-                return;
-            }
-
-            const time = normalizePunchTime(typed);
-
-            if (!time) {
-                showLoggerToast('Informe um horário válido (HH:MM).');
-                return;
-            }
-
-            const minute = toMin(time);
-
-            if (!Number.isFinite(minute)) {
-                showLoggerToast('Horário inválido para inclusão local.');
-                return;
-            }
-
-            const manualTimestamp = startMs + (minute * 60000);
-            const todayDateLabel = new Date(startMs).toLocaleDateString('pt-BR');
-            const inserted = savePunch(time, todayDateLabel, manualTimestamp);
-
-            if (!inserted) {
-                showLoggerToast(`Batida ${time} já existe no histórico local de hoje.`);
-                return;
-            }
-
-            showLoggerToast(`Batida local ${time} incluída.`);
-
-            if (document.getElementById('ahg-panel')) {
-                render();
-            }
-        };
-
-        document.getElementById('ahg-history-add')
-            ?.addEventListener('click', () => tryAddHistoryPunch());
-
-        document.querySelectorAll('.ahg-history-edit')
-            .forEach(btn => {
-
-                btn.addEventListener('click', () => {
-
-                    const current = normalizePunchTime(String(btn.getAttribute('data-time') || ''));
-
-                    if (!current) {
-                        showLoggerToast('Batida local inválida para edição.');
-                        return;
-                    }
-
-                    const typed = window.prompt('Editar batida local (HH:MM):', current);
-
-                    if (typed === null) {
-                        return;
-                    }
-
-                    const next = normalizePunchTime(typed);
-
-                    if (!next) {
-                        showLoggerToast('Informe um horário válido (HH:MM).');
-                        return;
-                    }
-
-                    const result = updateTodayLocalPunch(current, next, startMs, endMs);
-                    showLoggerToast(result.message);
-                });
-            });
-
-        document.querySelectorAll('.ahg-history-shift')
-            .forEach(btn => {
-
-                btn.addEventListener('click', () => {
-
-                    const current = normalizePunchTime(String(btn.getAttribute('data-time') || ''));
-                    const delta = Number(btn.getAttribute('data-delta') || '0');
-
-                    if (!current || !Number.isFinite(delta) || delta === 0) {
-                        showLoggerToast('Não foi possível ajustar esta batida local.');
-                        return;
-                    }
-
-                    const shifted = shiftPunchTime(current, delta);
-
-                    if (!shifted) {
-                        showLoggerToast('Horário inválido para ajuste rápido.');
-                        return;
-                    }
-
-                    const result = updateTodayLocalPunch(current, shifted, startMs, endMs);
-                    showLoggerToast(result.message);
-                });
-            });
-
-        document.getElementById('ahg-alarm-settings-toggle')
-            ?.addEventListener('click', () => {
-
-                _loggerAlarmSettingsExpanded = !_loggerAlarmSettingsExpanded;
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-toggle-logger')
-            ?.addEventListener('click', () => {
-
-                const nextConfig = patchLoggerAlarmConfig({
-                    enabled: !alarmConfig.enabled
-                });
-
-                showLoggerToast(`Alarmes ${nextConfig.enabled ? 'ligados' : 'desligados'}.`);
-
-                if (nextConfig.enabled) {
-                    if (nextConfig.channels.desktop) {
-                        pedirNotif();
-                    }
-
-                    evaluateLoggerAlarms();
-                }
-
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-mode')
-            ?.addEventListener('change', ev => {
-
-                const mode = String(ev.target?.value || '10h');
-                patchLoggerAlarmConfig({ mode });
-                showLoggerToast(`Modo de alarme: ${getLoggerAlarmModeLabel(mode)}.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-lead')
-            ?.addEventListener('change', ev => {
-
-                const leadMinutes = Number(ev.target?.value || CONFIG.LOGGER_ALARM_LEAD_MINUTES);
-                patchLoggerAlarmConfig({ leadMinutes });
-                showLoggerToast(`Antecedência: ${leadMinutes} min.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-repeat')
-            ?.addEventListener('change', ev => {
-
-                const soundRepeat = String(ev.target?.value || CONFIG.LOGGER_ALARM_REPEAT);
-                patchLoggerAlarmConfig({ soundRepeat });
-                showLoggerToast('Configuração de som atualizada.');
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-sound')
-            ?.addEventListener('change', ev => {
-
-                patchLoggerAlarmConfig({
-                    channels: {
-                        sound: Boolean(ev.target?.checked)
-                    }
-                });
-
-                showLoggerToast(`Som ${ev.target?.checked ? 'ligado' : 'desligado'}.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-desktop')
-            ?.addEventListener('change', ev => {
-
-                const desktop = Boolean(ev.target?.checked);
-
-                patchLoggerAlarmConfig({
-                    channels: {
-                        desktop
-                    }
-                });
-
-                if (desktop) {
-                    pedirNotif();
-                }
-
-                showLoggerToast(`Notificação desktop ${desktop ? 'ligada' : 'desligada'}.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-gcal')
-            ?.addEventListener('change', ev => {
-
-                const inputValue = String(ev.target?.value || '0').trim();
-                const gcalUserPath = normalizeGoogleCalendarUserPath(inputValue);
-                patchLoggerAlarmConfig({ gcalUserPath });
-                
-                // Avisa se o valor foi normalizado
-                if (inputValue !== gcalUserPath && inputValue !== '') {
-                    showLoggerToast(`Google Calendar: suporta apenas números (0, 1, 2, ...). Usando: ${gcalUserPath}`);
-                } else {
-                    showLoggerToast(`Google Calendar: conta ${gcalUserPath}`);
-                }
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-gcal-quick-enabled')
-            ?.addEventListener('change', ev => {
-
-                patchLoggerAlarmConfig({
-                    quickGcalEnabled: Boolean(ev.target?.checked)
-                });
-
-                showLoggerToast(`Botão rápido Google Calendar ${ev.target?.checked ? 'ligado' : 'desligado'}.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-calendar-provider')
-            ?.addEventListener('change', ev => {
-
-                const provider = String(ev.target?.value || 'both');
-                patchLoggerAlarmConfig({ quickCalendarProvider: provider });
-                showLoggerToast(`Botão rápido: ${getQuickCalendarProviderLabel(provider)}.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-gcal-offset')
-            ?.addEventListener('change', ev => {
-
-                const offset = Number(ev.target?.value || 10);
-                patchLoggerAlarmConfig({ quickGcalOffsetMinutes: offset });
-                showLoggerToast(`Offset do Google Calendar: -${offset} min.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-gcal-auto-open')
-            ?.addEventListener('change', ev => {
-
-                const enabled = Boolean(ev.target?.checked);
-                patchLoggerAlarmConfig({ quickGcalAutoOpenEnabled: enabled });
-                showLoggerToast(`Autoabertura ${enabled ? 'ligada' : 'desligada'} (com confirmação).`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-gcal-auto-stage')
-            ?.addEventListener('change', ev => {
-
-                const stage = String(ev.target?.value || 'off');
-                patchLoggerAlarmConfig({ quickGcalAutoOpenStage: stage });
-                showLoggerToast(`Fase de autoabertura: ${stage === 'any' ? 'qualquer fase útil' : getGuidanceStageLabel(stage)}.`);
-                renderUILogger();
-            });
-
-        document.getElementById('ahg-alarm-test')
-            ?.addEventListener('click', () => {
-
-                const currentConfig = readLoggerAlarmConfig();
-                const modeLabel = getLoggerAlarmModeLabel(currentConfig.mode);
-
-                if (currentConfig.channels.desktop) {
-                    pedirNotif();
-                    notif(
-                        `logger-test-${Date.now()}`,
-                        '🧪 Teste de alarme',
-                        `Modo ${modeLabel} · antecedência ${currentConfig.leadMinutes} min.`,
-                        false
-                    );
-                }
-
-                if (currentConfig.channels.sound) {
-                    try {
-                        playLoggerAlarmSound(currentConfig.soundRepeat);
-                    } catch (_) {
-                        showLoggerToast('Não foi possível tocar o som de teste agora.');
-                        return;
-                    }
-                }
-
-                showLoggerToast('Teste de alarme executado.');
-            });
-
-        document.getElementById('ahg-privacy-toggle-logger')
-            ?.addEventListener('click', () => {
-
-                togglePrivacyHidden();
-                renderUILogger();
-                if (document.getElementById('ahg-panel')) {
-                    render();
-                }
-            });
-    }
-
-    function startLogger() {
-
-        applyPrivacyState();
-
-        const alarmConfig = readLoggerAlarmConfig();
-
-        if (alarmConfig.enabled && alarmConfig.channels.desktop) {
-            pedirNotif();
-        }
-
-        createPrivacyFab('ahg-eye-fab-logger', '24px', () => renderUILogger());
-
-        renderUILogger();
-        setInterval(() => {
-            monitorModal();
-            evaluateLoggerAlarms();
-        }, 500);
-    }
-
-    /* =========================================================
-       INIT
-    ========================================================= */
-
-    function start() {
-
-        applyPrivacyState();
-        injectCSS();
-
-        criarEstrutura();
-
-        render();
-
-        agendarRenderMinuto();
-
-        setTimeout(() => {
-            console.log('[AHGORA PANEL] recarregando página...');
-            console.log(CONFIG.URL_REFRESH);
-            window.top.location = CONFIG.URL_REFRESH;
-        }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
-    }
-
-    /* =========================================================
-       ROUTE DISPATCH
-    ========================================================= */
-
-    const currentUrl = window.location.href;
-
-    applyPrivacyState();
-
-    if (currentUrl.includes('novabatidaonline')) {
-
-        startLogger();
-
-    } else {
-
-        const initInterval = setInterval(() => {
-
-            const calendar =
-                document.querySelector('.v-calendar-weekly');
-
-            if (calendar) {
-
-                clearInterval(initInterval);
-
-                start();
-            }
-
-        }, 1000);
-
-        pedirNotif();
-
-        const IS_TOP = window.top === window;
-        if (IS_TOP) {
-
-            console.log(
-                '[AHGORA PANEL] TOP WINDOW'
-            );
-
-            pedirNotif();
-
-            setTimeout(() => {
-
-                notif(
-                    'startup',
-                    'Ahgora',
-                    'Notificações ativadas.',
-                    false
-                );
-
-            }, 3000);
-
-            setInterval(() => {
-
-                console.log(
-                    '[AHGORA PANEL] reload top'
-                );
-
-                location.reload();
-
-            }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
-        }
-    }
+    Logger.info('INIT', `Ahgora Smart Panel v${CONFIG.VERSAO} iniciado`, { pagina: PageAdapter.detect(), tema: Tema.get() });
 
 })();
