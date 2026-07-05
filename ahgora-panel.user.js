@@ -4,119 +4,1973 @@
 // @version      3.0.0
 // @description  Painel com totais no calendario, logger de batidas, overlay de jornada na novabatidaonline, alarmes configuraveis, tema adaptativo e diagnostico
 // @author       Jonathan Fiss, Anderson Guarnier
+
 // @match https://mirror.app.ahgora.com.br/*
 // @match https://app.ahgora.com.br/*
+
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
 // @run-at       document-idle
+
 // @downloadURL  https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
 // @updateURL    https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
+
 // ==/UserScript==
-(()=>{
-var Ea={CARGA_DIARIA:480,MAX_HORAS_DIA:600,MAX_HORAS_TURNO:360,QUATRO_HORAS:240,INTERVALO_MINIMO:30,INTERVALO_MAXIMO:210,MIN_TURNO_COM_INTERVALO:120,DESCANSO_MINIMO:660,TOLERANCIA:10,MAX_BATIDAS_PERMITIDAS:6,$:43200,i:600,u:600,J:"mirror",aa:"batida",ma:"@ahgora-panel/truth",ja:"@ahgora-panel/alarm-config",na:"@ahgora-panel/gcal-auto-open",la:"@ahgora-panel/gcal-user-path",oa:"@ahgora-panel/punch-overrides",pa:"@ahgora-panel/privacy",ka:"@ahgora-panel/alarms-fired",qa:"@ahgora-panel/accounts",U:"#7a6cff",ca:"#ff4d6d",da:"#00e1a0",V:"#ffb800",W:"#ff6b35",ea:"#ff3366",fa:"#ffd700",X:"#ff6b35",Y:"#7a6cff",Z:"#ffffff",ha:"#7a6cff",I:30,P:10},Na=Ea,Ia=a=>{var e,t;return!a||(a=(a=""+a).match(/(-?\d+):(\d{2})/))?(e=+a[1],t=+a[2],isNaN(e)||isNaN(t)?null:e?-(60*e+(t||0)):60*e+(t||0)):null},G=a=>null==a?"--:--":(a<0?"-":"")+String(Math.floor((a=Math.abs(Math.round(a)))/60)).padStart(2,"0")+":"+String(a%60).padStart(2,"0"),H=a=>null==a?null:15*Math.ceil(a/15),L=a=>null==a?"--:--":(0>a?"-":"")+String(Math.floor((a=(Math.round(a)%1440+1440)%1440)/60)).padStart(2,"0")+":"+String(a%60).padStart(2,"0"),U=()=>{var a=new Date;return 60*a.getHours()+a.getMinutes()},Ea=(a,e)=>{if("function"==typeof GM_getValue)return GM_getValue(a,e);try{var t=localStorage.getItem(a);return null===t?e:t}catch(a){return e}},Pa=(a,e)=>{if("function"==typeof GM_setValue)GM_setValue(a,e);else try{localStorage.setItem(a,JSON.stringify(e))}catch(e){console.warn("[AHG] Falha ao salvar",a,e)}},Wa=(a,e,t,o)=>{if(!o&&"granted"===Notification.permission)new Notification(e,{body:t,icon:"https://www.ahgora.com.br/favicon.ico",tag:a,requireInteraction:!0,silent:!1});else if(o&&"granted"===Notification.permission)new Notification(e,{body:t,icon:"https://www.ahgora.com.br/favicon.ico",tag:a,requireInteraction:!1,silent:!0})},Fa=()=>{if("granted"!==Notification.permission)return"default"===Notification.permission&&Notification.requestPermission(),!1},Ba=()=>"hidden"===document.visibilityState;function Ca(){if(document.body){document.body.classList.toggle("ahg-privacy",Ba());var e=document.querySelectorAll('[class*="ahg-fab"]');Array.from(e).forEach(a=>{a.style.filter=Ba()?"blur(6px)":"",a.style.transition="filter 0.3s"})}}function s(a,e,t){var o;document.getElementById(a)||((o=document.createElement("button")).id=a,o.className="ahg-fab",o.innerHTML=Ba()?"🙈":"🐵",o.title=Ba()?"Privacidade ativa — clique para desativar":"Privacidade inativa — clique para ativar",o.style.cssText=`position:fixed;bottom:${e};left:16px;z-index:99999;width:44px;height:44px;border-radius:50%;background:${Na.U};color:#fff;border:none;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(122,108,255,0.4);transition:transform 0.2s;`,o.onmouseenter=()=>o.style.transform="scale(1.1)",o.onmouseleave=()=>o.style.transform="scale(1)",o.onclick=()=>{Ba()?(localStorage.setItem(Na.pa,"false"),Ca(),Array.from(document.querySelectorAll('[class*="ahg-fab"]')).forEach(a=>{a.innerHTML="🐵",a.title="Privacidade inativa — clique para ativar",a.style.filter=""})):(localStorage.setItem(Na.pa,"true"),Ca(),Array.from(document.querySelectorAll('[class*="ahg-fab"]')).forEach(a=>{a.innerHTML="🙈",a.title="Privacidade ativa — clique para desativar",a.style.filter="blur(6px)"}))},document.body.appendChild(o))}function Ga(a){return l()?"blur(6px)":""}function W(a=new Date){a=new Date(a);return`${a.getFullYear()}-${("0"+(a.getMonth()+1)).slice(-2)}-${("0"+a.getDate()).slice(-2)}`}function Ha(a){var e=(""+a).trim();return!a||!(a=a.match(/(\d{1,2}):(\d{2})/))||(e=+(""+a[1]),a=+(""+a[2]),!Number.isFinite(e)||!Number.isFinite(a)||e<0||23<e||a<0||59<a)?null:(""+e).padStart(2,"0")+":"+(""+a).padStart(2,"0")}function Va(a,{P:e=!1}={}){return a?a>Na.$?{level:"info",text:"Não é permitido registrar horas extras sem autorização. Consulte seu gestor.",icon:"🚫"}:a>360?{level:"warning",text:"Atenção: banco de horas elevado. Procure seu gestor para regularização.",icon:"⚠️"}:a>240?{level:"warning",text:"Banco de horas acumulado. Verifique com seu gestor.",icon:"⚡"}:a>120?{level:"info",text:"Banco de horas positivo. Considere compensar.",icon:"📈"}:a>Na.P?{level:"info",text:"Banco de horas levemente positivo.",icon:"📊"}:{level:"success",text:"Banco de horas dentro da tolerância.",icon:"✅"}:{level:"neutral",text:"Sem dados de banco de horas.",icon:"❓"}}function Z(a){var e=Array.isArray(a)?a:[],t=[];for(let a=1;a+1<e.length;a+=2){var o=Ia(e[a]),r=Ia(e[a+1]);Number.isFinite(o)&&Number.isFinite(r)&&Number.isFinite(r=r-o)&&0<r&&r>Na.u&&t.push({start:e[a],end:e[a+1],duration:r,C:r-Na.u})}return t}function ea(a){var e=Array.isArray(a)?a:[],t=[];for(let a=0;a+1<e.length;a+=2){var o=Ia(e[a]),r=Ia(e[a+1]);Number.isFinite(o)&&Number.isFinite(r)&&Number.isFinite(r=r-o)&&0<r&&r>Na.i&&t.push({start:e[a],end:e[a+1],duration:r,C:r-Na.i})}return t}function ta(a){var e,t,o;return a&&Array.isArray(a.B)?(e=[],o=Z(a.B),t=ea(a.B),0<o.length&&(o=o[0],e.push({code:"JORNADA_8H_DESCANSO",message:`Descanso entre jornadas: ${G(o.duration)} (mínimo: ${G(Na.u)})`,icon:"🌙",severity:"critical",window:`${o.start} → ${o.end}`,duration:o.duration,C:o.C})),0<t.length&&(t=t[0],e.push({code:"INTERVALO_11H",message:`Intervalo intrajornada: ${G(t.duration)} (mínimo: ${G(Na.i)})`,icon:"☕",severity:"warning",window:`${t.start} → ${t.end}`,duration:t.duration,C:t.C})),e.push({code:"BANCO_POSITIVO",...Va(a.Da),value:a.Da}),a.ua&&(e.push({code:"BANCO_NEGATIVO",level:"danger",text:`Déficit acumulado: ${G(-a.ua)}. Regularize com seu gestor.`,icon:"🚨",severity:"critical",value:-a.ua}),e.push({code:"BANCO_DUPLA_ALERTA",level:"critical",text:"ATENÇÃO: Banco positivo E negativo detectados. Dados inconsistentes — informe RH.",icon:"⚠️",severity:"critical"})),e.push({code:"META",message:`Meta: ${G(Na.CARGA_DIARIA)} / Trabalhado: ${G(a.F)}`,icon:"🎯",severity:"info"}),o=Z(a.B),t=H(a.F),e.push({code:"PROJECAO",message:`Projeção: ${G(t)} (${0<=(o=t-a.F)?"faltam":"excede"} ${G(Math.abs(o))})`,icon:"🔮",severity:"info",wa:t}),e.push({code:"STATUS",message:a.N?"✅ Jornada completa":a.R?"⏳ Aguardando batida":a.M?"🔄 Registrando horas":1===(null==(t=a.B)?void 0:t.length)?"⏰ 1 batida registrada":`📊 ${(null==(o=a.B)?void 0:o.length)||0} batidas`,icon:a.N?"🎉":a.R?"⏸️":a.M?"⏳":"📝",severity:a.N?"success":a.M?"warning":"info"}),a.F>=Na.CARGA_DIARIA&&!a.N&&e.push({code:"LIMITE_DIARIO",message:`⚠️ Atenção: ${G(a.F)} trabalhados sem jornada fechada. Verifique se faltou batida de saída.`,icon:"⏰",severity:"warning"}),e):[{code:"SEM_DADOS",message:"Sem dados para análise.",icon:"❓",severity:"neutral"}]}function oa(a){var e=a.F;return null==a.F?"":(e=(e=Math.round(e))>=Na.CARGA_DIARIA?"✅ Completo":0<e?"⏳ Parcial":"❌ Zerado",`${G(a.F)} ${e}${a.N?" | 🎉 Jornada fechada":a.R?" | ⏸️ Aguardando batida":a.M?" | ⏳ Em andamento":""}`)}function O(a,e){var t=Math.floor(a/60),o=Math.abs(a%60);return(0>a?"-":"")+String(t).padStart(2,"0")+":"+String(o).padStart(2,"0")}function l(){return"true"===localStorage.getItem(Na.pa)}function Qa(){var a=document.getElementById("ahg-panel-css");if(!a){let a=document.createElement("style");a.id="ahg-panel-css",a.textContent=`
-            .ahg-panel { position:fixed;bottom:16px;right:16px;z-index:99999;width:400px;max-height:85vh;background:rgba(18,18,26,0.95);backdrop-filter:blur(12px);border-radius:12px;border:1px solid rgba(122,108,255,0.2);box-shadow:0 8px 32px rgba(0,0,0,0.4);overflow-y:auto;overflow-x:hidden;color:#e8e6f0;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.5;transition:opacity 0.3s,transform 0.3s;scrollbar-width:thin;scrollbar-color:${Na.U} rgba(122,108,255,0.1); }
-            .ahg-panel::-webkit-scrollbar { width:6px; }
-            .ahg-panel::-webkit-scrollbar-track { background:rgba(122,108,255,0.05);border-radius:3px; }
-            .ahg-panel::-webkit-scrollbar-thumb { background:${Na.U};border-radius:3px; }
-            .ahg-panel-title { display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid rgba(122,108,255,0.15);cursor:grab;user-select:none; }
-            .ahg-panel-title:active { cursor:grabbing; }
-            .ahg-panel-title h3 { margin:0;font-size:14px;font-weight:600;color:${Na.U};letter-spacing:0.3px; }
-            .ahg-panel-body { padding:14px 18px; }
-            .ahg-section { margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.05); }
-            .ahg-section:last-child { border-bottom:none;margin-bottom:0;padding-bottom:0; }
-            .ahg-section-title { font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:#8b87a0;margin-bottom:8px;font-weight:600; }
-            .ahg-row { display:flex;justify-content:space-between;align-items:center;padding:4px 0; }
-            .ahg-row span:first-child { color:#a09db8;font-size:12px; }
-            .ahg-row span:last-child { font-weight:500;color:#e8e6f0;font-variant-numeric:tabular-nums; }
-            .ahg-status-positive { color:${Na.da}; }
-            .ahg-status-negative { color:${Na.ca}; }
-            .ahg-status-warning { color:${Na.V}; }
-            .ahg-status-info { color:${Na.U}; }
-            .ahg-btn { background:rgba(122,108,255,0.15);color:${Na.U};border:1px solid rgba(122,108,255,0.3);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:500;cursor:pointer;transition:all 0.2s;font-family:inherit; }
-            .ahg-btn:hover { background:rgba(122,108,255,0.25); }
-            .ahg-btn-primary { background:${Na.U};color:#fff;border-color:${Na.U}; }
-            .ahg-btn-primary:hover { background:#6b5ce7; }
-            .ahg-btn-sm { padding:4px 8px;font-size:10px; }
-            .ahg-fab { position:fixed;z-index:99999;width:44px;height:44px;border-radius:50%;background:${Na.U};color:#fff;border:none;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(122,108,255,0.4);transition:transform 0.2s,filter 0.3s; }
-            .ahg-fab:hover { transform:scale(1.1); }
-            .ahg-toast { position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-100px);background:rgba(18,18,26,0.95);backdrop-filter:blur(12px);color:#e8e6f0;padding:12px 20px;border-radius:8px;border:1px solid rgba(122,108,255,0.2);box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:100000;font-size:13px;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;transition:transform 0.3s cubic-bezier(0.175,0.885,0.32,1.275);pointer-events:none; }
-            .ahg-toast.show { transform:translateX(-50%) translateY(0); }
-            .ahg-toast-error { border-color:rgba(255,77,109,0.4); }
-            .ahg-toast-success { border-color:rgba(0,225,160,0.4); }
-            .ahg-modal-hint { position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:rgba(18,18,26,0.95);backdrop-filter:blur(12px);color:#e8e6f0;padding:12px 16px;border-radius:8px;border:1px solid rgba(255,184,0,0.3);box-shadow:0 4px 16px rgba(0,0,0,0.3);z-index:100001;font-size:12px;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;max-width:300px;text-align:center;pointer-events:none;animation:ahg-hint-in 0.3s ease; }
-            .ahg-modal-hint::after { content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:rgba(255,184,0,0.3); }
-            @keyframes ahg-hint-in { from { opacity:0;transform:translateX(-50%) translateY(8px); } to { opacity:1;transform:translateX(-50%) translateY(0); } }
-            .ahg-punch-editor { position:absolute;z-index:100002;background:rgba(18,18,26,0.98);backdrop-filter:blur(12px);border:1px solid rgba(122,108,255,0.2);border-radius:10px;padding:14px;box-shadow:0 8px 32px rgba(0,0,0,0.5);min-width:260px;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;font-size:12px;color:#e8e6f0; }
-            .ahg-punch-editor h4 { margin:0 0 10px 0;font-size:13px;color:${Na.U}; }
-            .ahg-punch-row { display:flex;align-items:center;gap:6px;margin:6px 0; }
-            .ahg-punch-row input { background:rgba(255,255,255,0.05);border:1px solid rgba(122,108,255,0.2);color:#e8e6f0;border-radius:4px;padding:4px 8px;font-size:12px;font-family:inherit;width:70px; }
-            .ahg-punch-row input:focus { outline:none;border-color:${Na.U};box-shadow:0 0 0 2px rgba(122,108,255,0.1); }
-            .ahg-punch-row button { background:rgba(255,255,255,0.05);border:none;color:#a09db8;cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px;transition:all 0.2s; }
-            .ahg-punch-row button:hover { background:rgba(255,255,255,0.1);color:#fff; }
-            .ahg-punch-row .ahg-btn-danger { color:${Na.ca}; }
-            .ahg-punch-row .ahg-btn-danger:hover { background:rgba(255,77,109,0.15); }
-            .ahg-punch-add { background:rgba(0,225,160,0.1);color:${Na.da};border:1px dashed rgba(0,225,160,0.3); }
-            .ahg-punch-add:hover { background:rgba(0,225,160,0.2); }
-            .ahg-punch-save { background:${Na.da};color:#0a0a0f; }
-            .ahg-punch-save:hover { background:#00c48c; }
-            .ahg-punch-reset { background:rgba(255,77,109,0.1);color:${Na.ca};border:1px solid rgba(255,77,109,0.2); }
-            .ahg-punch-reset:hover { background:rgba(255,77,109,0.2); }
-            .ahg-violation-critical { color:${Na.ca};font-weight:600; }
-            .ahg-violation-warning { color:${Na.V}; }
-            .ahg-violation-info { color:${Na.U}; }
-            .ahg-violation-success { color:${Na.da}; }
-            .ahg-day-badge { font-size:10px;padding:1px 4px;border-radius:3px;font-weight:600; }
-            .ahg-day-badge-complete { background:rgba(0,225,160,0.15);color:${Na.da}; }
-            .ahg-day-badge-partial { background:rgba(255,184,0,0.15);color:${Na.V}; }
-            .ahg-day-badge-empty { background:rgba(255,77,109,0.1);color:${Na.ca}; }
-            .ahg-day-violations { font-size:9px;margin-top:3px;line-height:1.4; }
-            .ahg-logger-punch { display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:4px;font-size:11px;font-variant-numeric:tabular-nums; }
-            .ahg-logger-punch-mirror { background:rgba(122,108,255,0.1);color:${Na.U}; }
-            .ahg-logger-punch-local { background:rgba(0,225,160,0.1);color:${Na.da}; }
-            .ahg-logger-punch-local-modified { background:rgba(255,184,0,0.1);color:${Na.V}; }
-            .ahg-alarm-row { display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px; }
-            .ahg-alarm-status-active { color:${Na.da}; }
-            .ahg-alarm-status-snoozed { color:${Na.V}; }
-            .ahg-alarm-status-fired { color:${Na.ca};font-weight:600; }
-            .ahg-timeline-container { position:relative;height:24px;background:rgba(255,255,255,0.03);border-radius:6px;margin:8px 0;overflow:hidden; }
-            .ahg-timeline-bar { position:absolute;height:100%;border-radius:4px;transition:width 0.5s ease; }
-            .ahg-timeline-bar-work { background:rgba(122,108,255,0.4); }
-            .ahg-timeline-bar-extra { background:rgba(0,225,160,0.4); }
-            .ahg-timeline-bar-deficit { background:rgba(255,77,109,0.3); }
-            .ahg-timeline-marker { position:absolute;top:0;width:2px;height:100%;background:${Na.U};z-index:2; }
-            .ahg-timeline-label { position:absolute;top:50%;transform:translateY(-50%);font-size:9px;color:#a09db8;white-space:nowrap;z-index:3; }
-            .ahg-detail-modal { position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100003;background:rgba(18,18,26,0.98);backdrop-filter:blur(12px);border:1px solid rgba(122,108,255,0.2);border-radius:12px;padding:20px;box-shadow:0 12px 48px rgba(0,0,0,0.5);max-width:500px;width:90vw;max-height:80vh;overflow-y:auto;color:#e8e6f0;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;font-size:13px; }
-            .ahg-detail-modal h3 { margin:0 0 14px 0;font-size:15px;color:${Na.U}; }
-            .ahg-detail-modal .ahg-section { margin-bottom:10px;padding-bottom:10px; }
-            .ahg-detail-close { position:absolute;top:12px;right:12px;background:none;border:none;color:#8b87a0;font-size:18px;cursor:pointer;transition:color 0.2s; }
-            .ahg-detail-close:hover { color:#fff; }
-            .ahg-detail-grid { display:grid;grid-template-columns:1fr 1fr;gap:10px; }
-            .ahg-detail-card { background:rgba(255,255,255,0.03);border-radius:8px;padding:10px;text-align:center; }
-            .ahg-detail-card-value { font-size:18px;font-weight:600;color:${Na.U}; }
-            .ahg-detail-card-label { font-size:10px;color:#8b87a0;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px; }
-            .ahg-detail-violations { max-height:200px;overflow-y:auto; }
-            .ahg-detail-violation-item { display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03); }
-            .ahg-detail-violation-item:last-child { border-bottom:none; }
-            .ahg-detail-violation-icon { font-size:16px;flex-shrink:0; }
-            .ahg-detail-violation-text { font-size:11px;line-height:1.4; }
-            .ahg-detail-violation-severity-critical { color:${Na.ca}; }
-            .ahg-detail-violation-severity-warning { color:${Na.V}; }
-            .ahg-detail-violation-severity-info { color:${Na.U}; }
-            .ahg-detail-day { display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:6px;margin:3px 0;font-size:11px;transition:background 0.2s; }
-            .ahg-detail-day:hover { background:rgba(255,255,255,0.03); }
-            .ahg-detail-day-violations { display:flex;gap:4px; }
-            .ahg-detail-day-badge { font-size:9px;padding:1px 4px;border-radius:3px; }
-            .ahg-accounts-list { max-height:200px;overflow-y:auto; }
-            .ahg-account-item { display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03); }
-            .ahg-account-item:last-child { border-bottom:none; }
-            .ahg-account-color { width:12px;height:12px;border-radius:50%;flex-shrink:0; }
-            .ahg-account-name { font-size:11px;flex:1; }
-            .ahg-account-delete { background:none;border:none;color:${Na.ca};cursor:pointer;font-size:12px;padding:2px; }
-            .ahg-account-delete:hover { background:rgba(255,77,109,0.1);border-radius:4px; }
-            .ahg-quick-calendar { display:flex;gap:4px;margin-top:6px;flex-wrap:wrap; }
-            .ahg-quick-calendar a { font-size:10px;padding:3px 8px;border-radius:4px;background:rgba(122,108,255,0.1);color:${Na.U};text-decoration:none;transition:background 0.2s; }
-            .ahg-quick-calendar a:hover { background:rgba(122,108,255,0.2); }
-            .ahg-countdown { font-variant-numeric:tabular-nums;color:${Na.V};font-weight:600; }
-            .ahg-refresh-hint { font-size:10px;color:#8b87a0;font-style:italic;margin-top:6px; }
-        `,document.head.appendChild(a)}}var Ra=()=>{Qa(),window.top===window&&(Ca(),s("ahg-eye-fab-mirror","80px",()=>{ae()}))};function qa(a,e){if(e)e=(""+e).replace(/"/g,'""'),a=","===e||"\n"===e||'"'===e?`"${e}"`:e;else a="";return a}function ya(){var a,e,t,o,r,n,i,m,d,c,l,s,p,u,h,g,f,y,A,E,T,v,N,R,C,M,k,S,b,w,_,B,F,I,D,x,P,L,H,$,z,K,j,V,J,G,Q,U,X,Y,Z,ee,te,oe,re,ne,ie,ae,me,de,ce,le,se,pe,ue,he,ge,fe,ye,be,we,_e,Be,Fe,Ie,De,xe,Pe,Le,He,$e,ze,Ke,je,Ve,Je,Ge,Qe,Ue,Xe,Ye,Ze,et,tt,ot,rt,nt,it,at,mt,dt,ct,lt,st,pt,ut,ht,gt,ft,yt,bt,wt,_t,Bt,Ft,It,Dt,xt,Pt,Lt,Ht,$t,zt,Kt,jt,Vt,Jt,Gt,Qt,Ut,Xt,Yt,Zt,eo,to,oo,ro,no,io,ao,mo,do,co,lo,so,po,uo,ho,go,fo,yo,bo,wo,_o,Bo,Fo,Io,Do,xo,Po,Lo,Ho,$o,zo,Ko,jo,Vo,Jo,Go,Qo,Uo,Xo,Yo,Zo,er,tr,or,rr,nr,ir,ar,mr,dr,cr,lr,sr,pr,ur,hr,gr,fr,yr,br,wr,_r,Br,Fr,Ir,Dr,xr,Pr,Lr,Hr,$r,zr,Kr,jr,Vr,Jr,Gr,Qr,Ur,Xr,Yr,Zr,en,tn,on,rn,nn,in,an,mn,dn,cn,ln,sn,pn,un,hn,gn,fn,yn,bn,wn,_n,Bn,Fn,In,Dn,xn,Pn,Ln,Hn,$n,zn,Kn,jn,Vn,Jn,Gn,Qn,Un,Xn,Yn,Zn,ei,ti,oi,ri,ni,ii,ai,mi,di,ci,li,si,pi,ui,hi,gi,fi,yi,bi,wi,_i,Bi,Fi,Ii,Di,xi,Pi,Li,Hi,$i,zi,Ki,ji,Vi,Ji,Gi,Qi,Ui,Xi,Yi,Zi,em,tm,om,rm,nm,im,am,mm,dm,cm,lm,sm,pm,um,hm,gm,fm,ym,bm,wm,_m,Bm,Fm,Im,Dm,xm,Pm,Lm,Hm,$m,zm,Km,jm,Vm,Jm,Gm,Qm,Um,Xm,Ym,Zm,ed,td,od,rd,nd,id,ad,md,dd,cd,ld,sd,pd,ud,hd,gd,fd,yd,bd,wd,_d,Bd,Fd,Id,Dd,xd,Pd,Ld,Hd,$d,zd,Kd,jd,Vd,Jd,Gd,Qd,Ud,Xd,Yd,Zd,ec,tc,oc,rc,nc,ic,ac,mc,dc,cc,lc,sc,pc,uc,hc,gc,fc,yc,bc,wc,_c,Bc,Fc,Ic,Dc,xc,Pc,Lc,Hc,$c,zc,Kc,jc,Vc,Jc,Gc,Qc,Uc,Xc,Yc,Zc,el,tl,ol,rl,nl,il,al,ml,dl,cl,ll,sl,pl,ul,hl,gl,fl,yl,bl,wl,_l,Bl,Fl,Il,Dl,xl,Pl,Ll,Hl,$l,zl,Kl,jl,Vl,Jl,Gl,Ql,Ul,Xl,Yl,Zl,es,ts,os,rs,ns,is,as,ms,ds,cs,ls,ss,ps,us,hs,gs,fs,ys,bs,ws,_s,Bs,Fs,Is,Ds,xs,Ps,Ls,Hs,$s,zs,Ks,js,Vs,Js,Gs,Qs,Us,Xs,Ys,Zs,ep,tp,op,rp,np,ip,ap,mp,dp,cp,lp,sp,pp,up,hp,gp,fp,yp,bp,wp,_p,Bp,Fp,Ip,Dp,xp,Pp,Lp,Hp,$p,zp,Kp,jp,Vp,Jp,Gp,Qp,Up,Xp,Yp,Zp,eu,tu,ou,ru,nu,iu,au,mu,du,cu,lu,su,pu,uu,hu,gu,fu,yu,bu,wu,_u,Bu,Fu,Iu,Du,xu,Pu,Lu,Hu,$u,zu,Ku,ju,Vu,Ju,Gu,Qu,Uu,Xu,Yu,Zu,eh,th,oh,rh,nh,ih,ah,mh,dh,ch,lh,sh,ph,uh,hh,gh,fh,yh,bh,wh,_h,Bh,Fh,Ih,Dh,xh,Ph,Lh,Hh,$h,zh,Kh,jh,Vh,Jh,Gh,Qh,Uh,Xh,Yh,Zh,eg,tg,og,rg,ng,ig,ag,mg,dg,cg,lg,sg,pg,ug,hg,gg,fg,yg,bg,wg,_g,Bg,Fg,Ig,Dg,xg,Pg,Lg,Hg,$g,zg,Kg,jg,Vg,Jg,Gg,Qg,Ug,Xg,Yg,Zg,ef,tf,of,rf,nf,if,af,mf,df,cf,lf,sf,pf,uf,hf,gf,ff,yf,bf,wf,_f,Bf,Ff,If,Df,xf,Pf,Lf,Hf,$f,zf,Kf,jf,Vf,Jf,Gf,Qf,Uf,Xf,Yf,Zf,ey,ty,oy,ry,ny,iy,ay,my,dy,cy,ly,sy,py,uy,hy,gy,fy,yy,by,wy,_y,By,Fy,Iy,Dy,xy,Py,Ly,Hy,$y,zy,Ky,jy,Vy,Jy,Gy,Qy,Uy,Xy,Yy,Zy,eb,tb,ob,rb,nb,ib,ab,mb,db,cb,lb,sb,pb,ub,hb,gb,fb,yb,bb,wb,_b,Bb,Fb,Ib,Db,xb,Pb,Lb,Hb,$b,zb,Kb,jb,Vb,Jb,Gb,Qb,Ub,Xb,Yb,Zb,ew,tw,ow,rw,nw,iw,aw,mw,dw,cw,lw,sw,pw,uw,hw,gw,fw,yw,bw,ww,_w,Bw,Fw,Iw,Dw,xw,Pw,Lw,Hw,$w,zw,Kw,jw,Vw,Jw,Gw,Qw,Uw,Xw,Yw,Zw,ex,tx,ox,rx,nx,ix,ax,mx,dx,cx,lx,sx,px,ux,hx,gx,fx,yx,bx,wx,_x,Bx,Fx,Ix,Dx,xx,Px,Lx,Hx,$x,zx,Kx,jx,Vx,Jx,Gx,Qx,Ux,Xx,Yx,Zx,eP,tP,oP,rP,nP,iP,aP,mP,dP,cP,lP,sP,pP,uP,hP,gP,fP,yP,bP,wP,_P,BP,FP,IP,DP,xP,PP,LP,HP,$P,zP,KP,jP,VP,JP,GP,QP,UP,XP,YP,ZP,eL,tL,oL,rL,nL,iL,aL,mL,dL,cL,lL,sL,pL,uL,hL,gL,fL,yL,bL,wL,_L,BL,FL,IL,DL,xL,PL,LL,HL,$L,zL,KL,jL,VL,JL,GL,QL,UL,XL,YL,ZL,eH,tH,oH,rH,nH,iH,aH,mH,dH,cH,lH,sH,pH,uH,hH,gH,fH,yH,bH,wH,_H,BH,FH,IH,DH,xH,PH,LH,HH,$H,zH,KH,jH,VH,JH,GH,QH,UH,XH,YH,ZH,e$,t$,o$,r$,n$,i$,a$,m$,d$,c$,l$,s$,p$,u$,h$,g$,f$,y$,b$,w$,_$,B$,F$,I$,D$,x$,P$,L$,H$,z$,K$,j$,V$,J$,G$,Q$,U$,X$,Y$,Z$,e0,t0,o0,r0,n0,i0,a0,m0,d0,c0,l0,s0,p0,u0,h0,g0,f0,y0,b0,w0,_0,B0,F0,I0,D0,x0,P0,L0,H0,z0,K0,j0,V0,J0,G0,Q0,U0,X0,Y0,Z0,e1,t1,o1,r1,n1,i1,a1,m1,d1,c1,l1,s1,p1,u1,h1,g1,f1,y1,b1,w1,_1,B1,F1,I1,D1,x1,P1,L1,H1,z1,K1,j1,V1,J1,G1,Q1,U1,X1,Y1,Z1,e2,t2,o2,r2,n2,i2,a2,m2,d2,c2,l2,s2,p2,u2,h2,g2,f2,y2,b2,w2,_2,B2,F2,I2,D2,x2,P2,L2,H2,z2,K2,j2,V2,J2,G2,Q2,U2,X2,Y2,Z2,e3,t3,o3,r3,n3,i3,a3,m3,d3,c3,l3,s3,p3,u3,h3,g3,f3,y3,b3,w3,_3,B3,F3,I3,D3,x3,P3,L3,H3,z3,K3,j3,V3,J3,G3,Q3,U3,X3,Y3,Z3,e4,t4,o4,r4,n4,i4,a4,m4,d4,c4,l4,s4,p4,u4,h4,g4,f4,y4,b4,w4,_4,B4,F4,I4,D4,x4,P4,L4,H4,z4,K4,j4,V4,J4,G4,Q4,U4,X4,Y4,Z4,e5,t5,o5,r5,n5,i5,a5,m5,d5,c5,l5,s5,p5,u5,h5,g5,f5,y5,b5,w5,_5,B5,F5,I5,D5,x5,P5,L5,H5,z5,K5,j5,V5,J5,G5,Q5,U5,X5,Y5,Z5,e6,t6,o6,r6,n6,i6,a6,m6,d6,c6,l6,s6,p6,u6,h6,g6,f6,y6,b6,w6,_6,B6,F6,I6,D6,x6,P6,L6,H6,z6,K6,j6,V6,J6,G6,Q6,U6,X6,Y6,Z6,e7,t7,o7,r7,n7,i7,a7,m7,d7,c7,l7,s7,p7,u7,h7,g7,f7,y7,b7,w7,_7,B7,F7,I7,D7,x7,P7,L7,H7,z7,K7,j7,V7,J7,G7,Q7,U7,X7,Y7,Z7,e8,t8,o8,r8,n8,i8,a8,m8,d8,c8,l8,s8,p8,u8,h8,g8,f8,y8,b8,w8,_8,B8,F8,I8,D8,x8,P8,L8,H8,z8,K8,j8,V8,J8,G8,Q8,U8,X8,Y8,Z8,e9,t9,o9,r9,n9,i9,a9,m9,d9,c9,l9,s9,p9,u9,h9,g9,f9,y9,b9,w9,_9,B9,F9,I9,D9,x9,P9,L9,H9,z9,K9,j9,V9,J9,G9,Q9,U9,X9,Y9,Z9}})();
+
+(function () {
+    'use strict';
+
+    /* =========================================================
+       CONFIG
+    ========================================================= */
+
+    const CONFIG = {
+
+        // Jornada
+        CARGA_DIARIA: 8 * 60,
+
+        // Limites de horas
+        MAX_HORAS_DIA: 10 * 60,
+        MAX_HORAS_TURNO: 6 * 60,
+
+        // Intervalo
+        QUATRO_HORAS: 4 * 60,
+        INTERVALO_MINIMO: 30,
+        INTERVALO_MAXIMO: 3.5 * 60,
+        MIN_TURNO_COM_INTERVALO: 2 * 60,
+        DESCANSO_MINIMO: 11 * 60,
+
+        // Tolerância
+        TOLERANCIA: 10,
+
+        // Regras de quantidade de batidas
+        MAX_BATIDAS_DIA: 4,
+        MAX_BATIDAS_DIA_COM_JUSTIFICATIVA: 6,
+
+        // Limites legais (v3.0)
+        LIMITE_LEGAL_NORMAL: 10 * 60,
+        LIMITE_LEGAL_ABSOLUTO: 12 * 60,
+
+        // Alarmes logger (novabatidaonline)
+        ALARM_LEAD_MINUTES: 5,
+        SNOOZE_MINUTES: 10,
+
+        // Auto-refresh mirror
+        AUTO_REFRESH_MINUTES: 60,
+        URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
+
+        // Chaves localStorage
+        LS_KEY_TRUTH: '@ahgora-panel/truth',
+        LS_KEY_ALARM_CONFIG: '@ahgora-panel/alarm-config',
+        LS_KEY_GCAL_AUTO_OPEN: '@ahgora-panel/gcal-auto-open',
+        LS_KEY_GCAL_USER_PATH: '@ahgora-panel/gcal-user-path',
+        LS_KEY_PUNCH_OVERRIDES: '@ahgora-panel/punch-overrides',
+        LS_KEY_PRIVACY: '@ahgora-panel/privacy',
+        LS_KEY_ALARMS_FIRED: '@ahgora-panel/alarms-fired',
+        LS_KEY_ACCOUNTS: '@ahgora-panel/accounts',
+
+        // Cores
+        COR_PRIMARIA: '#7a6cff',
+        COR_NEGATIVO: '#ff4d6d',
+        COR_POSITIVO: '#00e1a0',
+        COR_ALERTA: '#ffb800',
+        COR_PERIGO: '#ff6b35',
+
+        // Cores tema (v3.0)
+        COR_ALARME_CRITICO: '#ff3366',
+        COR_ALARME_AVISO: '#ffd700',
+        COR_LIMITE_PROXIMO: '#ff6b35',
+        COR_INTERJORNADA_OK: '#7a6cff',
+        COR_INTRAJORNADA_OK: '#ffffff',
+        COR_DESCANSO_PROXIMO: '#7a6cff',
+
+        // Intervalos
+        PULL_INTERVAL_MS: 30 * 1000,
+        DEBOUNCE_DELAY: 50,
+
+        // Banco de horas (v3.0)
+        BANCO_HORAS_LIMITE_LEGAL: 12 * 60,
+        BANCO_HORAS_LIMITE_AVISO: 10 * 60,
+        BANCO_HORAS_LIMITE_ERGONOMICO: 8 * 60,
+
+        // DSR (Descanso Semanal Remunerado) - v3.0
+        DSR_DIAS_CONSECUTIVOS_ALERTA: 5,
+        DSR_DIAS_CONSECUTIVOS_MAXIMO: 6,
+
+        // Feature flags padrão (v3.0)
+        FEATURES: {
+            interjornada: true,
+            intrajornada: true,
+            alarme: true,
+            ics: true,
+            overlay: true,
+            inconsistencias: true,
+            justificativas: true,
+            aprovacao: true,
+            bancoHoras: true,
+            afastamentos: true,
+            limitesLegais: true,
+            descansoSemanal: true,
+            resumoOficial: true,
+            alarmesAvancados: true,
+            webhook: false,
+            exportMulti: true,
+            tema: true,
+            ajudaConfirmacao: true,
+            historicoBatidas: true,
+            configStore: true,
+            cardsConfiguraveis: true,
+            projecao: true,
+            backupJson: true,
+            dashboard: true,
+            modoZen: true,
+            diagnostico: true,
+        },
+
+        // Tema (v3.0)
+        TEMA_PADRAO: 'auto', // 'auto', 'light', 'dark'
+
+        // Cards configuráveis (v3.0)
+        CARDS_PADRAO: {
+            interjornada: true,
+            intrajornada: true,
+            saldo: true,
+            proximaBatida: true,
+            historico: true,
+            alarme: true,
+            exportacao: true,
+            bancoHoras: true,
+            resumoOficial: true,
+            projecao: true,
+            modoZen: false,
+        },
+
+        // Configurações de alarme (v3.0)
+        ALARMES_PADRAO: {
+            turno6h: true,
+            meta8h: true,
+            limite10h: true,
+            ilegal12h: true,
+            intervaloMin: true,
+            intervaloMax: true,
+            interjornada: true,
+            dsr: true,
+        },
+
+        // Canais de notificação (v3.0)
+        CANAIS_NOTIF_PADRAO: {
+            visual: true,
+            som: true,
+            desktop: true,
+            webhook: false,
+        },
+    };
+
+    /* =========================================================
+       UTILITIES
+    ========================================================= */
+
+    const toMin = s => {
+        if (!s) return null;
+        const m = ('' + s).match(/(-?\d+):(\d{2})/);
+        if (!m) return null;
+        const h = +m[1];
+        const min = +m[2];
+        if (isNaN(h) || isNaN(min)) return null;
+        return h < 0 ? -(60 * Math.abs(h) + min) : 60 * h + min;
+    };
+
+    const fmtMin = m => {
+        if (m == null) return '--:--';
+        const s = m < 0 ? '-' : '';
+        const a = Math.abs(Math.round(m));
+        return s + String(Math.floor(a / 60)).padStart(2, '0') + ':' + String(a % 60).padStart(2, '0');
+    };
+
+    const roundUpQuarterHour = m => {
+        if (m == null) return null;
+        return 15 * Math.ceil(m / 15);
+    };
+
+    const fmtQuarterDecimal = m => {
+        const r = roundUpQuarterHour(m);
+        if (r == null) return '--:--';
+        const q = Math.floor(r / 15);
+        const h = Math.floor(q / 4);
+        const rem = q % 4;
+        return `${h}h${rem > 0 ? ' ' + (rem * 15) + 'min' : ''}`;
+    };
+
+    const fmtHour = m => {
+        if (m == null) return '--:--';
+        const s = m < 0 ? '-' : '';
+        const v = (Math.round(m) % 1440 + 1440) % 1440;
+        return s + String(Math.floor(v / 60)).padStart(2, '0') + ':' + String(v % 60).padStart(2, '0');
+    };
+
+    const nowMin = () => {
+        const d = new Date();
+        return 60 * d.getHours() + d.getMinutes();
+    };
+
+    const gmGetValue = (key, fallback) => {
+        if (typeof GM_getValue === 'function') {
+            return GM_getValue(key, fallback);
+        }
+        try {
+            const raw = localStorage.getItem(key);
+            return raw === null ? fallback : raw;
+        } catch (e) {
+            return fallback;
+        }
+    };
+
+    const gmSetValue = (key, value) => {
+        if (typeof GM_setValue === 'function') {
+            GM_setValue(key, value);
+        } else {
+            try {
+                localStorage.setItem(key, JSON.stringify(value));
+            } catch (e) {
+                console.warn('[AHG] Falha ao salvar', key, e);
+            }
+        }
+    };
+
+    /* =========================================================
+       PRIVACY
+    ========================================================= */
+
+    function isPrivacyHidden() {
+        return localStorage.getItem(CONFIG.LS_KEY_PRIVACY) === 'true';
+    }
+
+    function applyPrivacyState() {
+        if (document.body) {
+            document.body.classList.toggle('ahg-privacy', isPrivacyHidden());
+            const fabs = document.querySelectorAll('[class*="ahg-fab"]');
+            Array.from(fabs).forEach(fab => {
+                fab.style.filter = isPrivacyHidden() ? 'blur(6px)' : '';
+                fab.style.transition = 'filter 0.3s';
+            });
+        }
+    }
+
+    function setPrivacyHidden(hidden) {
+        localStorage.setItem(CONFIG.LS_KEY_PRIVACY, hidden ? 'true' : 'false');
+        applyPrivacyState();
+    }
+
+    function togglePrivacyHidden() {
+        setPrivacyHidden(!isPrivacyHidden());
+    }
+
+    function privacyButtonState() {
+        const hidden = isPrivacyHidden();
+        return {
+            icon: hidden ? '🙈' : '🐵',
+            title: hidden ? 'Privacidade ativa — clique para desativar' : 'Privacidade inativa — clique para ativar',
+            filter: hidden ? 'blur(6px)' : ''
+        };
+    }
+
+    function syncPrivacyButtons() {
+        const state = privacyButtonState();
+        [
+            'ahg-eye-fab-mirror',
+            'ahg-eye-fab-logger'
+        ].forEach(id => {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.innerHTML = state.icon;
+                btn.title = state.title;
+                btn.style.filter = state.filter;
+            }
+        });
+    }
+
+    function createPrivacyFab(id, bottom, onToggle) {
+        if (document.getElementById(id)) return;
+        const btn = document.createElement('button');
+        btn.id = id;
+        btn.className = 'ahg-fab';
+        const state = privacyButtonState();
+        btn.innerHTML = state.icon;
+        btn.title = state.title;
+        btn.style.cssText = `position:fixed;bottom:${bottom};left:16px;z-index:99999;width:44px;height:44px;border-radius:50%;background:${CONFIG.COR_PRIMARIA};color:#fff;border:none;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(122,108,255,0.4);transition:transform 0.2s;`;
+        btn.onmouseenter = () => btn.style.transform = 'scale(1.1)';
+        btn.onmouseleave = () => btn.style.transform = 'scale(1)';
+        btn.onclick = () => {
+            togglePrivacyHidden();
+            syncPrivacyButtons();
+            if (onToggle) onToggle();
+        };
+        document.body.appendChild(btn);
+    }
+
+    /* =========================================================
+       RENDER HELPERS
+    ========================================================= */
+
+    function renderClock(m) {
+        if (m == null) return '--:--';
+        return fmtHour(m);
+    }
+
+    function renderMinuteRange(entrada, saida) {
+        return `${renderClock(entrada)} – ${renderClock(saida)}`;
+    }
+
+    function renderMinutes(m) {
+        return fmtMin(m);
+    }
+
+    function renderText(text) {
+        if (!text) return '';
+        return ('' + text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    function escapeHtml(value) {
+        if (value == null) return '';
+        return ('' + value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function formatDayMonth(date) {
+        const d = new Date(date);
+        return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    function formatDateKey(date = new Date()) {
+        const d = new Date(date);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    function normalizePunchTime(value) {
+        const cleaned = ('' + value).trim();
+        if (!cleaned) return null;
+        const match = cleaned.match(/(\d{1,2}):(\d{2})/);
+        if (!match) return null;
+        let hh = parseInt(match[1], 10);
+        let mm = parseInt(match[2], 10);
+        if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+        return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+    }
+
+    function shiftPunchTime(time, deltaMinutes) {
+        const normalized = normalizePunchTime(time);
+        if (!normalized) return null;
+        const minute = toMin(normalized);
+        if (!Number.isFinite(minute)) return null;
+        const shifted = minute + deltaMinutes;
+        return fmtHour(shifted);
+    }
+
+    /* =========================================================
+       PUNCH HEALTH
+    ========================================================= */
+
+    function getPunchCountHealth(count, { isToday = false } = {}) {
+        const c = count || 0;
+        if (c === 0) {
+            return { icon: '⭕', short: 'sem batidas', text: 'Sem batidas registradas' };
+        }
+        if (c > CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
+            return { icon: '❌', short: `${c} batidas`, text: `${c} batidas: acima do limite de ${CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA}` };
+        }
+        if (c === CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
+            return { icon: '⚠️', short: '6 batidas', text: '6 batidas: permitido com justificativa (ex: consulta médica)' };
+        }
+        if (c % 2 !== 0) {
+            return {
+                icon: '⏳',
+                short: `${c} batidas`,
+                text: isToday
+                    ? `${c} batidas: jornada aberta, precisa fechar com quantidade par`
+                    : `${c} batidas: registro inconsistente (esperado número par)`
+            };
+        }
+        if (c >= 2 && c <= CONFIG.MAX_BATIDAS_DIA) {
+            return { icon: '✅', short: `${c} batidas`, text: `${c} batidas: padrão válido` };
+        }
+        return { icon: '⚠️', short: `${c} batidas`, text: `${c} batidas: fora do padrão esperado` };
+    }
+
+    function getIntrajornadaMaxViolations(batidas) {
+        const punches = Array.isArray(batidas) ? batidas : [];
+        const violations = [];
+        for (let i = 1; i + 1 < punches.length; i += 2) {
+            const saida = toMin(punches[i]);
+            const retorno = toMin(punches[i + 1]);
+            if (!Number.isFinite(saida) || !Number.isFinite(retorno)) continue;
+            const duration = retorno - saida;
+            if (!Number.isFinite(duration) || duration <= 0) continue;
+            if (duration > CONFIG.INTERVALO_MAXIMO) {
+                violations.push({
+                    start: punches[i],
+                    end: punches[i + 1],
+                    duration: duration,
+                    excess: duration - CONFIG.INTERVALO_MAXIMO
+                });
+            }
+        }
+        return violations;
+    }
+
+    function getMaxShiftViolations(batidas) {
+        const punches = Array.isArray(batidas) ? batidas : [];
+        const violations = [];
+        for (let i = 0; i + 1 < punches.length; i += 2) {
+            const entrada = toMin(punches[i]);
+            const saida = toMin(punches[i + 1]);
+            if (!Number.isFinite(entrada) || !Number.isFinite(saida)) continue;
+            const duration = saida - entrada;
+            if (!Number.isFinite(duration) || duration <= 0) continue;
+            if (duration > CONFIG.MAX_HORAS_TURNO) {
+                violations.push({
+                    start: punches[i],
+                    end: punches[i + 1],
+                    duration: duration,
+                    excess: duration - CONFIG.MAX_HORAS_TURNO
+                });
+            }
+        }
+        return violations;
+    }
+
+    function getInterjornadaViolations(batidasPorDia) {
+        const violations = [];
+        const days = Object.keys(batidasPorDia).sort();
+        for (let i = 1; i < days.length; i++) {
+            const diaAnterior = days[i - 1];
+            const diaAtual = days[i];
+            const batidasAnterior = batidasPorDia[diaAnterior];
+            const batidasAtual = batidasPorDia[diaAtual];
+            if (!Array.isArray(batidasAnterior) || batidasAnterior.length === 0) continue;
+            if (!Array.isArray(batidasAtual) || batidasAtual.length === 0) continue;
+            const ultimaSaida = toMin(batidasAnterior[batidasAnterior.length - 1]);
+            const primeiraEntrada = toMin(batidasAtual[0]);
+            if (!Number.isFinite(ultimaSaida) || !Number.isFinite(primeiraEntrada)) continue;
+            const descanso = primeiraEntrada + (24 * 60) - ultimaSaida;
+            if (descanso < CONFIG.DESCANSO_MINIMO) {
+                violations.push({
+                    diaAnterior,
+                    diaAtual,
+                    ultimaSaida: batidasAnterior[batidasAnterior.length - 1],
+                    primeiraEntrada: batidasAtual[0],
+                    descanso,
+                    deficit: CONFIG.DESCANSO_MINIMO - descanso
+                });
+            }
+        }
+        return violations;
+    }
+
+    /* =========================================================
+       CSS
+    ========================================================= */
+
+    function injectCSS() {
+        if (document.getElementById('ahg-css-v5')) {
+            return;
+        }
+        const style = document.createElement('style');
+        style.id = 'ahg-css-v5';
+        style.textContent = `
+        /* Design System Minimalista */
+        :root {
+            --primary: #7a6cff;
+            --text-main: #dde;
+            --text-label: #7880aa;
+            --bg-card: #0f0f1e;
+            --bg-input: #16162a;
+            --border: #252545;
+            --hover: rgba(122,108,255,0.1);
+            --font: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+            /* v3.0 CSS Variables (F-017 Tema) */
+            --ahg-primary: #7a6cff;
+            --ahg-bg-card: #0f0f1e;
+            --ahg-bg-panel: rgba(18,18,26,0.95);
+            --ahg-bg-input: #16162a;
+            --ahg-text-main: #e8e6f0;
+            --ahg-text-label: #8b87a0;
+            --ahg-border: #252545;
+            --ahg-row-hover: rgba(255,255,255,0.03);
+            --ahg-success: #00e1a0;
+            --ahg-warning: #ffb800;
+            --ahg-danger: #ff4d6d;
+            --ahg-info: #7a6cff;
+        }
+
+        /* v3.0 Tema Light */
+        [data-ahg-tema="light"] {
+            --ahg-bg-card: #ffffff;
+            --ahg-bg-panel: rgba(255,255,255,0.95);
+            --ahg-text-main: #1a1a2e;
+            --ahg-text-label: #5a5a7a;
+            --ahg-border: #e0e0e8;
+            --ahg-row-hover: rgba(122,108,255,0.05);
+        }
+
+        .ahg-panel {
+            font-family: var(--font);
+            background: var(--bg-card);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            max-height: 80vh;
+            overflow-y: auto;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .ahg-panel-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .ahg-panel-title h3 {
+            margin: 0;
+            font-size: 14px;
+            color: var(--primary);
+        }
+
+        .ahg-section {
+            margin-bottom: 12px;
+        }
+
+        .ahg-section-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-label);
+            margin-bottom: 6px;
+        }
+
+        .ahg-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 3px 0;
+        }
+
+        .ahg-status-positive { color: var(--ahg-success); }
+        .ahg-status-negative { color: var(--ahg-danger); }
+        .ahg-status-warning { color: var(--ahg-warning); }
+        .ahg-status-info { color: var(--ahg-info); }
+
+        .ahg-btn {
+            background: rgba(122,108,255,0.15);
+            color: var(--primary);
+            border: 1px solid rgba(122,108,255,0.3);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: var(--font);
+        }
+
+        .ahg-btn:hover {
+            background: rgba(122,108,255,0.25);
+        }
+
+        .ahg-btn-sm {
+            padding: 2px 6px;
+            font-size: 10px;
+        }
+
+        .ahg-fab {
+            position: fixed;
+            z-index: 99999;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(122,108,255,0.4);
+            transition: transform 0.2s, filter 0.3s;
+        }
+
+        .ahg-fab:hover {
+            transform: scale(1.1);
+        }
+
+        .ahg-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            z-index: 100000;
+            font-size: 13px;
+            max-width: 300px;
+            animation: ahg-toast-in 0.3s ease;
+        }
+
+        @keyframes ahg-toast-in {
+            from { transform: translateX(100px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        .ahg-toast-error { border-left: 3px solid var(--ahg-danger); }
+        .ahg-toast-success { border-left: 3px solid var(--ahg-success); }
+        .ahg-toast-warning { border-left: 3px solid var(--ahg-warning); }
+
+        .ahg-privacy .ahg-sensitive {
+            filter: blur(6px);
+            transition: filter 0.3s;
+        }
+
+        /* v3.0 Cards */
+        .ahg-v3-card {
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin: 6px 0;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .ahg-v3-success {
+            background: rgba(0,225,160,0.1);
+            border: 1px solid rgba(0,225,160,0.2);
+            color: var(--ahg-success);
+        }
+
+        .ahg-v3-warning {
+            background: rgba(255,184,0,0.1);
+            border: 1px solid rgba(255,184,0,0.2);
+            color: var(--ahg-warning);
+        }
+
+        .ahg-v3-info {
+            background: rgba(122,108,255,0.1);
+            border: 1px solid rgba(122,108,255,0.2);
+            color: var(--ahg-text-label);
+        }
+
+        .ahg-v3-danger {
+            background: rgba(255,77,109,0.1);
+            border: 1px solid rgba(255,77,109,0.2);
+            color: var(--ahg-danger);
+        }
+
+        .ahg-v3-batida-panel {
+            scrollbar-width: thin;
+            scrollbar-color: #7a6cff rgba(122,108,255,0.1);
+        }
+
+        .ahg-v3-batida-panel::-webkit-scrollbar { width: 6px; }
+        .ahg-v3-batida-panel::-webkit-scrollbar-track { background: rgba(122,108,255,0.05); border-radius: 3px; }
+        .ahg-v3-batida-panel::-webkit-scrollbar-thumb { background: #7a6cff; border-radius: 3px; }
+
+        .ahg-v3-interjornada, .ahg-v3-intrajornada { word-break: break-word; }
+
+        .ahg-v3-inconsistencia-badge {
+            animation: ahg-v3-fadein 0.3s ease;
+        }
+
+        @keyframes ahg-v3-fadein {
+            from { opacity: 0; transform: scale(0.5); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        /* v3.0 Tema Toggle */
+        .ahg-tema-toggle {
+            display: inline-flex;
+            gap: 4px;
+            background: rgba(122,108,255,0.1);
+            border-radius: 6px;
+            padding: 2px;
+        }
+
+        .ahg-tema-toggle button {
+            background: transparent;
+            border: none;
+            color: var(--text-label);
+            padding: 2px 6px;
+            font-size: 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .ahg-tema-toggle button.active {
+            background: rgba(122,108,255,0.3);
+            color: #fff;
+        }
+
+        /* v3.0 Diagnóstico Modal */
+        .ahg-v3-diag-section {
+            margin: 10px 0;
+            padding: 8px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 6px;
+        }
+
+        .ahg-v3-diag-section-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--text-label);
+            margin-bottom: 4px;
+        }
+
+        .ahg-v3-diag-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+
+        .ahg-v3-diag-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+        }
+
+        /* v3.0 Inconsistências */
+        .ahg-v3-inconsistencia-falta {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            font-size: 10px;
+            background: rgba(255,77,109,0.9);
+            color: #fff;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 5;
+            cursor: help;
+        }
+
+        .ahg-v3-inconsistencia-impar {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            font-size: 10px;
+            background: rgba(255,184,0,0.9);
+            color: #000;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 5;
+            cursor: help;
+        }
+        `;
+        document.head.appendChild(style);
+    }
+
+    /* =========================================================
+       NOTIFICAÇÕES
+    ========================================================= */
+
+    function notificar(tag, titulo, corpo, silenciosa = false) {
+        if (Notification.permission !== 'granted') return;
+        try {
+            new Notification(titulo, {
+                body: corpo,
+                icon: 'https://www.ahgora.com.br/favicon.ico',
+                tag: tag,
+                requireInteraction: !silenciosa,
+                silent: silenciosa
+            });
+        } catch (e) {
+            console.warn('[AHG] Notificação falhou:', e);
+        }
+    }
+
+    function pedirNotif() {
+        if ('Notification' in window && Notification.permission === 'default') {
+            Notification.requestPermission();
+        }
+    }
+
+    /* =========================================================
+       CALENDAR EXTRACTION (MIRROR)
+    ========================================================= */
+
+    function extrairDados() {
+        const days = document.querySelectorAll('.v-calendar-weekly__day');
+        const dados = {};
+        days.forEach(day => {
+            const label = day.querySelector('.v-calendar-weekly__day-label');
+            if (!label) return;
+            const dia = label.textContent.trim();
+            const diaNum = parseInt(dia, 10);
+            if (isNaN(diaNum)) return;
+            const badges = day.querySelectorAll('.v-calendar-weekly__day-label__badge');
+            const batidas = Array.from(badges).map(b => b.textContent.trim());
+            const dateKey = formatDateKey(new Date(new Date().getFullYear(), new Date().getMonth(), diaNum));
+            dados[dateKey] = {
+                dia: diaNum,
+                batidas: batidas,
+                element: day
+            };
+        });
+        return dados;
+    }
+
+    function calcularResumo(dados) {
+        const hoje = formatDateKey();
+        const hojeData = dados[hoje];
+        let totalMin = 0;
+        let batidasHoje = [];
+        if (hojeData && hojeData.batidas) {
+            batidasHoje = hojeData.batidas;
+            for (let i = 0; i + 1 < hojeData.batidas.length; i += 2) {
+                const e = toMin(hojeData.batidas[i]);
+                const s = toMin(hojeData.batidas[i + 1]);
+                if (e != null && s != null) {
+                    totalMin += (s - e);
+                }
+            }
+        }
+        const falta = Math.max(0, CONFIG.CARGA_DIARIA - totalMin);
+        const extra = Math.max(0, totalMin - CONFIG.CARGA_DIARIA);
+        return {
+            batidasHoje,
+            totalMin,
+            falta,
+            extra,
+            completo: totalMin >= CONFIG.CARGA_DIARIA,
+            jornadaAberta: hojeData && hojeData.batidas.length % 2 !== 0
+        };
+    }
+
+    /* =========================================================
+       PANEL RENDER
+    ========================================================= */
+
+    function renderPanel() {
+        const dados = extrairDados();
+        const resumo = calcularResumo(dados);
+        const panel = document.getElementById('ahg-panel');
+        if (!panel) return;
+        
+        let html = '<div class="ahg-panel-title"><h3>📊 Ahgora Panel v3.0</h3></div>';
+        html += '<div class="ahg-panel-body">';
+        
+        // Status
+        html += '<div class="ahg-section">';
+        html += '<div class="ahg-section-title">Status</div>';
+        if (resumo.completo) {
+            html += `<div class="ahg-row"><span>Jornada</span><span class="ahg-status-positive">✅ Completa</span></div>`;
+        } else if (resumo.jornadaAberta) {
+            html += `<div class="ahg-row"><span>Jornada</span><span class="ahg-status-warning">⏳ Em aberto</span></div>`;
+        } else {
+            html += `<div class="ahg-row"><span>Jornada</span><span class="ahg-status-info">📝 Aguardando</span></div>`;
+        }
+        html += `<div class="ahg-row"><span>Trabalhado</span><span>${fmtMin(resumo.totalMin)}</span></div>`;
+        html += `<div class="ahg-row"><span>Meta</span><span>${fmtMin(CONFIG.CARGA_DIARIA)}</span></div>`;
+        if (resumo.falta > 0) {
+            html += `<div class="ahg-row"><span>Falta</span><span class="ahg-status-warning">${fmtMin(resumo.falta)}</span></div>`;
+        }
+        if (resumo.extra > 0) {
+            html += `<div class="ahg-row"><span>Extra</span><span class="ahg-status-positive">${fmtMin(resumo.extra)}</span></div>`;
+        }
+        html += '</div>';
+        
+        // Batidas de hoje
+        if (resumo.batidasHoje.length > 0) {
+            html += '<div class="ahg-section">';
+            html += '<div class="ahg-section-title">Batidas Hoje</div>';
+            for (let i = 0; i < resumo.batidasHoje.length; i += 2) {
+                const entrada = resumo.batidasHoje[i];
+                const saida = resumo.batidasHoje[i + 1];
+                if (saida) {
+                    const dur = toMin(saida) - toMin(entrada);
+                    html += `<div class="ahg-row"><span>Turno ${Math.floor(i/2)+1}</span><span>${entrada} – ${saida} (${fmtMin(dur)})</span></div>`;
+                } else {
+                    html += `<div class="ahg-row"><span>Entrada</span><span class="ahg-status-warning">${entrada} (sem saída)</span></div>`;
+                }
+            }
+            html += '</div>';
+        }
+        
+        // Ações
+        html += '<div class="ahg-section">';
+        html += '<div class="ahg-section-title">Ações</div>';
+        html += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+        html += '<button class="ahg-btn ahg-btn-sm" onclick="window.ahgExportarCSV()">📥 CSV</button>';
+        html += '<button class="ahg-btn ahg-btn-sm" onclick="window.ahgExportarJSON()">💾 JSON</button>';
+        html += '<button class="ahg-btn ahg-btn-sm" onclick="window.ahgVerDetalhes()">📋 Detalhes</button>';
+        html += '</div>';
+        html += '</div>';
+        
+        html += '</div>'; // .ahg-panel-body
+        panel.innerHTML = html;
+    }
+
+    /* =========================================================
+       EXPORT
+    ========================================================= */
+
+    function exportarCSV() {
+        const dados = extrairDados();
+        const rows = [['Data', 'Dia', 'Batidas', 'Total']];
+        for (const [date, info] of Object.entries(dados)) {
+            const batidas = info.batidas.join(', ') || '-';
+            let total = 0;
+            for (let i = 0; i + 1 < info.batidas.length; i += 2) {
+                const e = toMin(info.batidas[i]);
+                const s = toMin(info.batidas[i + 1]);
+                if (e != null && s != null) total += (s - e);
+            }
+            rows.push([date, info.dia, batidas, fmtMin(total)]);
+        }
+        const csv = rows.map(r => r.map(c => `"${('' + c).replace(/"/g, '""')}"`).join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `ahgora-${formatDateKey()}.csv`;
+        a.click();
+    }
+
+    function exportarJSON() {
+        const dados = extrairDados();
+        const blob = new Blob([JSON.stringify(dados, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `ahgora-backup-${formatDateKey()}.json`;
+        a.click();
+    }
+
+    /* =========================================================
+       DETAIL MODAL
+    ========================================================= */
+
+    function abrirDetalhes() {
+        const existing = document.getElementById('ahg-detail-modal');
+        if (existing) { existing.remove(); return; }
+        
+        const dados = extrairDados();
+        const modal = document.createElement('div');
+        modal.id = 'ahg-detail-modal';
+        modal.className = 'ahg-panel';
+        modal.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100003;width:500px;max-height:80vh;';
+        
+        let html = '<div class="ahg-panel-title"><h3>📋 Detalhes do Mês</h3><button class="ahg-btn ahg-btn-sm" onclick="document.getElementById(\'ahg-detail-modal\').remove()">✕</button></div>';
+        html += '<div class="ahg-panel-body">';
+        
+        for (const [date, info] of Object.entries(dados).sort()) {
+            const diaSem = new Date(date).getDay();
+            const isWeekend = diaSem === 0 || diaSem === 6;
+            const nomeDia = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'][diaSem];
+            
+            html += `<div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">`;
+            html += `<span>${nomeDia} ${info.dia}</span>`;
+            
+            if (info.batidas.length > 0) {
+                let total = 0;
+                for (let i = 0; i + 1 < info.batidas.length; i += 2) {
+                    const e = toMin(info.batidas[i]);
+                    const s = toMin(info.batidas[i + 1]);
+                    if (e != null && s != null) total += (s - e);
+                }
+                const classe = total >= CONFIG.CARGA_DIARIA ? 'ahg-status-positive' : total > 0 ? 'ahg-status-warning' : '';
+                html += `<span class="${classe}">${info.batidas.join(' ')} = ${fmtMin(total)}</span>`;
+            } else if (!isWeekend) {
+                html += `<span class="ahg-status-negative">Falta</span>`;
+            } else {
+                html += `<span style="color:var(--text-label)">-</span>`;
+            }
+            html += '</div>';
+        }
+        
+        html += '</div>';
+        modal.innerHTML = html;
+        document.body.appendChild(modal);
+    }
+
+    /* =========================================================
+       PUNCH EDITOR
+    ========================================================= */
+
+    function openPunchEditor(dateKey, batidas, onSave) {
+        const existing = document.getElementById('ahg-punch-editor');
+        if (existing) existing.remove();
+        
+        const editor = document.createElement('div');
+        editor.id = 'ahg-punch-editor';
+        editor.className = 'ahg-panel';
+        editor.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100004;width:320px;';
+        
+        let punches = batidas ? [...batidas] : [];
+        
+        function renderPunches() {
+            let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
+            html += `<h4 style="margin:0;color:var(--primary)">✏️ Editar Batidas</h4>`;
+            html += '<button class="ahg-btn ahg-btn-sm" onclick="document.getElementById(\'ahg-punch-editor\').remove()">✕</button>';
+            html += '</div>';
+            html += `<div style="font-size:11px;color:var(--text-label);margin-bottom:10px;">${dateKey}</div>`;
+            
+            punches.forEach((p, i) => {
+                html += `<div style="display:flex;align-items:center;gap:6px;margin:4px 0;">`;
+                html += `<input type="time" value="${p}" data-idx="${i}" style="background:var(--bg-input);color:var(--text-main);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-family:var(--font);" onchange="window._ahgPunches[${i}]=this.value">`;
+                html += `<button class="ahg-btn ahg-btn-sm" onclick="window._ahgRemovePunch(${i})" style="color:var(--ahg-danger)">🗑️</button>`;
+                html += '</div>';
+            });
+            
+            html += `<div style="display:flex;gap:6px;margin-top:10px;">`;
+            html += `<button class="ahg-btn ahg-btn-sm" onclick="window._ahgAddPunch()">➕ Adicionar</button>`;
+            html += `<button class="ahg-btn ahg-btn-sm" onclick="window._ahgSavePunches()" style="background:var(--ahg-success);color:#0a0a0f">💾 Salvar</button>`;
+            html += '</div>';
+            
+            editor.innerHTML = html;
+        }
+        
+        window._ahgPunches = punches;
+        window._ahgAddPunch = () => { punches.push('08:00'); renderPunches(); };
+        window._ahgRemovePunch = (i) => { punches.splice(i, 1); renderPunches(); };
+        window._ahgSavePunches = () => {
+            const overrides = JSON.parse(localStorage.getItem(CONFIG.LS_KEY_PUNCH_OVERRIDES) || '{}');
+            overrides[dateKey] = [...punches];
+            localStorage.setItem(CONFIG.LS_KEY_PUNCH_OVERRIDES, JSON.stringify(overrides));
+            if (onSave) onSave(punches);
+            editor.remove();
+            renderPanel();
+        };
+        
+        renderPunches();
+        document.body.appendChild(editor);
+    }
+
+    /* =========================================================
+       LOGGER UI (novabatidaonline)
+    ========================================================= */
+
+    function renderUILogger() {
+        const container = document.getElementById('ahg-logger-container');
+        if (!container) return;
+        
+        const truth = JSON.parse(localStorage.getItem(CONFIG.LS_KEY_TRUTH) || '{}');
+        const hoje = formatDateKey();
+        const batidas = truth[hoje] || [];
+        
+        let html = '<div class="ahg-panel-title"><h3>⏱️ Logger</h3></div>';
+        html += '<div class="ahg-panel-body">';
+        
+        if (batidas.length > 0) {
+            html += '<div class="ahg-section">';
+            html += '<div class="ahg-section-title">Hoje</div>';
+            batidas.forEach((b, i) => {
+                const tipo = i % 2 === 0 ? 'Entrada' : 'Saída';
+                html += `<div class="ahg-row"><span>${tipo} ${Math.floor(i/2)+1}</span><span>${b}</span></div>`;
+            });
+            html += '</div>';
+            
+            // Calcula turnos
+            if (batidas.length >= 2) {
+                html += '<div class="ahg-section">';
+                html += '<div class="ahg-section-title">Turnos</div>';
+                for (let i = 0; i + 1 < batidas.length; i += 2) {
+                    const dur = toMin(batidas[i+1]) - toMin(batidas[i]);
+                    html += `<div class="ahg-row"><span>Turno ${Math.floor(i/2)+1}</span><span>${fmtMin(dur)}</span></div>`;
+                }
+                html += '</div>';
+            }
+        } else {
+            html += '<div style="text-align:center;color:var(--text-label);padding:20px;">Sem batidas registradas hoje</div>';
+        }
+        
+        // Ações
+        html += '<div class="ahg-section">';
+        html += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+        html += '<button class="ahg-btn ahg-btn-sm" onclick="window.ahgSyncMirror()">🔄 Sync Espelho</button>';
+        html += '<button class="ahg-btn ahg-btn-sm" onclick="window.ahgAbrirGCal()">📅 GCal</button>';
+        html += '</div>';
+        html += '</div>';
+        
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    /* =========================================================
+       PUNCH GUIDANCE
+    ========================================================= */
+
+    function buildPunchGuidance(resumo) {
+        const now = nowMin();
+        const batidas = resumo.batidasHoje;
+        const guidance = {
+            podeBater: true,
+            proximaBatida: null,
+            mensagem: '',
+            tipo: 'info'
+        };
+        
+        if (batidas.length === 0) {
+            guidance.mensagem = 'Bata seu ponto de entrada';
+            guidance.tipo = 'info';
+        } else if (batidas.length % 2 === 1) {
+            const ultima = toMin(batidas[batidas.length - 1]);
+            const duracao = now - ultima;
+            if (duracao < CONFIG.INTERVALO_MINIMO) {
+                guidance.podeBater = false;
+                guidance.mensagem = `Aguarde ${fmtMin(CONFIG.INTERVALO_MINIMO - duracao)} para bater (mínimo ${CONFIG.INTERVALO_MINIMO}min)`;
+                guidance.tipo = 'warning';
+            } else if (duracao > CONFIG.INTERVALO_MAXIMO) {
+                guidance.mensagem = `Intervalo de ${fmtMin(duracao)} — máximo recomendado: ${fmtMin(CONFIG.INTERVALO_MAXIMO)}`;
+                guidance.tipo = 'warning';
+            } else {
+                guidance.mensagem = `Bata sua ${batidas.length + 1}ª batida (${batidas.length === 1 ? 'saída' : 'entrada'})`;
+                guidance.tipo = 'info';
+            }
+        } else {
+            const ultimaSaida = toMin(batidas[batidas.length - 1]);
+            const horasTrabalhadas = ultimaSaida - toMin(batidas[0]);
+            const falta = Math.max(0, CONFIG.CARGA_DIARIA - horasTrabalhadas);
+            if (falta > 0) {
+                guidance.mensagem = `Faltam ${fmtMin(falta)} para completar 8h. Próxima entrada após intervalo.`;
+                guidance.tipo = 'info';
+            } else {
+                guidance.mensagem = `Jornada completa! ${fmtMin(horasTrabalhadas)} trabalhados`;
+                guidance.tipo = 'success';
+            }
+        }
+        
+        return guidance;
+    }
+
+    /* =========================================================
+       CLOCKING IN INTERVAL STATE
+    ========================================================= */
+
+    function getClockingInIntervalState(batidas) {
+        if (!Array.isArray(batidas) || batidas.length === 0) {
+            return { estado: 'sem_batidas', podeBater: true };
+        }
+        if (batidas.length % 2 === 0) {
+            return { estado: 'jornada_fechada', podeBater: true };
+        }
+        const ultima = toMin(batidas[batidas.length - 1]);
+        if (ultima == null) {
+            return { estado: 'erro', podeBater: true };
+        }
+        const agora = nowMin();
+        const duracao = agora - ultima;
+        if (duracao < CONFIG.INTERVALO_MINIMO) {
+            return {
+                estado: 'intervalo_curto',
+                podeBater: false,
+                restante: CONFIG.INTERVALO_MINIMO - duracao,
+                mensagem: `Aguarde ${fmtMin(CONFIG.INTERVALO_MINIMO - duracao)} (mínimo ${CONFIG.INTERVALO_MINIMO}min de intervalo)`
+            };
+        }
+        return { estado: 'pode_bater', podeBater: true };
+    }
+
+    function getClockingInIntervalViolation(batidas) {
+        if (!Array.isArray(batidas) || batidas.length < 2) return null;
+        const violations = [];
+        for (let i = 1; i + 1 < batidas.length; i += 2) {
+            const saida = toMin(batidas[i]);
+            const retorno = toMin(batidas[i + 1]);
+            if (saida == null || retorno == null) continue;
+            const duracao = retorno - saida;
+            if (duracao > CONFIG.INTERVALO_MAXIMO) {
+                violations.push({
+                    turno: Math.floor(i / 2) + 1,
+                    duracao,
+                    excesso: duracao - CONFIG.INTERVALO_MAXIMO,
+                    saida: batidas[i],
+                    retorno: batidas[i + 1]
+                });
+            }
+        }
+        return violations;
+    }
+
+    /* =========================================================
+       MODAL MONITORING
+    ========================================================= */
+
+    let modalCheckInterval = null;
+
+    function monitorModal() {
+        const modal = document.querySelector('.v-dialog--active, [role="dialog"]');
+        if (!modal) return;
+        
+        const title = modal.querySelector('.v-card__title, .headline, [class*="title"]');
+        if (!title) return;
+        
+        const text = title.textContent || '';
+        if (text.includes('batida') || text.includes('ponto')) {
+            const guidance = buildPunchGuidance(calcularResumo(extrairDados()));
+            if (!guidance.podeBater) {
+                showToast(guidance.mensagem, 'warning');
+            }
+        }
+    }
+
+    /* =========================================================
+       TOAST
+    ========================================================= */
+
+    function showToast(message, type = 'info') {
+        const existing = document.querySelector('.ahg-toast');
+        if (existing) existing.remove();
+        
+        const toast = document.createElement('div');
+        toast.className = `ahg-toast ahg-toast-${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        
+        requestAnimationFrame(() => {
+            toast.classList.add('show');
+        });
+        
+        setTimeout(() => {
+            toast.remove();
+        }, 5000);
+    }
+
+    /* =========================================================
+       ALARM SYSTEM
+    ========================================================= */
+
+    let audioCtx = null;
+
+    function playBeep(frequency = 800, duration = 200, type = 'square') {
+        try {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.value = frequency;
+            gain.gain.value = 0.1;
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration / 1000);
+        } catch (e) {
+            console.warn('[AHG] Audio beep falhou:', e);
+        }
+    }
+
+    function readLoggerAlarmConfig() {
+        try {
+            const raw = localStorage.getItem(CONFIG.LS_KEY_ALARM_CONFIG);
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
+        return {
+            enabled: true,
+            channels: { visual: true, sound: true, desktop: false },
+            leadMinutes: CONFIG.ALARM_LEAD_MINUTES
+        };
+    }
+
+    function saveLoggerAlarmConfig(cfg) {
+        localStorage.setItem(CONFIG.LS_KEY_ALARM_CONFIG, JSON.stringify(cfg));
+    }
+
+    let lastAlarmState = null;
+
+    function evaluateLoggerAlarms() {
+        const cfg = readLoggerAlarmConfig();
+        if (!cfg.enabled) return;
+        
+        const resumo = calcularResumo(extrairDados());
+        const guidance = buildPunchGuidance(resumo);
+        
+        if (!guidance.podeBater && lastAlarmState !== 'blocked') {
+            lastAlarmState = 'blocked';
+            if (cfg.channels.sound) playBeep(400, 300, 'sine');
+            if (cfg.channels.desktop) {
+                notificar('alarme-intervalo', '⏱️ Intervalo', guidance.mensagem);
+            }
+        } else if (guidance.podeBater && lastAlarmState === 'blocked') {
+            lastAlarmState = null;
+        }
+    }
+
+    /* =========================================================
+       GOOGLE / OUTLOOK CALENDAR URL BUILDERS
+    ========================================================= */
+
+    function buildGCalUrl(evento) {
+        const params = new URLSearchParams({
+            action: 'TEMPLATE',
+            text: evento.titulo || 'Jornada Ahgora',
+            dates: `${evento.inicio}/${evento.fim}`,
+            details: evento.detalhes || '',
+        });
+        if (evento.local) params.set('location', evento.local);
+        return `https://calendar.google.com/calendar/render?${params.toString()}`;
+    }
+
+    function buildOutlookUrl(evento) {
+        const params = new URLSearchParams({
+            subject: evento.titulo || 'Jornada Ahgora',
+            startdt: evento.inicio,
+            enddt: evento.fim,
+            body: evento.detalhes || '',
+        });
+        if (evento.local) params.set('location', evento.local);
+        return `https://outlook.live.com/calendar/0/deeplink/compose?${params.toString()}`;
+    }
+
+    function buildICSContent(eventos) {
+        const lines = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//Ahgora Panel v3.0//PT',
+            'CALSCALE:GREGORIAN',
+            'METHOD:PUBLISH',
+        ];
+        
+        eventos.forEach((ev, i) => {
+            const uid = `ahgora-${Date.now()}-${i}@ahgora-panel`;
+            const dtstamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+            lines.push('BEGIN:VEVENT');
+            lines.push(`UID:${uid}`);
+            lines.push(`DTSTAMP:${dtstamp}`);
+            lines.push(`DTSTART:${ev.inicio}`);
+            lines.push(`DTEND:${ev.fim}`);
+            lines.push(`SUMMARY:${ev.titulo || 'Jornada'}`);
+            if (ev.detalhes) lines.push(`DESCRIPTION:${ev.detalhes.replace(/\n/g, '\\n')}`);
+            if (ev.local) lines.push(`LOCATION:${ev.local}`);
+            lines.push('END:VEVENT');
+        });
+        
+        lines.push('END:VCALENDAR');
+        return lines.join('\r\n');
+    }
+
+    /* =========================================================
+       SYNC & STRUCTURE
+    ========================================================= */
+
+    function syncMirror() {
+        const dados = extrairDados();
+        const truth = {};
+        for (const [date, info] of Object.entries(dados)) {
+            truth[date] = info.batidas;
+        }
+        localStorage.setItem(CONFIG.LS_KEY_TRUTH, JSON.stringify(truth));
+        showToast('Dados sincronizados com espelho!', 'success');
+    }
+
+    function criarEstrutura() {
+        if (document.getElementById('ahg-panel')) return;
+        
+        const panel = document.createElement('div');
+        panel.id = 'ahg-panel';
+        panel.className = 'ahg-panel';
+        panel.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99999;width:360px;max-height:80vh;';
+        document.body.appendChild(panel);
+    }
+
+    /* =========================================================
+       MAIN RENDER LOOP
+    ========================================================= */
+
+    function render() {
+        renderPanel();
+    }
+
+    function agendarRenderMinuto() {
+        setTimeout(() => {
+            render();
+            agendarRenderMinuto();
+        }, 60000);
+    }
+
+    /* =========================================================
+       V3.0 FEATURES — Injected Layer
+       Must-haves: F-001, F-002, F-003, F-005, F-006, F-009,
+                   F-017, F-020, F-021, F-026
+    ========================================================= */
+
+    /* ── Feature Flags (safe rollback per feature) ── */
+    const FEATURE_FLAGS = {
+        F001_interjornada: true,
+        F002_intrajornada: true,
+        F003_alarme: true,
+        F004_ics: true,
+        F005_overlay: true,
+        F006_inconsistencias: true,
+        F007_justificativas: true,
+        F008_aprovacao: true,
+        F009_banco_horas: true,
+        F010_afastamentos: true,
+        F011_limites_legais: true,
+        F012_descanso_semanal: true,
+        F013_resumo_oficial: true,
+        F014_alarmes_avancados: true,
+        F015_webhook: true,
+        F016_export_multi: true,
+        F017_tema: true,
+        F018_ajuda_confirmacao: true,
+        F019_historico_batidas: true,
+        F020_config_store: true,
+        F021_cards_configuraveis: true,
+        F022_projecao: true,
+        F023_backup_json: true,
+        F024_dashboard: true,
+        F025_modo_zen: true,
+        F026_diagnostico: true,
+    };
+
+    /* ── ConfigStore (F-020) ── */
+    const ConfigStore = {
+        KEY: '@ahgora-panel/config',
+        defaults: {
+            tema: 'auto',
+            cards: {
+                interjornada: true,
+                intrajornada: true,
+                saldo: true,
+                proxima_batida: true,
+                historico: true,
+                alarme: true,
+                exportacao: true,
+                banco_horas: true,
+                resumo_oficial: true,
+                projecao: true,
+            },
+            alarmes: {
+                turno6h: true,
+                meta8h: true,
+                limite10h: true,
+                ilegal12h: true,
+                intervaloMin: true,
+                intervaloMax: true,
+                interjornada: true,
+                dsr: true,
+            },
+            notifChannels: { visual: true, som: true, desktop: true, webhook: false },
+            webhookUrl: '',
+            minimalista: false,
+            modoZen: false,
+        },
+        read() {
+            try {
+                const raw = localStorage.getItem(this.KEY);
+                return raw ? { ...this.defaults, ...JSON.parse(raw) } : { ...this.defaults };
+            } catch (e) {
+                console.warn('[AHG-v3] ConfigStore read error:', e);
+                return { ...this.defaults };
+            }
+        },
+        write(cfg) {
+            try {
+                localStorage.setItem(this.KEY, JSON.stringify(cfg));
+            } catch (e) {
+                console.warn('[AHG-v3] ConfigStore write error:', e);
+            }
+        },
+        patch(partial) {
+            const cfg = this.read();
+            this.write({ ...cfg, ...partial });
+        },
+        reset() {
+            this.write({ ...this.defaults });
+        },
+    };
+
+    /* ── Tema Adaptativo (F-017) ── */
+    const Tema = {
+        _temaAtual: 'dark',
+        detectar() {
+            const cfg = ConfigStore.read();
+            if (cfg.tema === 'auto') {
+                return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            }
+            return cfg.tema;
+        },
+        aplicar(tema) {
+            this._temaAtual = tema || this.detectar();
+            document.body.setAttribute('data-ahg-tema', this._temaAtual);
+        },
+        ciclar() {
+            const ordem = ['auto', 'light', 'dark'];
+            const cfg = ConfigStore.read();
+            const idx = ordem.indexOf(cfg.tema);
+            const proximo = ordem[(idx + 1) % ordem.length];
+            ConfigStore.patch({ tema: proximo });
+            this.aplicar();
+            return proximo;
+        },
+    };
+
+    /* ── Shared Truth v3 helpers ── */
+    const TruthV3 = {
+        read() {
+            try {
+                const raw = localStorage.getItem(CONFIG.LS_KEY_TRUTH);
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) { return null; }
+        },
+        getUltimaBatida() {
+            const t = this.read();
+            if (!t) return null;
+            const hoje = formatDateKey();
+            const batidas = t[hoje];
+            if (!Array.isArray(batidas) || batidas.length === 0) return null;
+            return batidas[batidas.length - 1];
+        },
+        getBatidasHoje() {
+            const t = this.read();
+            if (!t) return [];
+            const hoje = formatDateKey();
+            return Array.isArray(t[hoje]) ? t[hoje] : [];
+        },
+        getUltimaBatidaOntem() {
+            const t = this.read();
+            if (!t) return null;
+            const ontem = new Date();
+            ontem.setDate(ontem.getDate() - 1);
+            const key = formatDateKey(ontem);
+            const batidas = t[key];
+            if (!Array.isArray(batidas) || batidas.length === 0) return null;
+            return batidas[batidas.length - 1];
+        },
+    };
+
+    /* ── Interjornada Calculator (F-001) ── */
+    const InterjornadaCalc = {
+        calcular() {
+            const ultimaOntem = TruthV3.getUltimaBatidaOntem();
+            if (!ultimaOntem) return { podeBater: null, proximaPermitida: null, restanteMin: null };
+            const ultimaMin = toMin(ultimaOntem);
+            if (!Number.isFinite(ultimaMin)) return { podeBater: null, proximaPermitida: null, restanteMin: null };
+            const agora = nowMin();
+            const proximaPermitida = ultimaMin + CONFIG.DESCANSO_MINIMO;
+            const restante = proximaPermitida - agora;
+            return {
+                podeBater: restante <= 0,
+                proximaPermitida,
+                restanteMin: restante > 0 ? restante : 0,
+                ultimaBatida: ultimaOntem,
+            };
+        },
+        render() {
+            const st = this.calcular();
+            if (st.podeBater === null) {
+                return '<div class="ahg-v3-card ahg-v3-info">ℹ️ <strong>Interjornada</strong><br>Informação indisponível — verifique o espelho</div>';
+            }
+            if (st.podeBater) {
+                return '<div class="ahg-v3-card ahg-v3-success">✅ <strong>Já pode bater ponto</strong><br>11h de descanso cumpridas</div>';
+            }
+            return `<div class="ahg-v3-card ahg-v3-warning">⏳ <strong>Próxima batida permitida às ${renderClock(Math.round(st.proximaPermitida))}</strong><br>Faltam ${fmtMin(Math.round(st.restanteMin))} para completar 11h de descanso</div>`;
+        },
+    };
+
+    /* ── Intrajornada Calculator (F-002) ── */
+    const IntrajornadaCalc = {
+        calcular() {
+            const batidas = TruthV3.getBatidasHoje();
+            if (batidas.length === 0) return null;
+            const ultima = toMin(batidas[batidas.length - 1]);
+            if (!Number.isFinite(ultima)) return null;
+            const minRetorno = ultima + CONFIG.INTERVALO_MINIMO;
+            const maxRetorno = ultima + CONFIG.INTERVALO_MAXIMO;
+            return { minRetorno, maxRetorno, ultimaBatida: batidas[batidas.length - 1] };
+        },
+        render() {
+            const st = this.calcular();
+            if (!st) return '';
+            const batidas = TruthV3.getBatidasHoje();
+            const ehIntervalo = batidas.length % 2 === 1;
+            if (!ehIntervalo) {
+                return `<div class="ahg-v3-card ahg-v3-success">✅ Intervalo cumprido</div>`;
+            }
+            return `<div class="ahg-v3-card ahg-v3-info">☕ <strong>Retorno entre ${renderClock(Math.round(st.minRetorno))} e ${renderClock(Math.round(st.maxRetorno))}</strong><br>Intervalo legal: 30min – 2h (Art. 71 CLT)</div>`;
+        },
+    };
+
+    /* ── Inconsistências no Espelho (F-006) ── */
+    const InconsistenciasV3 = {
+        analisarDia(diaEl) {
+            const badges = diaEl.querySelectorAll('.v-calendar-weekly__day-label__badge');
+            const diaSem = diaEl.getAttribute('data-ahg-dia-semana');
+            const isFimSemana = diaSem === '0' || diaSem === '6';
+            const temAfastamento = diaEl.querySelector('.ahg-afastamento, [title*="afastamento"], [title*="Afastamento"]') !== null;
+            if (temAfastamento) return { tipo: 'afastamento', severidade: 'info' };
+            if (badges.length === 0 && !isFimSemana) return { tipo: 'falta', severidade: 'critical' };
+            if (badges.length % 2 === 1) return { tipo: 'batida_impar', severidade: 'warning' };
+            return null;
+        },
+        injetarNoCalendario() {
+            if (!FEATURE_FLAGS.F006_inconsistencias) return;
+            document.querySelectorAll('.v-calendar-weekly__day').forEach(dia => {
+                if (dia.querySelector('.ahg-v3-inconsistencia-badge')) return;
+                const resultado = this.analisarDia(dia);
+                if (!resultado) return;
+                const badge = document.createElement('div');
+                badge.className = 'ahg-v3-inconsistencia-badge';
+                if (resultado.tipo === 'falta') {
+                    badge.innerHTML = '❌';
+                    badge.title = 'Falta — justificativa necessária';
+                    badge.classList.add('ahg-v3-inconsistencia-falta');
+                } else if (resultado.tipo === 'batida_impar') {
+                    badge.innerHTML = '⚠️';
+                    badge.title = 'Batida ímpar — justificativa necessária';
+                    badge.classList.add('ahg-v3-inconsistencia-impar');
+                } else if (resultado.tipo === 'afastamento') {
+                    return;
+                }
+                dia.style.position = 'relative';
+                dia.appendChild(badge);
+            });
+        },
+    };
+
+    /* ── Banco de Horas no Painel (F-009) ── */
+    const BancoHorasV3 = {
+        extrair() {
+            const el = document.querySelector('.banco-de-horas, [class*="banco"], .saldo-acumulado');
+            if (!el) return null;
+            const txt = el.textContent;
+            const m = txt.match(/([+-]?\d+):(\d{2})/);
+            if (!m) return null;
+            const mins = (+m[1] * 60) + (+m[2] * (m[1].startsWith('-') ? -1 : 1));
+            return { texto: m[0], minutos: mins };
+        },
+        render() {
+            const bh = this.extrair();
+            if (!bh) return '';
+            const classe = bh.minutos >= 0 ? 'ahg-status-positive' : 'ahg-status-negative';
+            return `<div class="ahg-row"><span>🏦 Banco de Horas</span><span class="${classe}">${bh.texto}</span></div>`;
+        },
+    };
+
+    /* ── Diagnóstico Interno (F-026) ── */
+    const Diagnostico = {
+        gerar() {
+            const cfg = ConfigStore.read();
+            const truth = TruthV3.read();
+            const batidasHoje = TruthV3.getBatidasHoje();
+            const interjornada = InterjornadaCalc.calcular();
+            const intrajornada = IntrajornadaCalc.calcular();
+            const tema = Tema._temaAtual;
+            return {
+                schemaVersion: '1.0.0',
+                geradoEm: new Date().toISOString(),
+                script: {
+                    versao: '3.0.0',
+                    branch: 'feature/v3.0-expansao',
+                    namespace: 'https://github.com/andersoal',
+                },
+                ambiente: {
+                    url: window.location.href,
+                    userAgent: navigator.userAgent,
+                    plataforma: navigator.platform,
+                    lingua: navigator.language,
+                    tamanhoTela: `${window.innerWidth}x${window.innerHeight}`,
+                    dataHoraLocal: new Date().toString(),
+                },
+                featureFlags: FEATURE_FLAGS,
+                modulos: {
+                    interjornada: { status: interjornada.podeBater !== null ? 'ativo' : 'sem_dados', dados: interjornada },
+                    intrajornada: { status: intrajornada !== null ? 'ativo' : 'sem_dados', dados: intrajornada },
+                    tema: { status: 'ativo', temaAtual: tema },
+                    configStore: { status: 'ativo', chaves: Object.keys(cfg) },
+                    inconsistencias: { status: FEATURE_FLAGS.F006_inconsistencias ? 'ativo' : 'desativado' },
+                    diagnostico: { status: 'ativo' },
+                },
+                jornada: {
+                    batidasHoje,
+                    truthSnapshot: truth,
+                },
+                configuracoes: cfg,
+                localStorageKeys: Object.keys(localStorage).filter(k => k.includes('ahgora') || k.includes('ahg')),
+            };
+        },
+        abrirModal() {
+            const dados = this.gerar();
+            const json = JSON.stringify(dados, null, 2);
+            const modal = document.createElement('div');
+            modal.id = 'ahg-v3-diagnostico-modal';
+            modal.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100003;background:rgba(18,18,26,0.98);backdrop-filter:blur(12px);border:1px solid rgba(122,108,255,0.2);border-radius:12px;padding:20px;box-shadow:0 12px 48px rgba(0,0,0,0.5);max-width:600px;width:90vw;max-height:85vh;overflow-y:auto;color:var(--ahg-text-main,#e8e6f0);font-family:\'Inter\',\'Segoe UI\',system-ui,-apple-system,sans-serif;font-size:13px;';
+            modal.innerHTML = `
+                <h3 style="margin:0 0 8px 0;color:var(--ahg-primary,#7a6cff);">🔧 Diagnóstico Ahgora Panel v3.0</h3>
+                <p style="color:var(--ahg-text-label,#8b87a0);font-size:11px;margin-bottom:12px;">Gerado em: ${new Date().toLocaleString('pt-BR')}</p>
+                <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
+                    <button class="ahg-btn" id="ahg-v3-diag-copy" style="background:var(--ahg-primary,#7a6cff);color:#fff;">📋 Copiar JSON</button>
+                    <button class="ahg-btn" id="ahg-v3-diag-download">⬇️ Download JSON</button>
+                    <button class="ahg-btn" id="ahg-v3-diag-close" style="margin-left:auto;background:rgba(255,77,109,0.2);color:var(--ahg-danger,#ff4d6d);">✕ Fechar</button>
+                </div>
+                <pre style="background:rgba(0,0,0,0.3);border-radius:8px;padding:12px;font-size:11px;overflow-x:auto;max-height:50vh;color:var(--ahg-text-label,#a09db8);line-height:1.5;">${escapeHtml(json)}</pre>
+            `;
+            document.body.appendChild(modal);
+
+            document.getElementById('ahg-v3-diag-copy').onclick = () => {
+                navigator.clipboard.writeText(json).then(() => {
+                    const btn = document.getElementById('ahg-v3-diag-copy');
+                    btn.textContent = '✅ Copiado!';
+                    setTimeout(() => btn.textContent = '📋 Copiar JSON', 2000);
+                });
+            };
+            document.getElementById('ahg-v3-diag-download').onclick = () => {
+                const blob = new Blob([json], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `ahgora-diagnostico-${formatDateKey()}.json`;
+                a.click();
+            };
+            document.getElementById('ahg-v3-diag-close').onclick = () => modal.remove();
+        },
+        init() {
+            document.addEventListener('keydown', (e) => {
+                if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+                    e.preventDefault();
+                    this.abrirModal();
+                }
+            });
+            window.ahgDiagnostico = () => this.abrirModal();
+        },
+    };
+
+    /* ── Batida Overlay (F-005) ── Painel contextual na novabatidaonline ── */
+    const BatidaOverlay = {
+        _visivel: true,
+        _fab: null,
+        _panel: null,
+        init() {
+            if (!FEATURE_FLAGS.F005_overlay) return;
+            this.criarFAB();
+            this.render();
+            setInterval(() => this.render(), 60000);
+        },
+        criarFAB() {
+            const fab = document.createElement('button');
+            fab.id = 'ahg-v3-batida-fab';
+            fab.className = 'ahg-fab';
+            fab.innerHTML = '⏱️';
+            fab.title = 'Painel de Jornada v3.0';
+            fab.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99999;width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#7a6cff,#5a4fcf);color:#fff;border:none;cursor:pointer;font-size:22px;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(122,108,255,0.5);transition:transform 0.2s,box-shadow 0.2s;';
+            fab.onmouseenter = () => fab.style.transform = 'scale(1.1)';
+            fab.onmouseleave = () => fab.style.transform = 'scale(1)';
+            fab.onclick = () => this.toggle();
+            document.body.appendChild(fab);
+            this._fab = fab;
+        },
+        toggle() {
+            this._visivel = !this._visivel;
+            if (this._panel) {
+                this._panel.style.display = this._visivel ? 'block' : 'none';
+            }
+            if (this._fab) {
+                this._fab.style.opacity = this._visivel ? '1' : '0.6';
+            }
+        },
+        render() {
+            const cfg = ConfigStore.read();
+            if (cfg.minimalista) {
+                if (this._panel) this._panel.style.display = 'none';
+                return;
+            }
+
+            const cards = [];
+            if (cfg.cards.interjornada && FEATURE_FLAGS.F001_interjornada) {
+                cards.push(InterjornadaCalc.render());
+            }
+            if (cfg.cards.intrajornada && FEATURE_FLAGS.F002_intrajornada) {
+                cards.push(IntrajornadaCalc.render());
+            }
+
+            const html = `
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <h4 style="margin:0;font-size:13px;color:var(--ahg-primary,#7a6cff);">⏱️ Jornada</h4>
+                    <button onclick="this.closest('.ahg-v3-batida-panel').style.display='none'" style="background:none;border:none;color:#8b87a0;cursor:pointer;font-size:14px;padding:2px;">✕</button>
+                </div>
+                ${cards.join('')}
+                <div style="margin-top:8px;font-size:10px;color:#5a5a7a;text-align:center;">
+                    Ahgora Panel v3.0 · Processamento local
+                </div>
+            `;
+
+            if (!this._panel) {
+                const panel = document.createElement('div');
+                panel.className = 'ahg-v3-batida-panel';
+                panel.style.cssText = 'position:fixed;bottom:80px;right:16px;z-index:99998;width:320px;max-height:70vh;background:var(--ahg-bg-panel,rgba(18,18,26,0.95));backdrop-filter:blur(12px);border-radius:12px;border:1px solid rgba(122,108,255,0.2);box-shadow:0 8px 32px rgba(0,0,0,0.4);padding:14px;color:var(--ahg-text-main,#e8e6f0);font-family:\'Inter\',\'Segoe UI\',system-ui,-apple-system,sans-serif;font-size:12px;line-height:1.5;overflow-y:auto;transition:opacity 0.3s;display:block;';
+                document.body.appendChild(panel);
+                this._panel = panel;
+            }
+            this._panel.innerHTML = html;
+        },
+    };
+
+    /* ── v3 Init Hook ── */
+    function initV3() {
+        console.log('[AHGORA PANEL] v3.0 features initializing...');
+        Tema.aplicar();
+        Diagnostico.init();
+        console.log('[AHGORA PANEL] v3.0 features ready. Flags:', Object.entries(FEATURE_FLAGS).filter(([k,v])=>v).map(([k])=>k));
+    }
+
+    /* ── v3 Mirror Hook ── */
+    function initV3Mirror() {
+        initV3();
+        if (FEATURE_FLAGS.F006_inconsistencias) {
+            setInterval(() => InconsistenciasV3.injetarNoCalendario(), 3000);
+        }
+    }
+
+    /* =========================================================
+       INIT
+    ========================================================= */
+
+    function start() {
+
+        applyPrivacyState();
+        injectCSS();
+        initV3Mirror();  /* v3.0 mirror page features */
+
+        criarEstrutura();
+
+        render();
+
+        agendarRenderMinuto();
+
+        setTimeout(() => {
+            console.log('[AHGORA PANEL] recarregando página...');
+            console.log(CONFIG.URL_REFRESH);
+            window.top.location = CONFIG.URL_REFRESH;
+        }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
+    }
+
+    /* =========================================================
+       LOGGER START
+    ========================================================= */
+
+    function startLogger() {
+        applyPrivacyState();
+
+        const alarmConfig = readLoggerAlarmConfig();
+
+        if (alarmConfig.enabled && alarmConfig.channels.desktop) {
+            pedirNotif();
+        }
+
+        createPrivacyFab('ahg-eye-fab-logger', '24px', () => renderUILogger());
+
+        renderUILogger();
+        setInterval(() => {
+            monitorModal();
+            evaluateLoggerAlarms();
+        }, 500);
+    }
+
+    /* =========================================================
+       ROUTE DISPATCH
+    ========================================================= */
+
+    const currentUrl = window.location.href;
+
+    applyPrivacyState();
+
+    if (currentUrl.includes('novabatidaonline')) {
+
+        startLogger();
+        initV3();          /* v3.0 base features */
+        BatidaOverlay.init(); /* v3.0 overlay panel (F-005) */
+
+    } else {
+
+        const initInterval = setInterval(() => {
+
+            const calendar =
+                document.querySelector('.v-calendar-weekly');
+
+            if (calendar) {
+
+                clearInterval(initInterval);
+
+                start();
+            }
+
+        }, 1000);
+
+        pedirNotif();
+
+        const IS_TOP = window.top === window;
+        if (IS_TOP) {
+
+            console.log(
+                '[AHGORA PANEL] TOP WINDOW'
+            );
+
+            pedirNotif();
+
+            setTimeout(() => {
+
+                notificar(
+                    'startup',
+                    'Ahgora',
+                    'Notificações ativadas.',
+                    false
+                );
+
+            }, 3000);
+
+            setInterval(() => {
+
+                console.log(
+                    '[AHGORA PANEL] reload top'
+                );
+
+                location.reload();
+
+            }, CONFIG.AUTO_REFRESH_MINUTES * 60 * 1000);
+        }
+    }
+
+    /* =========================================================
+       GLOBAL EXPORTS
+    ========================================================= */
+
+    window.ahgExportarCSV = exportarCSV;
+    window.ahgExportarJSON = exportarJSON;
+    window.ahgVerDetalhes = abrirDetalhes;
+    window.ahgSyncMirror = syncMirror;
+    window.ahgAbrirGCal = () => {
+        const hoje = formatDateKey();
+        const truth = JSON.parse(localStorage.getItem(CONFIG.LS_KEY_TRUTH) || '{}');
+        const batidas = truth[hoje] || [];
+        if (batidas.length >= 2) {
+            const inicio = batidas[0].replace(':', '') + '00';
+            const fim = batidas[batidas.length - 1].replace(':', '') + '00';
+            const url = buildGCalUrl({
+                titulo: 'Jornada Ahgora',
+                inicio: hoje.replace(/-/g, '') + 'T' + inicio,
+                fim: hoje.replace(/-/g, '') + 'T' + fim,
+                detalhes: 'Jornada registrada via Ahgora Panel v3.0'
+            });
+            window.open(url, '_blank');
+        }
+    };
+
+})();
