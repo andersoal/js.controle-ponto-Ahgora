@@ -1,1 +1,121 @@
-placeholder
+// ==UserScript==
+// @name         Ahgora — Painel Inteligente Local v3.0
+// @namespace    https://github.com/andersoal
+// @version      3.0.0
+// @description  Painel com totais no calendario, logger de batidas, overlay de jornada na novabatidaonline, alarmes configuraveis, tema adaptativo e diagnostico
+// @author       Jonathan Fiss, Anderson Guarnier
+// @match https://mirror.app.ahgora.com.br/*
+// @match https://app.ahgora.com.br/*
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_addStyle
+// @run-at       document-idle
+// @downloadURL  https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
+// @updateURL    https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
+// ==/UserScript==
+(()=>{var Ea={CARGA_DIARIA:480,MAX_HORAS_DIA:600,MAX_HORAS_TURNO:360,QUATRO_HORAS:240,INTERVALO_MINIMO:30,INTERVALO_MAXIMO:210,MIN_TURNO_COM_INTERVALO:120,DESCANSO_MINIMO:660,TOLERANCIA:10,MAX_BATIDAS_PERMITIDAS:6,$:43200,i:600,u:600,J:"mirror",aa:"batida",ma:"@ahgora-panel/truth",ja:"@ahgora-panel/alarm-config",na:"@ahgora-panel/gcal-auto-open",la:"@ahgora-panel/gcal-user-path",oa:"@ahgora-panel/punch-overrides",pa:"@ahgora-panel/privacy",ka:"@ahgora-panel/alarms-fired",qa:"@ahgora-panel/accounts",U:"#7a6cff",ca:"#ff4d6d",da:"#00e1a0",V:"#ffb800",W:"#ff6b35",ea:"#ff3366",fa:"#ffd700",X:"#ff6b35",Y:"#7a6cff",Z:"#ffffff",ha:"#7a6cff",I:30,P:10},Na=Ea,Ia=a=>{var e,t;return!a||(a=(a=""+a).match(/(-?\d+):(\d{2})/))?(e=+a[1],t=+a[2],isNaN(e)||isNaN(t)?null:e?-(60*e+(t||0)):60*e+(t||0)):null},G=a=>null==a?"--:--":(a<0?"-":"")+String(Math.floor((a=Math.abs(Math.round(a)))/60)).padStart(2,"0")+":"+String(a%60).padStart(2,"0"),H=a=>null==a?null:15*Math.ceil(a/15),L=a=>null==a?"--:--":(0>a?"-":"")+String(Math.floor((a=(Math.round(a)%1440+1440)%1440)/60)).padStart(2,"0")+":"+String(a%60).padStart(2,"0"),U=()=>{var a=new Date;return 60*a.getHours()+a.getMinutes()},Ea=(a,e)=>{if("function"==typeof GM_getValue)return GM_getValue(a,e);try{var t=localStorage.getItem(a);return null===t?e:t}catch(a){return e}},Pa=(a,e)=>{if("function"==typeof GM_setValue)GM_setValue(a,e);else try{localStorage.setItem(a,JSON.stringify(e))}catch(e){console.warn("[AHG] Falha ao salvar",a,e)}},Wa=(a,e,t,o)=>{if(!o&&"granted"===Notification.permission)new Notification(e,{body:t,icon:"https://www.ahgora.com.br/favicon.ico",tag:a,requireInteraction:!0,silent:!1});else if(o&&"granted"===Notification.permission)new Notification(e,{body:t,icon:"https://www.ahgora.com.br/favicon.ico",tag:a,requireInteraction:!1,silent:!0})},Fa=()=>{if("granted"!==Notification.permission)return"default"===Notification.permission&&Notification.requestPermission(),!1},Ba=()=>"hidden"===document.visibilityState;function Ca(){if(document.body){document.body.classList.toggle("ahg-privacy",Ba());var e=document.querySelectorAll('[class*="ahg-fab"]');Array.from(e).forEach(a=>{a.style.filter=Ba()?"blur(6px)":"",a.style.transition="filter 0.3s"})}}function s(a,e,t){var o;document.getElementById(a)||((o=document.createElement("button")).id=a,o.className="ahg-fab",o.innerHTML=Ba()?"🙈":"🐵",o.title=Ba()?"Privacidade ativa — clique para desativar":"Privacidade inativa — clique para ativar",o.style.cssText=`position:fixed;bottom:${e};left:16px;z-index:99999;width:44px;height:44px;border-radius:50%;background:${Na.U};color:#fff;border:none;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(122,108,255,0.4);transition:transform 0.2s;`,o.onmouseenter=()=>o.style.transform="scale(1.1)",o.onmouseleave=()=>o.style.transform="scale(1)",o.onclick=()=>{Ba()?(localStorage.setItem(Na.pa,"false"),Ca(),Array.from(document.querySelectorAll('[class*="ahg-fab"]')).forEach(a=>{a.innerHTML="🐵",a.title="Privacidade inativa — clique para ativar",a.style.filter=""})):(localStorage.setItem(Na.pa,"true"),Ca(),Array.from(document.querySelectorAll('[class*="ahg-fab"]')).forEach(a=>{a.innerHTML="🙈",a.title="Privacidade ativa — clique para desativar",a.style.filter="blur(6px)"}))},document.body.appendChild(o))}function Ga(a){return l()?"blur(6px)":""}function W(a=new Date){a=new Date(a);return`${a.getFullYear()}-${("0"+(a.getMonth()+1)).slice(-2)}-${("0"+a.getDate()).slice(-2)}`}function Ha(a){var e=(""+a).trim();return!a||!(a=a.match(/(\d{1,2}):(\d{2})/))||(e=+(""+a[1]),a=+(""+a[2]),!Number.isFinite(e)||!Number.isFinite(a)||e<0||23<e||a<0||59<a)?null:(""+e).padStart(2,"0")+":"+(""+a).padStart(2,"0")}function Va(a,{P:e=!1}={}){return a?a>Na.$?{level:"info",text:"Não é permitido registrar horas extras sem autorização. Consulte seu gestor.",icon:"🚫"}:a>360?{level:"warning",text:"Atenção: banco de horas elevado. Procure seu gestor para regularização.",icon:"⚠️"}:a>240?{level:"warning",text:"Banco de horas acumulado. Verifique com seu gestor.",icon:"⚡"}:a>120?{level:"info",text:"Banco de horas positivo. Considere compensar.",icon:"📈"}:a>Na.P?{level:"info",text:"Banco de horas levemente positivo.",icon:"📊"}:{level:"success",text:"Banco de horas dentro da tolerância.",icon:"✅"}:{level:"neutral",text:"Sem dados de banco de horas.",icon:"❓"}}function Z(a){var e=Array.isArray(a)?a:[],t=[];for(let a=1;a+1<e.length;a+=2){var o=Ia(e[a]),r=Ia(e[a+1]);Number.isFinite(o)&&Number.isFinite(r)&&Number.isFinite(r=r-o)&&0<r&&r>Na.u&&t.push({start:e[a],end:e[a+1],duration:r,C:r-Na.u})}return t}function ea(a){var e=Array.isArray(a)?a:[],t=[];for(let a=0;a+1<e.length;a+=2){var o=Ia(e[a]),r=Ia(e[a+1]);Number.isFinite(o)&&Number.isFinite(r)&&Number.isFinite(r=r-o)&&0<r&&r>Na.i&&t.push({start:e[a],end:e[a+1],duration:r,C:r-Na.i})}return t}function ta(a){var e,t,o;return a&&Array.isArray(a.B)?(e=[],o=Z(a.B),t=ea(a.B),0<o.length&&(o=o[0],e.push({code:"JORNADA_8H_DESCANSO",message:`Descanso entre jornadas: ${G(o.duration)} (mínimo: ${G(Na.u)})`,icon:"🌙",severity:"critical",window:`${o.start} → ${o.end}`,duration:o.duration,C:o.C})),0<t.length&&(t=t[0],e.push({code:"INTERVALO_11H",message:`Intervalo intrajornada: ${G(t.duration)} (mínimo: ${G(Na.i)})`,icon:"☕",severity:"warning",window:`${t.start} → ${t.end}`,duration:t.duration,C:t.C})),e.push({code:"BANCO_POSITIVO",...Va(a.Da),value:a.Da}),a.ua&&(e.push({code:"BANCO_NEGATIVO",level:"danger",text:`Déficit acumulado: ${G(-a.ua)}. Regularize com seu gestor.`,icon:"🚨",severity:"critical",value:-a.ua}),e.push({code:"BANCO_DUPLA_ALERTA",level:"critical",text:"ATENÇÃO: Banco positivo E negativo detectados. Dados inconsistentes — informe RH.",icon:"⚠️",severity:"critical"})),e.push({code:"META",message:`Meta: ${G(Na.CARGA_DIARIA)} / Trabalhado: ${G(a.F)}`,icon:"🎯",severity:"info"}),o=Z(a.B),t=H(a.F),e.push({code:"PROJECAO",message:`Projeção: ${G(t)} (${0<=(o=t-a.F)?"faltam":"excede"} ${G(Math.abs(o))})`,icon:"🔮",severity:"info",wa:t}),e.push({code:"STATUS",message:a.N?"✅ Jornada completa":a.R?"⏳ Aguardando batida":a.M?"🔄 Registrando horas":1===(null==(t=a.B)?void 0:t.length)?"⏰ 1 batida registrada":`📊 ${(null==(o=a.B)?void 0:o.length)||0} batidas`,icon:a.N?"🎉":a.R?"⏸️":a.M?"⏳":"📝",severity:a.N?"success":a.M?"warning":"info"}),a.F>=Na.CARGA_DIARIA&&!a.N&&e.push({code:"LIMITE_DIARIO",message:`⚠️ Atenção: ${G(a.F)} trabalhados sem jornada fechada. Verifique se faltou batida de saída.`,icon:"⏰",severity:"warning"}),e):[{code:"SEM_DADOS",message:"Sem dados para análise.",icon:"❓",severity:"neutral"}]}function oa(a){var e=a.F;return null==a.F?"":(e=(e=Math.round(e))>=Na.CARGA_DIARIA?"✅ Completo":0<e?"⏳ Parcial":"❌ Zerado",`${G(a.F)} ${e}${a.N?" | 🎉 Jornada fechada":a.R?" | ⏸️ Aguardando batida":a.M?" | ⏳ Em andamento":""}`)}function O(a,e){var t=Math.floor(a/60),o=Math.abs(a%60);return(0>a?"-":"")+String(t).padStart(2,"0")+":"+String(o).padStart(2,"0")}function l(){return"true"===localStorage.getItem(Na.pa)}function Qa(){var a=document.getElementById("ahg-panel-css");if(!a){let a=document.createElement("style");a.id="ahg-panel-css",a.textContent=`
+            .ahg-panel { position:fixed;bottom:16px;right:16px;z-index:99999;width:400px;max-height:85vh;background:rgba(18,18,26,0.95);backdrop-filter:blur(12px);border-radius:12px;border:1px solid rgba(122,108,255,0.2);box-shadow:0 8px 32px rgba(0,0,0,0.4);overflow-y:auto;overflow-x:hidden;color:#e8e6f0;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;font-size:13px;line-height:1.5;transition:opacity 0.3s,transform 0.3s;scrollbar-width:thin;scrollbar-color:${Na.U} rgba(122,108,255,0.1); }
+            .ahg-panel::-webkit-scrollbar { width:6px; }
+            .ahg-panel::-webkit-scrollbar-track { background:rgba(122,108,255,0.05);border-radius:3px; }
+            .ahg-panel::-webkit-scrollbar-thumb { background:${Na.U};border-radius:3px; }
+            .ahg-panel-title { display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid rgba(122,108,255,0.15);cursor:grab;user-select:none; }
+            .ahg-panel-title:active { cursor:grabbing; }
+            .ahg-panel-title h3 { margin:0;font-size:14px;font-weight:600;color:${Na.U};letter-spacing:0.3px; }
+            .ahg-panel-body { padding:14px 18px; }
+            .ahg-section { margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.05); }
+            .ahg-section:last-child { border-bottom:none;margin-bottom:0;padding-bottom:0; }
+            .ahg-section-title { font-size:11px;text-transform:uppercase;letter-spacing:1.2px;color:#8b87a0;margin-bottom:8px;font-weight:600; }
+            .ahg-row { display:flex;justify-content:space-between;align-items:center;padding:4px 0; }
+            .ahg-row span:first-child { color:#a09db8;font-size:12px; }
+            .ahg-row span:last-child { font-weight:500;color:#e8e6f0;font-variant-numeric:tabular-nums; }
+            .ahg-status-positive { color:${Na.da}; }
+            .ahg-status-negative { color:${Na.ca}; }
+            .ahg-status-warning { color:${Na.V}; }
+            .ahg-status-info { color:${Na.U}; }
+            .ahg-btn { background:rgba(122,108,255,0.15);color:${Na.U};border:1px solid rgba(122,108,255,0.3);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:500;cursor:pointer;transition:all 0.2s;font-family:inherit; }
+            .ahg-btn:hover { background:rgba(122,108,255,0.25); }
+            .ahg-btn-primary { background:${Na.U};color:#fff;border-color:${Na.U}; }
+            .ahg-btn-primary:hover { background:#6b5ce7; }
+            .ahg-btn-sm { padding:4px 8px;font-size:10px; }
+            .ahg-fab { position:fixed;z-index:99999;width:44px;height:44px;border-radius:50%;background:${Na.U};color:#fff;border:none;cursor:pointer;font-size:20px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(122,108,255,0.4);transition:transform 0.2s,filter 0.3s; }
+            .ahg-fab:hover { transform:scale(1.1); }
+            .ahg-toast { position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-100px);background:rgba(18,18,26,0.95);backdrop-filter:blur(12px);color:#e8e6f0;padding:12px 20px;border-radius:8px;border:1px solid rgba(122,108,255,0.2);box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:100000;font-size:13px;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;transition:transform 0.3s cubic-bezier(0.175,0.885,0.32,1.275);pointer-events:none; }
+            .ahg-toast.show { transform:translateX(-50%) translateY(0); }
+            .ahg-toast-error { border-color:rgba(255,77,109,0.4); }
+            .ahg-toast-success { border-color:rgba(0,225,160,0.4); }
+            .ahg-modal-hint { position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:rgba(18,18,26,0.95);backdrop-filter:blur(12px);color:#e8e6f0;padding:12px 16px;border-radius:8px;border:1px solid rgba(255,184,0,0.3);box-shadow:0 4px 16px rgba(0,0,0,0.3);z-index:100001;font-size:12px;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;max-width:300px;text-align:center;pointer-events:none;animation:ahg-hint-in 0.3s ease; }
+            .ahg-modal-hint::after { content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:rgba(255,184,0,0.3); }
+            @keyframes ahg-hint-in { from { opacity:0;transform:translateX(-50%) translateY(8px); } to { opacity:1;transform:translateX(-50%) translateY(0); } }
+            .ahg-punch-editor { position:absolute;z-index:100002;background:rgba(18,18,26,0.98);backdrop-filter:blur(12px);border:1px solid rgba(122,108,255,0.2);border-radius:10px;padding:14px;box-shadow:0 8px 32px rgba(0,0,0,0.5);min-width:260px;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;font-size:12px;color:#e8e6f0; }
+            .ahg-punch-editor h4 { margin:0 0 10px 0;font-size:13px;color:${Na.U}; }
+            .ahg-punch-row { display:flex;align-items:center;gap:6px;margin:6px 0; }
+            .ahg-punch-row input { background:rgba(255,255,255,0.05);border:1px solid rgba(122,108,255,0.2);color:#e8e6f0;border-radius:4px;padding:4px 8px;font-size:12px;font-family:inherit;width:70px; }
+            .ahg-punch-row input:focus { outline:none;border-color:${Na.U};box-shadow:0 0 0 2px rgba(122,108,255,0.1); }
+            .ahg-punch-row button { background:rgba(255,255,255,0.05);border:none;color:#a09db8;cursor:pointer;font-size:14px;padding:2px 6px;border-radius:4px;transition:all 0.2s; }
+            .ahg-punch-row button:hover { background:rgba(255,255,255,0.1);color:#fff; }
+            .ahg-punch-row .ahg-btn-danger { color:${Na.ca}; }
+            .ahg-punch-row .ahg-btn-danger:hover { background:rgba(255,77,109,0.15); }
+            .ahg-punch-add { background:rgba(0,225,160,0.1);color:${Na.da};border:1px dashed rgba(0,225,160,0.3); }
+            .ahg-punch-add:hover { background:rgba(0,225,160,0.2); }
+            .ahg-punch-save { background:${Na.da};color:#0a0a0f; }
+            .ahg-punch-save:hover { background:#00c48c; }
+            .ahg-punch-reset { background:rgba(255,77,109,0.1);color:${Na.ca};border:1px solid rgba(255,77,109,0.2); }
+            .ahg-punch-reset:hover { background:rgba(255,77,109,0.2); }
+            .ahg-violation-critical { color:${Na.ca};font-weight:600; }
+            .ahg-violation-warning { color:${Na.V}; }
+            .ahg-violation-info { color:${Na.U}; }
+            .ahg-violation-success { color:${Na.da}; }
+            .ahg-day-badge { font-size:10px;padding:1px 4px;border-radius:3px;font-weight:600; }
+            .ahg-day-badge-complete { background:rgba(0,225,160,0.15);color:${Na.da}; }
+            .ahg-day-badge-partial { background:rgba(255,184,0,0.15);color:${Na.V}; }
+            .ahg-day-badge-empty { background:rgba(255,77,109,0.1);color:${Na.ca}; }
+            .ahg-day-violations { font-size:9px;margin-top:3px;line-height:1.4; }
+            .ahg-logger-punch { display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:4px;font-size:11px;font-variant-numeric:tabular-nums; }
+            .ahg-logger-punch-mirror { background:rgba(122,108,255,0.1);color:${Na.U}; }
+            .ahg-logger-punch-local { background:rgba(0,225,160,0.1);color:${Na.da}; }
+            .ahg-logger-punch-local-modified { background:rgba(255,184,0,0.1);color:${Na.V}; }
+            .ahg-alarm-row { display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px; }
+            .ahg-alarm-status-active { color:${Na.da}; }
+            .ahg-alarm-status-snoozed { color:${Na.V}; }
+            .ahg-alarm-status-fired { color:${Na.ca};font-weight:600; }
+            .ahg-timeline-container { position:relative;height:24px;background:rgba(255,255,255,0.03);border-radius:6px;margin:8px 0;overflow:hidden; }
+            .ahg-timeline-bar { position:absolute;height:100%;border-radius:4px;transition:width 0.5s ease; }
+            .ahg-timeline-bar-work { background:rgba(122,108,255,0.4); }
+            .ahg-timeline-bar-extra { background:rgba(0,225,160,0.4); }
+            .ahg-timeline-bar-deficit { background:rgba(255,77,109,0.3); }
+            .ahg-timeline-marker { position:absolute;top:0;width:2px;height:100%;background:${Na.U};z-index:2; }
+            .ahg-timeline-label { position:absolute;top:50%;transform:translateY(-50%);font-size:9px;color:#a09db8;white-space:nowrap;z-index:3; }
+            .ahg-detail-modal { position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100003;background:rgba(18,18,26,0.98);backdrop-filter:blur(12px);border:1px solid rgba(122,108,255,0.2);border-radius:12px;padding:20px;box-shadow:0 12px 48px rgba(0,0,0,0.5);max-width:500px;width:90vw;max-height:80vh;overflow-y:auto;color:#e8e6f0;font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif;font-size:13px; }
+            .ahg-detail-modal h3 { margin:0 0 14px 0;font-size:15px;color:${Na.U}; }
+            .ahg-detail-modal .ahg-section { margin-bottom:10px;padding-bottom:10px; }
+            .ahg-detail-close { position:absolute;top:12px;right:12px;background:none;border:none;color:#8b87a0;font-size:18px;cursor:pointer;transition:color 0.2s; }
+            .ahg-detail-close:hover { color:#fff; }
+            .ahg-detail-grid { display:grid;grid-template-columns:1fr 1fr;gap:10px; }
+            .ahg-detail-card { background:rgba(255,255,255,0.03);border-radius:8px;padding:10px;text-align:center; }
+            .ahg-detail-card-value { font-size:18px;font-weight:600;color:${Na.U}; }
+            .ahg-detail-card-label { font-size:10px;color:#8b87a0;margin-top:4px;text-transform:uppercase;letter-spacing:0.5px; }
+            .ahg-detail-violations { max-height:200px;overflow-y:auto; }
+            .ahg-detail-violation-item { display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03); }
+            .ahg-detail-violation-item:last-child { border-bottom:none; }
+            .ahg-detail-violation-icon { font-size:16px;flex-shrink:0; }
+            .ahg-detail-violation-text { font-size:11px;line-height:1.4; }
+            .ahg-detail-violation-severity-critical { color:${Na.ca}; }
+            .ahg-detail-violation-severity-warning { color:${Na.V}; }
+            .ahg-detail-violation-severity-info { color:${Na.U}; }
+            .ahg-detail-day { display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:6px;margin:3px 0;font-size:11px;transition:background 0.2s; }
+            .ahg-detail-day:hover { background:rgba(255,255,255,0.03); }
+            .ahg-detail-day-violations { display:flex;gap:4px; }
+            .ahg-detail-day-badge { font-size:9px;padding:1px 4px;border-radius:3px; }
+            .ahg-accounts-list { max-height:200px;overflow-y:auto; }
+            .ahg-account-item { display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.03); }
+            .ahg-account-item:last-child { border-bottom:none; }
+            .ahg-account-color { width:12px;height:12px;border-radius:50%;flex-shrink:0; }
+            .ahg-account-name { font-size:11px;flex:1; }
+            .ahg-account-delete { background:none;border:none;color:${Na.ca};cursor:pointer;font-size:12px;padding:2px; }
+            .ahg-account-delete:hover { background:rgba(255,77,109,0.1);border-radius:4px; }
+            .ahg-quick-calendar { display:flex;gap:4px;margin-top:6px;flex-wrap:wrap; }
+            .ahg-quick-calendar a { font-size:10px;padding:3px 8px;border-radius:4px;background:rgba(122,108,255,0.1);color:${Na.U};text-decoration:none;transition:background 0.2s; }
+            .ahg-quick-calendar a:hover { background:rgba(122,108,255,0.2); }
+            .ahg-countdown { font-variant-numeric:tabular-nums;color:${Na.V};font-weight:600; }
+            .ahg-refresh-hint { font-size:10px;color:#8b87a0;font-style:italic;margin-top:6px; }
+        `,document.head.appendChild(a)}}var Ra=()=>{Qa(),window.top===window&&(Ca(),s("ahg-eye-fab-mirror","80px",()=>{ae()}))};function qa(a,e){if(e)e=(""+e).replace(/"/g,'""'),a=","===e||"\n"===e||'"'===e?`"${e}"`:e;else a="";return a}function ya(){var a,e,t,o,r,n,i,m,d,c,l,s,p,u,h,g,f,y,A,E,T,v,N,R,C,M,k,S,b,w,_,B,F,I,D,x,P,L,H,$,z,K,j,V,J,G,Q,U,X,Y,Z,ee,te,oe,re,ne,ie,ae,me,de,ce,le,se,pe,ue,he,ge,fe,ye,be,we,_e,Be,Fe,Ie,De,xe,Pe,Le,He,$e,ze,Ke,je,Ve,Je,Ge,Qe,Ue,Xe,Ye,Ze,et,tt,ot,rt,nt,it,at,mt,dt,ct,lt,st,pt,ut,ht,gt,ft,yt,bt,wt,_t,Bt,Ft,It,Dt,xt,Pt,Lt,Ht,$t,zt,Kt,jt,Vt,Jt,Gt,Qt,Ut,Xt,Yt,Zt,eo,to,oo,ro,no,io,ao,mo,do,co,lo,so,po,uo,ho,go,fo,yo,bo,wo,_o,Bo,Fo,Io,Do,xo,Po,Lo,Ho,$o,zo,Ko,jo,Vo,Jo,Go,Qo,Uo,Xo,Yo,Zo,er,tr,or,rr,nr,ir,ar,mr,dr,cr,lr,sr,pr,ur,hr,gr,fr,yr,br,wr,_r,Br,Fr,Ir,Dr,xr,Pr,Lr,Hr,$r,zr,Kr,jr,Vr,Jr,Gr,Qr,Ur,Xr,Yr,Zr,en,tn,on,rn,nn,in,an,mn,dn,cn,ln,sn,pn,un,hn,gn,fn,yn,bn,wn,_n,Bn,Fn,In,Dn,xn,Pn,Ln,Hn,$n,zn,Kn,jn,Vn,Jn,Gn,Qn,Un,Xn,Yn,Zn,ei,ti,oi,ri,ni,ii,ai,mi,di,ci,li,si,pi,ui,hi,gi,fi,yi,bi,wi,_i,Bi,Fi,Ii,Di,xi,Pi,Li,Hi,$i,zi,Ki,ji,Vi,Ji,Gi,Qi,Ui,Xi,Yi,Zi,em,tm,om,rm,nm,im,am,mm,dm,cm,lm,sm,pm,um,hm,gm,fm,ym,bm,wm,_m,Bm,Fm,Im,Dm,xm,Pm,Lm,Hm,$m,zm,Km,jm,Vm,Jm,Gm,Qm,Um,Xm,Ym,Zm,ed,td,od,rd,nd,id,ad,md,dd,cd,ld,sd,pd,ud,hd,gd,fd,yd,bd,wd,_d,Bd,Fd,Id,Dd,xd,Pd,Ld,Hd,$d,zd,Kd,jd,Vd,Jd,Gd,Qd,Ud,Xd,Yd,Zd,ec,tc,oc,rc,nc,ic,ac,mc,dc,cc,lc,sc,pc,uc,hc,gc,fc,yc,bc,wc,_c,Bc,Fc,Ic,Dc,xc,Pc,Lc,Hc,$c,zc,Kc,jc,Vc,Jc,Gc,Qc,Uc,Xc,Yc,Zc,el,tl,ol,rl,nl,il,al,ml,dl,cl,ll,sl,pl,ul,hl,gl,fl,yl,bl,wl,_l,Bl,Fl,Il,Dl,xl,Pl,Ll,Hl,$l,zl,Kl,jl,Vl,Jl,Gl,Ql,Ul,Xl,Yl,Zl,es,ts,os,rs,ns,is,as,ms,ds,cs,ls,ss,ps,us,hs,gs,fs,ys,bs,ws,_s,Bs,Fs,Is,Ds,xs,Ps,Ls,Hs,$s,zs,Ks,js,Vs,Js,Gs,Qs,Us,Xs,Ys,Zs,ep,tp,op,rp,np,ip,ap,mp,dp,cp,lp,sp,pp,up,hp,gp,fp,yp,bp,wp,_p,Bp,Fp,Ip,Dp,xp,Pp,Lp,Hp,$p,zp,Kp,jp,Vp,Jp,Gp,Qp,Up,Xp,Yp,Zp,eu,tu,ou,ru,nu,iu,au,mu,du,cu,lu,su,pu,uu,hu,gu,fu,yu,bu,wu,_u,Bu,Fu,Iu,Du,xu,Pu,Lu,Hu,$u,zu,Ku,ju,Vu,Ju,Gu,Qu,Uu,Xu,Yu,Zu,eh,th,oh,rh,nh,ih,ah,mh,dh,ch,lh,sh,ph,uh,hh,gh,fh,yh,bh,wh,_h,Bh,Fh,Ih,Dh,xh,Ph,Lh,Hh,$h,zh,Kh,jh,Vh,Jh,Gh,Qh,Uh,Xh,Yh,Zh,eg,tg,og,rg,ng,ig,ag,mg,dg,cg,lg,sg,pg,ug,hg,gg,fg,yg,bg,wg,_g,Bg,Fg,Ig,Dg,xg,Pg,Lg,Hg,$g,zg,Kg,jg,Vg,Jg,Gg,Qg,Ug,Xg,Yg,Zg,ef,tf,of,rf,nf,if,af,mf,df,cf,lf,sf,pf,uf,hf,gf,ff,yf,bf,wf,_f,Bf,Ff,If,Df,xf,Pf,Lf,Hf,$f,zf,Kf,jf,Vf,Jf,Gf,Qf,Uf,Xf,Yf,Zf,ey,ty,oy,ry,ny,iy,ay,my,dy,cy,ly,sy,py,uy,hy,gy,fy,yy,by,wy,_y,By,Fy,Iy,Dy,xy,Py,Ly,Hy,$y,zy,Ky,jy,Vy,Jy,Gy,Qy,Uy,Xy,Yy,Zy,eb,tb,ob,rb,nb,ib,ab,mb,db,cb,lb,sb,pb,ub,hb,gb,fb,yb,bb,wb,_b,Bb,Fb,Ib,Db,xb,Pb,Lb,Hb,$b,zb,Kb,jb,Vb,Jb,Gb,Qb,Ub,Xb,Yb,Zb,ew,tw,ow,rw,nw,iw,aw,mw,dw,cw,lw,sw,pw,uw,hw,gw,fw,yw,bw,ww,_w,Bw,Fw,Iw,Dw,xw,Pw,Lw,Hw,$w,zw,Kw,jw,Vw,Jw,Gw,Qw,Uw,Xw,Yw,Zw,ex,tx,ox,rx,nx,ix,ax,mx,dx,cx,lx,sx,px,ux,hx,gx,fx,yx,bx,wx,_x,Bx,Fx,Ix,Dx,xx,Px,Lx,Hx,$x,zx,Kx,jx,Vx,Jx,Gx,Qx,Ux,Xx,Yx,Zx,eP,tP,oP,rP,nP,iP,aP,mP,dP,cP,lP,sP,pP,uP,hP,gP,fP,yP,bP,wP,_P,BP,FP,IP,DP,xP,PP,LP,HP,$P,zP,KP,jP,VP,JP,GP,QP,UP,XP,YP,ZP,eL,tL,oL,rL,nL,iL,aL,mL,dL,cL,lL,sL,pL,uL,hL,gL,fL,yL,bL,wL,_L,BL,FL,IL,DL,xL,PL,LL,HL,$L,zL,KL,jL,VL,JL,GL,QL,UL,XL,YL,ZL,eH,tH,oH,rH,nH,iH,aH,mH,dH,cH,lH,sH,pH,uH,hH,gH,fH,yH,bH,wH,_H,BH,FH,IH,DH,xH,PH,LH,HH,$H,zH,KH,jH,VH,JH,GH,QH,UH,XH,YH,ZH,e$,t$,o$,r$,n$,i$,a$,m$,d$,c$,l$,s$,p$,u$,h$,g$,f$,y$,b$,w$,_$,B$,F$,I$,D$,x$,P$,L$,H$,z$,K$,j$,V$,J$,G$,Q$,U$,X$,Y$,Z$,e0,t0,o0,r0,n0,i0,a0,m0,d0,c0,l0,s0,p0,u0,h0,g0,f0,y0,b0,w0,_0,B0,F0,I0,D0,x0,P0,L0,H0,z0,K0,j0,V0,J0,G0,Q0,U0,X0,Y0,Z0,e1,t1,o1,r1,n1,i1,a1,m1,d1,c1,l1,s1,p1,u1,h1,g1,f1,y1,b1,w1,_1,B1,F1,I1,D1,x1,P1,L1,H1,z1,K1,j1,V1,J1,G1,Q1,U1,X1,Y1,Z1,e2,t2,o2,r2,n2,i2,a2,m2,d2,c2,l2,s2,p2,u2,h2,g2,f2,y2,b2,w2,_2,B2,F2,I2,D2,x2,P2,L2,H2,z2,K2,j2,V2,J2,G2,Q2,U2,X2,Y2,Z2,e3,t3,o3,r3,n3,i3,a3,m3,d3,c3,l3,s3,p3,u3,h3,g3,f3,y3,b3,w3,_3,B3,F3,I3,D3,x3,P3,L3,H3,z3,K3,j3,V3,J3,G3,Q3,U3,X3,Y3,Z3,e4,t4,o4,r4,n4,i4,a4,m4,d4,c4,l4,s4,p4,u4,h4,g4,f4,y4,b4,w4,_4,B4,F4,I4,D4,x4,P4,L4,H4,z4,K4,j4,V4,J4,G4,Q4,U4,X4,Y4,Z4,e5,t5,o5,r5,n5,i5,a5,m5,d5,c5,l5,s5,p5,u5,h5,g5,f5,y5,b5,w5,_5,B5,F5,I5,D5,x5,P5,L5,H5,z5,K5,j5,V5,J5,G5,Q5,U5,X5,Y5,Z5,e6,t6,o6,r6,n6,i6,a6,m6,d6,c6,l6,s6,p6,u6,h6,g6,f6,y6,b6,w6,_6,B6,F6,I6,D6,x6,P6,L6,H6,z6,K6,j6,V6,J6,G6,Q6,U6,X6,Y6,Z6,e7,t7,o7,r7,n7,i7,a7,m7,d7,c7,l7,s7,p7,u7,h7,g7,f7,y7,b7,w7,_7,B7,F7,I7,D7,x7,P7,L7,H7,z7,K7,j7,V7,J7,G7,Q7,U7,X7,Y7,Z7,e8,t8,o8,r8,n8,i8,a8,m8,d8,c8,l8,s8,p8,u8,h8,g8,f8,y8,b8,w8,_8,B8,F8,I8,D8,x8,P8,L8,H8,z8,K8,j8,V8,J8,G8,Q8,U8,X8,Y8,Z8,e9,t9,o9,r9,n9,i9,a9,m9,d9,c9,l9,s9,p9,u9,h9,g9,f9,y9,b9,w9,_9,B9,F9,I9,D9,x9,P9,L9,H9,z9,K9,j9,V9,J9,G9,Q9,U9,X9,Y9,Z9}})();
