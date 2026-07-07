@@ -1,20 +1,21 @@
 // ==UserScript==
 // @name         Ahgora — Painel Inteligente Local v3.0
 // @namespace    https://github.com/andersoal
-// @version      3.0.0
+// @version      3.0.2
 // @description  Painel com totais no calendario, logger de batidas, overlay de jornada na novabatidaonline, alarmes configuraveis, tema adaptativo e diagnostico
 // @author       Jonathan Fiss, Anderson Guarnier
 
 // @match https://mirror.app.ahgora.com.br/*
-// @match https://app.ahgora.com.br/*
+// @match https://app.ahgora.com.br/externo/mirror*
+// @match https://app.ahgora.com.br/novabatidaonline*
 
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_addStyle
 // @run-at       document-idle
 
-// @downloadURL  https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
-// @updateURL    https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/feature/v3.0-expansao/ahgora-panel.user.js
+// @downloadURL  https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/dev/ahgora-panel.user.js
+// @updateURL    https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/dev/ahgora-panel.user.js
 
 // ==/UserScript==
 
@@ -34,6 +35,17 @@
 
 (function () {
     'use strict';
+
+    /* =========================================================
+       SINGLETON / CANARIO DE VERSAO
+       Evita multiplas instancias (ex.: v2.x e v3.0 instaladas).
+    ========================================================= */
+    const AHG_PANEL_VERSION = '3.0.2';
+    if (window.__ahgPanelV3 && window.__ahgPanelV3 >= AHG_PANEL_VERSION) {
+        console.log('[AHGORA PANEL] Instancia mais recente ja ativa. Abortando duplicata.');
+        return;
+    }
+    window.__ahgPanelV3 = AHG_PANEL_VERSION;
 
     /* =========================================================
        SECAO 0: UTILITARIOS COMPARTILHADOS (executam em qualquer pagina)
@@ -198,7 +210,7 @@
     ========================================================= */
 
     const CONFIG = {
-        VERSAO: '3.0.0',
+        VERSAO: '3.0.1',
         BUILD_DATE: '2026-07-05',
 
         CARGA_DIARIA: 8 * 60,
@@ -631,6 +643,8 @@
 
         .ahg-privacy-btn { margin-left:auto; display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; border:1px solid var(--ahg-border); background:transparent; color:var(--ahg-text); cursor:pointer; opacity:.6; font-size:16px; transition:.15s; }
         .ahg-privacy-btn:hover { opacity:1; background:color-mix(in srgb, var(--ahg-primary) 8%, transparent); }
+        .ahg-settings-btn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; border:1px solid var(--ahg-border); background:transparent; color:var(--ahg-text); cursor:pointer; opacity:.6; font-size:14px; transition:.15s; margin-left:4px; }
+        .ahg-settings-btn:hover { opacity:1; background:color-mix(in srgb, var(--ahg-primary) 8%, transparent); }
 
         .ahg-hide-times .ahg-day-total, .ahg-hide-times .ahg-day-total-rounded { opacity:.3; filter:blur(1px); }
 
@@ -640,6 +654,14 @@
         .ahg-day-violations { position:absolute; top:auto; bottom:20px; right:4px; left:auto; transform:none; background:rgba(245,158,11,.22); color:#92400e; border:1px solid rgba(245,158,11,.9); padding:1px 5px; border-radius:4px; font-size:9px; font-weight:700; z-index:13; pointer-events:auto; white-space:nowrap; cursor:help; max-width:calc(100% - 8px); overflow:hidden; text-overflow:ellipsis; }
         .ahg-day-violations.is-critical { background:rgba(239,68,68,.22); color:#991b1b; border-color:rgba(239,68,68,.9); }
         .ahg-day-violations.is-warning { background:rgba(245,158,11,.22); color:#92400e; border-color:rgba(245,158,11,.9); }
+
+        .ahg-day-edit-btn { position:absolute; bottom:4px; right:4px; z-index:20; background:var(--ahg-bg-card); border:1px solid var(--ahg-border); border-radius:4px; padding:1px 4px; font-size:10px; cursor:pointer; opacity:.7; transition:.15s; line-height:1; }
+        .ahg-day-edit-btn:hover { opacity:1; background:color-mix(in srgb, var(--ahg-primary) 12%, transparent); }
+
+        .batida.manual { border:1px dashed #f59e0b !important; background:rgba(245,158,11,.12) !important; }
+        .batida.prevista { border:1px dashed #9ca3af !important; opacity:.7; }
+        .batida.remocao, .batida.removida, .batida.deleted { text-decoration:line-through !important; border:1px dashed #ef4444 !important; background:rgba(239,68,68,.12) !important; }
+        .batida.bonus, .batida.adicional, .batida.sobreaviso { border:1px dashed #7a6cff !important; background:rgba(122,108,255,.12) !important; }
 
         @keyframes ahg-pulse { 0%,100% { opacity:1; } 50% { opacity:.5; } }
         .ahg-alarm-active { animation: ahg-pulse 1s ease-in-out infinite; border-color:#ef4444 !important; background:rgba(239,68,68,.1) !important; }
@@ -752,12 +774,19 @@
         const bancoHoras = extrairBancoHoras();
         const { diasConsecutivos, dsrStatus } = calcularDSR(dias);
 
+        const guidance = buildPunchGuidance(hoje.batidas, saldoSemana);
+        const amanha = new Date(hoje.data);
+        amanha.setDate(amanha.getDate() + 1);
+        const diaAmanha = dias.find(d => d.dateKey === formatDateKey(amanha));
+        const primeiraBatidaAmanha = diaAmanha?.batidas?.[0] || null;
+        const interjornada = calcularInterjornadaMirror(hoje.batidas[hoje.batidas.length - 1] || null, primeiraBatidaAmanha);
+
         const resumo = {
             hoje, saldoSemana, totalSemana, saldoMes, totalMes, dias, diasRestantesMes, diasRegistrados,
             entrada, turno1, turno2, retorno11h, h6, h8, h10, saidaIdeal, status, retornoMinimo, retornoMaximo,
             trabalhado: hoje.trabalhado, alerta, hojePunchHealth, punchAnomalyDays,
             intrajornadaMaxViolationDays, maxShiftViolationDays, maxDailyViolationDays,
-            bancoHoras, diasConsecutivos, dsrStatus
+            bancoHoras, diasConsecutivos, dsrStatus, guidance, interjornada, primeiraBatidaAmanha
         };
 
         persistSharedTruth(resumo);
@@ -825,9 +854,116 @@
         return { diasConsecutivos: consecutivos, dsrStatus };
     }
 
+    function buildPunchGuidance(batidas, saldoSemanaAnt = 0) {
+        const guidance = {
+            stage: 'none', title: 'Não iniciado', summary: 'Nenhuma batida hoje',
+            lastPunch: null, nextPunch: null, nextWindowLabel: null,
+            h8: null, h10: null, idealExit: null,
+            intervalMin: null, intervalMax: null,
+            copyTarget: null, copyLabel: null
+        };
+
+        if (!batidas || batidas.length === 0) return guidance;
+
+        const ultima = batidas[batidas.length - 1];
+        guidance.lastPunch = ultima;
+
+        if (batidas.length === 1) {
+            const entrada = toMin(batidas[0]);
+            guidance.stage = 'interval';
+            guidance.title = 'Intervalo';
+            guidance.summary = `Saída entre ${fmtHour(entrada + CONFIG.MIN_TURNO_COM_INTERVALO)} e ${fmtHour(entrada + CONFIG.MAX_HORAS_TURNO)}`;
+            guidance.nextPunch = entrada + CONFIG.MIN_TURNO_COM_INTERVALO;
+            guidance.nextWindowLabel = 'Próxima batida sugerida (saída 1º turno)';
+            guidance.h8 = entrada + CONFIG.CARGA_DIARIA;
+            guidance.h10 = entrada + CONFIG.MAX_HORAS_DIA;
+            guidance.idealExit = guidance.h8 - saldoSemanaAnt;
+        } else if (batidas.length === 2) {
+            const saida1 = toMin(batidas[1]);
+            guidance.stage = 'return';
+            guidance.title = 'Retorno';
+            guidance.intervalMin = saida1 + CONFIG.INTERVALO_MINIMO;
+            guidance.intervalMax = saida1 + CONFIG.INTERVALO_MAXIMO;
+            guidance.summary = `Retorno entre ${fmtHour(guidance.intervalMin)} e ${fmtHour(guidance.intervalMax)}`;
+            guidance.nextPunch = guidance.intervalMin;
+            guidance.nextWindowLabel = 'Janela de retorno do intervalo';
+            const trabalhadoTurno1 = saida1 - toMin(batidas[0]);
+            guidance.h8 = saida1 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
+            guidance.h10 = saida1 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
+            guidance.idealExit = guidance.h8 - saldoSemanaAnt;
+            guidance.copyTarget = guidance.intervalMin;
+            guidance.copyLabel = 'Copiar retorno mínimo';
+        } else if (batidas.length === 3) {
+            const entrada2 = toMin(batidas[2]);
+            const trabalhadoTurno1 = toMin(batidas[1]) - toMin(batidas[0]);
+            guidance.stage = 'exit';
+            guidance.title = 'Saída';
+            guidance.h8 = entrada2 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
+            guidance.h10 = entrada2 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
+            guidance.idealExit = guidance.h8 - saldoSemanaAnt;
+            guidance.summary = `Saída 8h: ${fmtHour(guidance.h8)} · 10h: ${fmtHour(guidance.h10)}`;
+            guidance.nextPunch = guidance.h8;
+            guidance.nextWindowLabel = 'Próxima batida sugerida (saída final)';
+            guidance.copyTarget = guidance.idealExit;
+            guidance.copyLabel = 'Copiar saída ideal';
+        } else if (batidas.length === 4) {
+            guidance.stage = 'done';
+            guidance.title = 'Jornada encerrada';
+            guidance.summary = '4 batidas registradas';
+        } else if (batidas.length >= 5) {
+            guidance.stage = 'extra';
+            guidance.title = 'Ajuste com justificativa';
+            guidance.summary = `${batidas.length} batidas: registre justificativa`;
+        }
+
+        return guidance;
+    }
+
+    function calcularInterjornadaMirror(ultimaBatidaHoje, primeiraBatidaAmanha) {
+        if (!ultimaBatidaHoje) return { podeBater: true, texto: 'ℹ️ Sem batida hoje', proximaPermitida: null, restanteMin: null };
+        const ultimaSaida = toMin(ultimaBatidaHoje);
+        if (ultimaSaida === null) return { podeBater: true, texto: 'ℹ️ Sem batida válida hoje', proximaPermitida: null, restanteMin: null };
+
+        const amanha = new Date();
+        amanha.setDate(amanha.getDate() + 1);
+        const dataRef = primeiraBatidaAmanha ? amanha : new Date();
+        const base = primeiraBatidaAmanha ? toMin(primeiraBatidaAmanha) : ultimaSaida;
+
+        if (primeiraBatidaAmanha) {
+            const diff = base - ultimaSaida; // assume mesmo dia base (minutos)
+            // Ajuste: se a batida de amanhã for menor, considerar virada de dia
+            const diffReal = base >= ultimaSaida ? base - ultimaSaida : (base + 1440) - ultimaSaida;
+            const pode = diffReal >= CONFIG.DESCANSO_MINIMO;
+            return {
+                podeBater: pode,
+                texto: pode ? '✅ Interjornada OK' : `⏳ ${fmtMin(CONFIG.DESCANSO_MINIMO - diffReal)}`,
+                proximaPermitida: fmtHour(ultimaSaida + CONFIG.DESCANSO_MINIMO),
+                restanteMin: Math.max(0, CONFIG.DESCANSO_MINIMO - diffReal)
+            };
+        }
+
+        // Sem batida amanhã ainda: informa horário mínimo de amanhã
+        const proxima = ultimaSaida + CONFIG.DESCANSO_MINIMO;
+        return {
+            podeBater: false,
+            texto: `⏳ A partir de ${fmtHour(proxima)}`,
+            proximaPermitida: fmtHour(proxima),
+            restanteMin: CONFIG.DESCANSO_MINIMO
+        };
+    }
+
     /* =========================================================
        SECAO 10: EXTRACAO DOM DO ESPELHO
     ========================================================= */
+
+    function classificarBatida(el) {
+        if (el.classList.contains('prevista')) return 'prevista';
+        if (el.classList.contains('manual')) return 'manual';
+        if (el.classList.contains('original')) return 'original';
+        if (el.classList.contains('remocao') || el.classList.contains('removida') || el.classList.contains('deleted')) return 'remocao';
+        if (el.classList.contains('bonus') || el.classList.contains('adicional') || el.classList.contains('sobreaviso')) return 'bonus';
+        return 'original';
+    }
 
     function extrairDadosDOM() {
         const dias = [...document.querySelectorAll('.v-calendar-weekly__day')];
@@ -847,7 +983,17 @@
             const data = new Date(hoje.getFullYear(), hoje.getMonth(), numeroDia);
             const weekDay = data.getDay();
 
-            const batidas = [...day.querySelectorAll('.batida')].filter(x => !x.classList.contains('prevista')).map(x => x.textContent.trim());
+            const batidaEls = [...day.querySelectorAll('.batida')];
+            // Mantem previstas apenas se tiverem horario (dia atual pode ter previstas vazias)
+            const batidas = [];
+            const batidaTipos = [];
+            batidaEls.forEach(el => {
+                const tipo = classificarBatida(el);
+                const texto = el.textContent.trim();
+                if (tipo === 'prevista' && !texto) return; // ignora slots previstos vazios
+                batidas.push(texto);
+                batidaTipos.push(tipo);
+            });
             const possuiBatidas = batidas.length > 0;
             const isBusinessDay = (weekDay !== 0 && weekDay !== 6 && !isHoliday) || possuiBatidas;
 
@@ -855,13 +1001,24 @@
             const saldo = isBusinessDay ? trabalhado - CONFIG.CARGA_DIARIA : 0;
             const inconsistencia = !isFuture && isBusinessDay && batidas.length > 0 && (batidas.length % 2 !== 0);
 
-            resultado.push({ data, dateKey: formatDateKey(data), isToday, isFuture, isHoliday, isBusinessDay, batidas, trabalhado, saldo, inconsistencia });
+            resultado.push({ data, dateKey: formatDateKey(data), isToday, isFuture, isHoliday, isBusinessDay, batidas, batidaTipos, trabalhado, saldo, inconsistencia, dayEl: day });
         });
 
         return resultado;
     }
 
     function extrairBancoHoras() {
+        // DOM real do espelho: .espelho-saldo .value (ex.: "41:54")
+        const saldoEl = document.querySelector('.espelho-saldo .value');
+        if (saldoEl) {
+            const texto = saldoEl.textContent.trim();
+            const match = texto.match(/([+-]?\d+):(\d+)/);
+            if (match) {
+                const horas = parseInt(match[1]), minutos = parseInt(match[2]);
+                return (horas * 60 + minutos) * (texto.includes('-') ? -1 : 1);
+            }
+        }
+
         const bancoEl = document.querySelector('.ahg-banco-horas, [data-testid="banco-horas"], .banco-horas');
         if (bancoEl) {
             const texto = bancoEl.textContent.trim();
@@ -871,10 +1028,11 @@
                 return (horas * 60 + minutos) * (texto.includes('-') ? -1 : 1);
             }
         }
+
         const elements = document.querySelectorAll('*');
         for (const el of elements) {
             const text = el.textContent;
-            if (/Banco\s*de\s*Horas/i.test(text) || /Saldo\s*Acumulado/i.test(text)) {
+            if (/Banco\s*de\s*Horas/i.test(text) || /Saldo\s*Acumulado/i.test(text) || /Hours\s*bank/i.test(text)) {
                 const parent = el.parentElement;
                 if (parent) {
                     const siblingText = parent.textContent;
@@ -939,18 +1097,40 @@
             html += `<div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'warn'}">${renderMin(r.hoje.trabalhado)}</span></div>
                 <div class="a-row infos"><span class="a-lbl">Saldo do dia</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'neg'}">${renderMin(r.hoje.saldo)}</span></div>`;
 
-            html += `<hr class="a-div"><div class="a-sec">Saídas</div>
-                <div class="a-row warn"><span class="a-lbl">⚠️ 6h</span><span class="a-val warn">${renderClock(r.h6)}</span></div>
-                <div class="a-row ok"><span class="a-lbl">✅ 8h</span><span class="a-val pos">${renderClock(r.h8)}</span></div>
-                <div class="a-row danger"><span class="a-lbl">⛔️ 10h</span><span class="a-val neg">${renderClock(r.h10)}</span></div>
-                <div class="a-row infos"><span class="a-lbl">🏆 Saída ideal</span><span class="a-val neu">${renderClock(r.saidaIdeal)}</span></div>`;
-
-            if (r.retornoMinimo) {
-                html += `<hr class="a-div"><div class="a-sec">Intervalo</div>
-                    <div class="a-row infos"><span class="a-lbl">⏳ Retorno mínimo</span><span class="a-val neu">${renderClock(r.retornoMinimo)}</span></div>
-                    <div class="a-row warn"><span class="a-lbl">⚠️ Retorno máximo</span><span class="a-val warn">${renderClock(r.retornoMaximo)}</span></div>`;
+            // Objetivos / próximas batidas
+            html += `<hr class="a-div"><div class="a-sec">Objetivos</div>`;
+            if (r.guidance.lastPunch) {
+                html += `<div class="a-row infos"><span class="a-lbl">⏱ Última batida</span><span class="a-val neu">${renderText(r.guidance.lastPunch)}</span></div>`;
             }
-            html += `<div class="a-row infos"><span class="a-lbl">🛌 Retorne depois das</span><span class="a-val neu">${renderClock(r.retorno11h)}</span></div>`;
+            if (r.guidance.nextPunch !== null) {
+                html += `<div class="a-row ${r.guidance.stage === 'done' ? 'ok' : 'infos'}"><span class="a-lbl">🎯 ${r.guidance.title}</span><span class="a-val ${r.guidance.stage === 'done' ? 'pos' : 'neu'}">${renderClock(r.guidance.nextPunch)}<small>${escapeHtml(r.guidance.summary)}</small></span></div>`;
+            }
+            if (r.retornoMinimo) {
+                html += `<div class="a-row infos"><span class="a-lbl">⏸ Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} → ${renderClock(r.retornoMaximo)}</span></div>`;
+            }
+            html += `<div class="a-row ${r.interjornada.podeBater ? 'ok' : 'warn'}"><span class="a-lbl">🛌 Interjornada</span><span class="a-val ${r.interjornada.podeBater ? 'pos' : 'warn'}">${escapeHtml(r.interjornada.texto)}<small>${r.interjornada.proximaPermitida ? 'mínimo: ' + renderClock(toMin(r.interjornada.proximaPermitida)) : ''}</small></span></div>`;
+
+            // Links rápidos de calendário
+            const gcal8 = buildGoogleCalendarUrl('Saída 8h', r.h8, null);
+            const out8 = buildOutlookCalendarUrl('Saída 8h', r.h8, null);
+            const gcalIdeal = buildGoogleCalendarUrl('Saída ideal', r.saidaIdeal, null);
+            const outIdeal = buildOutlookCalendarUrl('Saída ideal', r.saidaIdeal, null);
+            const gcal10 = buildGoogleCalendarUrl('Limite 10h', r.h10, null);
+            const out10 = buildOutlookCalendarUrl('Limite 10h', r.h10, null);
+            html += `<div class="a-row infos" style="flex-wrap:wrap;gap:4px;"><span class="a-lbl">📅 Calendário</span>
+                <span class="a-val neu" style="display:flex;gap:4px;flex-wrap:wrap;">
+                    ${gcal8 ? `<a href="${escapeHtml(gcal8)}" target="_blank" rel="noopener" class="ahg-btn ahg-btn-sm">Google 8h</a>` : ''}
+                    ${out8 ? `<a href="${escapeHtml(out8)}" target="_blank" rel="noopener" class="ahg-btn ahg-btn-sm">Outlook 8h</a>` : ''}
+                    ${gcalIdeal ? `<a href="${escapeHtml(gcalIdeal)}" target="_blank" rel="noopener" class="ahg-btn ahg-btn-sm">Google ideal</a>` : ''}
+                    ${outIdeal ? `<a href="${escapeHtml(outIdeal)}" target="_blank" rel="noopener" class="ahg-btn ahg-btn-sm">Outlook ideal</a>` : ''}
+                </span>
+            </div>`;
+
+            html += `<hr class="a-div"><div class="a-sec">Marcos do dia</div>
+                <div class="a-row warn"><span class="a-lbl">⚠️ 6h turno</span><span class="a-val warn">${renderClock(r.h6)}</span></div>
+                <div class="a-row ok"><span class="a-lbl">✅ 8h dia</span><span class="a-val pos">${renderClock(r.h8)}</span></div>
+                <div class="a-row danger"><span class="a-lbl">⛔️ 10h limite</span><span class="a-val neg">${renderClock(r.h10)}</span></div>
+                <div class="a-row infos"><span class="a-lbl">🏆 Saída ideal</span><span class="a-val neu">${renderClock(r.saidaIdeal)}</span></div>`;
 
             html += `<hr class="a-div"><div class="a-sec">Semanal — sem. ${getWeekNumber(new Date())}</div>
                 <div class="a-row ${r.saldoSemana >= 0 ? 'ok' : 'warn'}"><span class="a-lbl">Saldo semanal</span>
@@ -1132,6 +1312,33 @@
         setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
+    function buildGoogleCalendarUrl(titulo, descricao, startMinute, endMinute, baseDate = new Date()) {
+        if (startMinute === null || startMinute === undefined) return null;
+        const start = minuteToDate(baseDate, startMinute);
+        const end = endMinute !== null ? minuteToDate(baseDate, endMinute) : new Date(start.getTime() + 60000);
+        const params = new URLSearchParams();
+        params.set('action', 'TEMPLATE');
+        params.set('text', `${CONFIG.GCAL_TITLE_PREFIX}${titulo}`);
+        params.set('details', descricao || '');
+        params.set('ctz', CONFIG.GCAL_TIMEZONE);
+        params.set('dates', `${fmtGoogleCalendarDate(start)}/${fmtGoogleCalendarDate(end)}`);
+        return `https://calendar.google.com/calendar/u/${CONFIG.GCAL_USER_PATH}/r/eventedit?${params.toString()}`;
+    }
+
+    function buildOutlookCalendarUrl(titulo, descricao, startMinute, endMinute, baseDate = new Date()) {
+        if (startMinute === null || startMinute === undefined) return null;
+        const start = minuteToDate(baseDate, startMinute);
+        const end = endMinute !== null ? minuteToDate(baseDate, endMinute) : new Date(start.getTime() + 60000);
+        const params = new URLSearchParams();
+        params.set('path', '/calendar/action/compose');
+        params.set('rru', 'addevent');
+        params.set('subject', `${CONFIG.GCAL_TITLE_PREFIX}${titulo}`);
+        params.set('body', descricao || '');
+        params.set('startdt', start.toISOString());
+        params.set('enddt', end.toISOString());
+        return `https://outlook.office.com/calendar/0/deeplink/compose?${params.toString()}`;
+    }
+
     /* =========================================================
        SECAO 15: EXPORTACAO MULTI-FORMATO (F-016)
     ========================================================= */
@@ -1198,7 +1405,7 @@
     ========================================================= */
 
     const BatidaUI = {
-        panel: null, fab: null, expanded: false, alarmeInterval: null,
+        panel: null, fab: null, expanded: false, configExpanded: false, alarmeInterval: null,
 
         init() { this.criarFAB(); this.criarPanel(); this.iniciarAlarmeLoop(); Logger.registerModule('BatidaUI', 'ok', 'Painel de batida inicializado'); },
 
@@ -1230,6 +1437,7 @@
             <div class="a-tit">
                 ⏱ Jornada
                 <span class="ahg-privacy-btn" id="ahg-privacy-batida" title="Alternar privacidade">${privacyIcon()}</span>
+                <span class="ahg-settings-btn" id="ahg-settings-batida" title="Configurações">⚙️</span>
                 <span class="a-x" id="ahg-close-batida">–</span>
             </div>
             <div class="a-body">`;
@@ -1254,15 +1462,6 @@
                     <div class="ahg-card-tit">⏸ Intrajornada (Art. 71 CLT)</div>
                     <div class="ahg-card-val neu">${intrajornada.retornoMin} → ${intrajornada.retornoMax}</div>
                     <div class="ahg-card-sub">Retorno permitido: 30min a 2h de intervalo</div>
-                </div>`;
-            }
-
-            // F-003: Alarme
-            if (cards.includes('alarme') || zen) {
-                const active = zen ? 'ahg-card-active' : '';
-                html += `<div class="ahg-card ${active}" data-card="alarme">
-                    <div class="ahg-card-tit">🔔 Alarmes</div>
-                    ${this.renderAlarmeControls(cfg)}
                 </div>`;
             }
 
@@ -1293,18 +1492,21 @@
                     <button class="ahg-btn ahg-btn-sm" id="ahg-export-text">📋 Copiar texto</button>
                 </div>`;
 
-            // F-017/F-020: Config
-            html += `<hr class="a-div"><div class="a-sec">Configurações</div>
-                <div class="ahg-config-grid" style="padding:4px 0;">
-                    <div class="ahg-config-item"><span class="ahg-config-label">Tema</span>
-                        <select class="ahg-config-select" id="ahg-tema-batida">
-                            <option value="auto" ${cfg.tema === 'auto' ? 'selected' : ''}>Auto</option>
-                            <option value="light" ${cfg.tema === 'light' ? 'selected' : ''}>Claro</option>
-                            <option value="dark" ${cfg.tema === 'dark' ? 'selected' : ''}>Escuro</option>
-                        </select>
-                    </div>
-                    <div class="ahg-config-item">
-                        <label class="ahg-toggle"><input type="checkbox" id="ahg-zen-batida" ${cfg.modoZen ? 'checked' : ''}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span>Modo Zen</label>
+            // F-017/F-020/F-003: Configurações colapsáveis
+            html += `<hr class="a-div"><div class="a-sec" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" id="ahg-config-header">Configurações <span style="font-size:10px;opacity:.7;">${this.configExpanded ? '▲' : '▼'}</span></div>
+                <div id="ahg-config-body" style="display:${this.configExpanded ? 'block' : 'none'};padding:4px 0;">
+                    <div class="ahg-config-grid">
+                        <div class="ahg-config-item">${this.renderAlarmeControls(cfg)}</div>
+                        <div class="ahg-config-item"><span class="ahg-config-label">Tema</span>
+                            <select class="ahg-config-select" id="ahg-tema-batida">
+                                <option value="auto" ${cfg.tema === 'auto' ? 'selected' : ''}>Auto</option>
+                                <option value="light" ${cfg.tema === 'light' ? 'selected' : ''}>Claro</option>
+                                <option value="dark" ${cfg.tema === 'dark' ? 'selected' : ''}>Escuro</option>
+                            </select>
+                        </div>
+                        <div class="ahg-config-item">
+                            <label class="ahg-toggle"><input type="checkbox" id="ahg-zen-batida" ${cfg.modoZen ? 'checked' : ''}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span>Modo Zen</label>
+                        </div>
                     </div>
                 </div>`;
 
@@ -1314,6 +1516,8 @@
             // Listeners
             $.on($.qs('#ahg-close-batida', this.panel), 'click', () => this.toggle());
             $.on($.qs('#ahg-privacy-batida', this.panel), 'click', () => { togglePrivacyHidden(); this.render(); });
+            $.on($.qs('#ahg-settings-batida', this.panel), 'click', () => { this.configExpanded = !this.configExpanded; this.render(); });
+            $.on($.qs('#ahg-config-header', this.panel), 'click', () => { this.configExpanded = !this.configExpanded; this.render(); });
             $.on($.qs('#ahg-export-ics', this.panel), 'click', () => this.exportarICS(shared));
             $.on($.qs('#ahg-export-text', this.panel), 'click', () => this.copiarTexto(shared));
             $.on($.qs('#ahg-tema-batida', this.panel), 'change', (e) => { ConfigStore.patch({ tema: e.target.value }); Tema.atualizar(); this.render(); });
@@ -1358,12 +1562,9 @@
         renderAlarmeControls(cfg) {
             const ativo = cfg.alarmeAtivo;
             return `
-                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                    <span class="ahg-config-label">🔔 Alarmes <small style="opacity:.7;">${ativo ? '✅ 8h · ⛔ 10h' : 'desligados'}</small></span>
                     <label class="ahg-toggle"><input type="checkbox" id="ahg-alarme-master" ${ativo ? 'checked' : ''}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span></label>
-                    <span style="font-size:11px;">${ativo ? 'Alarmes ativos' : 'Alarmes desativados'}</span>
-                </div>
-                <div style="font-size:10px;color:var(--ahg-text-label);opacity:.7;">
-                    ${ativo ? '✅ 8h · ⛔ 10h · 🚨 12h' : 'Clique para ativar alarmes de jornada'}
                 </div>`;
         },
 
@@ -1439,11 +1640,36 @@
                 meta: { schema_version: this.SCHEMA_VERSION, script_version: CONFIG.VERSAO, timestamp: new Date().toISOString(), url: window.location.href, page: page, pagina_titulo: document.title },
                 ambiente: { userAgent: navigator.userAgent, platform: navigator.platform, language: navigator.language, viewport: `${window.innerWidth}x${window.innerHeight}`, tema_detectado: Tema.get(), tema_configurado: cfg.tema, tampermonkey: typeof GM_getValue === 'function', notification_permission: 'Notification' in window ? Notification.permission : 'unsupported' },
                 modulos: modulos.map(m => ({ nome: m.nome, status: m.status, mensagem: m.mensagem, stack: m.stack })),
+                feature_flags: cfg.flags,
+                validacao_dom: this._validarDOM(page),
                 config: cfg, localStorage_snapshot: this._snapshotLocalStorage(),
                 error_log: parseJson(localStorage.getItem('@ahgora-panel/error-log') || '[]', []),
                 jornada_atual: { estado: shared.status || 'DESCONHECIDO', batidas_hoje: shared.todayPunches || [], trabalhado_min: shared.workedToday || 0, saldo_min: shared.dayBalance || 0, proxima_batida_permitida: null, saida_ideal: shared.idealExit || null },
                 auto_analysis: this._autoAnalysis(modulos)
             };
+        },
+
+        _validarDOM(page) {
+            const checks = {};
+            if (page === 'mirror') {
+                checks.painel = !!document.getElementById('ahg-panel');
+                checks.fab = !!document.getElementById('ahg-fab');
+                checks.privacy_fab = !!document.getElementById('ahg-eye-fab-mirror');
+                checks.totais_no_calendario = document.querySelectorAll('.ahg-day-total').length;
+                checks.botoes_edicao = document.querySelectorAll('.ahg-day-edit-btn').length;
+                checks.badges_inconsistencia = document.querySelectorAll('.ahg-cal-overlay.inconsistencia').length;
+                checks.badges_pendentes = document.querySelectorAll('.ahg-cal-overlay.pendente').length;
+                checks.calendario_presente = !!document.querySelector('.v-calendar-weekly');
+            } else if (page === 'batida') {
+                checks.fab = !!document.getElementById('ahg-batida-fab');
+                checks.painel = !!document.getElementById('ahg-batida-panel');
+                checks.privacy_fab = !!document.getElementById('ahg-eye-fab-logger');
+                checks.cards_interjornada = document.querySelectorAll('[data-card="interjornada"]').length;
+                checks.cards_intrajornada = document.querySelectorAll('[data-card="intrajornada"]').length;
+                checks.cards_historico = document.querySelectorAll('[data-card="historico"]').length;
+            }
+            checks.versao_singleton = window.__ahgPanelV3 || null;
+            return checks;
         },
 
         _snapshotLocalStorage() {
@@ -1491,7 +1717,46 @@
         }
     };
 
-    window.ahgDiagnostico = () => Diagnostico.gerar();
+    const exposedWindow = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
+    exposedWindow.ahgDiagnostico = () => Diagnostico.gerar();
+    exposedWindow.ahgValidarFeatures = () => {
+        const page = PageAdapter.detect();
+        const checks = [];
+        const check = (id, cond, desc) => checks.push({ feature: id, ok: !!cond, desc });
+
+        if (page === 'mirror') {
+            const url = window.location.href;
+            const isIframeMirror = url.includes('mirror.app.ahgora.com.br');
+            const isParentMirror = url.includes('/externo/mirror') && !isIframeMirror;
+            check('contexto_mirror', true, isParentMirror ? 'página pai do espelho (dados no iframe)' : 'iframe/página do espelho com calendário');
+            check('F001_interjornada', document.querySelector('.a-row .a-lbl')?.textContent?.includes('Interjornada'), 'painel mostra interjornada');
+            check('F002_intrajornada', !!document.querySelector('.a-row .a-lbl')?.textContent?.includes('Intrajornada'), 'painel mostra intrajornada');
+            check('F005_overlay', !!document.getElementById('ahg-panel'), 'painel do espelho existe');
+            check('F006_inconsistencias', document.querySelectorAll('.ahg-cal-overlay.inconsistencia').length, 'badges de inconsistência no calendário');
+            check('F009_banco_horas', !!document.querySelector('.a-sec')?.textContent?.includes('Banco de Horas'), 'painel mostra banco de horas');
+            check('F017_tema', document.body.hasAttribute('data-ahg-tema'), 'tema aplicado no body');
+            check('F020_config_store', !!localStorage.getItem('@ahgora-panel/config'), 'config persistida no localStorage');
+            check('F026_diagnostico', typeof exposedWindow.ahgDiagnostico === 'function', 'função de diagnóstico exposta');
+            check('calendario_google', document.querySelector('a[href*="calendar.google.com"][href*="action=TEMPLATE"]'), 'link Google Calendar no painel');
+            check('calendario_outlook', document.querySelector('a[href*="outlook.office.com/calendar/0/deeplink/compose"]'), 'link Outlook Calendar no painel');
+            check('objetivos', !!document.querySelector('.a-sec')?.textContent?.includes('Objetivos'), 'seção Objetivos no painel');
+            check('ajustes_pendentes', document.querySelectorAll('.ahg-cal-overlay.pendente').length, 'badges de ajustes pendentes');
+        } else if (page === 'batida') {
+            check('F001_interjornada', !!document.querySelector('[data-card="interjornada"]'), 'card de interjornada no overlay');
+            check('F002_intrajornada', !!document.querySelector('[data-card="intrajornada"]'), 'card de intrajornada no overlay');
+            check('F003_alarme', typeof BatidaUI !== 'undefined' && BatidaUI.alarmeInterval, 'loop de alarme ativo');
+            check('F005_overlay', !!document.getElementById('ahg-batida-panel'), 'overlay de batida existe');
+            check('F019_historico', !!document.querySelector('[data-card="historico"]'), 'card de últimas batidas');
+            check('F017_tema', document.body.hasAttribute('data-ahg-tema'), 'tema aplicado no body');
+            check('F020_config_store', !!localStorage.getItem('@ahgora-panel/config'), 'config persistida no localStorage');
+            check('F026_diagnostico', typeof exposedWindow.ahgDiagnostico === 'function', 'função de diagnóstico exposta');
+            check('config_menu', !!document.getElementById('ahg-settings-batida'), 'botão de configurações no painel');
+        }
+
+        console.log('[AHGORA PANEL] Validação de features:');
+        console.table(checks.map(c => ({ feature: c.feature, ok: c.ok ? '✅' : '❌', desc: c.desc })));
+        return checks;
+    };
 
     /* =========================================================
        SECAO 19: PAGE ADAPTER
@@ -1500,13 +1765,16 @@
     const PageAdapter = {
         detect() {
             const url = window.location.href;
-            if (url.includes('mirror.app.ahgora.com.br')) return 'mirror';
-            if (url.includes('novabatidaonline') || url.includes('app.ahgora.com.br')) return 'batida';
+            if (url.includes('mirror.app.ahgora.com.br') || url.includes('/externo/mirror')) return 'mirror';
+            if (url.includes('novabatidaonline')) return 'batida';
+            if (url.includes('app.ahgora.com.br')) return 'batida';
             return 'unknown';
         },
 
         init() {
             const page = this.detect();
+            removerInstanciasAntigas();
+            ativarGuardaSingleton();
             injectCSS();
             if (page === 'mirror') { Logger.info('PageAdapter', 'Página detectada: mirror'); this.initMirror(); }
             else if (page === 'batida') { Logger.info('PageAdapter', 'Página detectada: batida'); this.initBatida(); }
@@ -1518,18 +1786,39 @@
         },
 
         initMirror() {
+            const url = window.location.href;
+            const isIframe = url.includes('mirror.app.ahgora.com.br');
+            const isParent = url.includes('/externo/mirror') && !isIframe;
+            let attempts = 0;
+
             const checkCalendar = setInterval(() => {
-                if (document.querySelector('.v-calendar-weekly')) {
+                attempts++;
+                const cal = document.querySelector('.v-calendar-weekly');
+                if (cal) {
                     clearInterval(checkCalendar);
+                    cleanupLegacyOverlays();
                     criarEstruturaMirror();
                     renderMirrorPanel();
                     agendarRenderMinutoMirror();
+                    injetarTotaisNoCalendario();
                     if (ConfigStore.isFeatureEnabled('F006_inconsistencias')) destacarInconsistencias();
+                    destacarAjustesNaoAprovados();
                     Logger.registerModule('MirrorUI', 'ok', 'Painel do espelho inicializado');
+                    return;
+                }
+                // Na pagina pai (/externo/mirror) o calendario fica no iframe cross-origin.
+                // Abortamos para nao deixar intervalo rodando indefinidamente; o painel sera criado dentro do iframe.
+                if (isParent && attempts >= 6) {
+                    clearInterval(checkCalendar);
+                    Logger.info('PageAdapter', 'Calendario nao encontrado na pagina pai (espelho em iframe). Painel sera inicializado no iframe.');
                 }
             }, 1000);
 
-            const observer = new MutationObserver(() => { if (ConfigStore.isFeatureEnabled('F006_inconsistencias')) destacarInconsistencias(); });
+            const observer = new MutationObserver(() => {
+                if (ConfigStore.isFeatureEnabled('F006_inconsistencias')) destacarInconsistencias();
+                injetarTotaisNoCalendario();
+                destacarAjustesNaoAprovados();
+            });
             $.ready(() => { const cal = document.querySelector('.v-calendar-weekly'); if (cal) observer.observe(cal, { childList: true, subtree: true }); });
         },
 
@@ -1546,20 +1835,169 @@
         setTimeout(() => { if (document.visibilityState === 'visible') renderMirrorPanel(); agendarRenderMinutoMirror(); }, msAteProximoMinuto);
     }
 
+    function removerInstanciasAntigas() {
+        // Remove paineis/estilos de versoes anteriores para garantir apenas uma instancia por pagina.
+        const idsAntigos = ['ahg-css-v5', 'ahg-css-v4', 'ahg-css-v3', 'ahg-panel-v2', 'ahg-fab-v2'];
+        idsAntigos.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) { el.remove(); Logger.info('INIT', `Elemento de versao anterior removido: ${id}`); }
+        });
+
+        // Remove elementos de outras versoes intermediarias (ex.: ahg-v3-*, ahg-eye-fab-logger).
+        document.querySelectorAll('[id^="ahg-v3-"], [class^="ahg-v3-"], #ahg-eye-fab-logger, #ahg-eye-fab-mirror').forEach(el => {
+            // Nao remove nosso proprio olho do espelho (criado em criarEstruturaMirror depois desta limpeza).
+            if (el.id === 'ahg-eye-fab-mirror' && window.__ahgPanelV3) return;
+            el.remove();
+            Logger.info('INIT', `Elemento de versao intermediaria removido: ${el.id || el.className}`);
+        });
+
+        // Se houver outro painel antigo sem nosso canario, removemos para evitar duplicatas.
+        const outroPanel = document.getElementById('ahg-panel');
+        if (outroPanel && !outroPanel.querySelector('.a-tit')) outroPanel.remove();
+    }
+
+    function ativarGuardaSingleton() {
+        // Observa o body e remove elementos de outras versoes caso sejam reinjetados.
+        const observer = new MutationObserver(() => removerInstanciasAntigas());
+        if (document.body) {
+            observer.observe(document.body, { childList: true, subtree: false });
+        } else {
+            $.ready(() => { if (document.body) observer.observe(document.body, { childList: true, subtree: false }); });
+        }
+    }
+
+    function cleanupLegacyOverlays() {
+        // Remove overlays de versoes antigas ou duplicatas que possam poluir o calendario.
+        document.querySelectorAll('.ahg-cal-overlay, .ahg-day-total, .ahg-day-total-rounded, .ahg-day-edit-btn, .ahg-day-violations').forEach(el => el.remove());
+    }
+
     function destacarInconsistencias() {
         const dias = document.querySelectorAll('.v-calendar-weekly__day');
         dias.forEach(day => {
-            if (day.classList.contains('v-outside')) return;
+            if (day.classList.contains('v-outside') || day.classList.contains('v-future')) return;
             const label = day.querySelector('.v-calendar-weekly__day-label');
             if (!label) return;
-            const batidas = [...day.querySelectorAll('.batida')].filter(x => !x.classList.contains('prevista'));
-            const isFuture = day.classList.contains('v-future');
+            const numeroDia = Number(label.textContent.trim());
+            if (!numeroDia) return;
+            const batidas = [...day.querySelectorAll('.batida')].filter(x => !x.classList.contains('prevista') && x.textContent.trim());
             const isWeekend = day.classList.contains('v-weekend');
-            if (!isFuture && !isWeekend && batidas.length > 0 && batidas.length % 2 !== 0) {
+            if (!isWeekend && batidas.length > 0 && batidas.length % 2 !== 0) {
                 if (!day.querySelector('.ahg-cal-overlay')) {
                     const overlay = $.el('div', { class: 'ahg-cal-overlay inconsistencia', text: '⚠️', title: 'Batida ímpar — justificativa necessária' });
                     day.appendChild(overlay);
                 }
+            }
+        });
+    }
+
+    function injetarTotaisNoCalendario() {
+        const dias = extrairDadosDOM();
+        dias.forEach(d => {
+            const day = d.dayEl;
+            if (!day) return;
+
+            if (!day.querySelector('.ahg-day-total') && d.batidas.length > 0 && d.trabalhado > 0) {
+                const total = $.el('div', { class: 'ahg-day-total', text: fmtMin(d.trabalhado), title: 'Total trabalhado no dia' });
+                day.appendChild(total);
+            }
+
+            if (!day.querySelector('.ahg-day-edit-btn')) {
+                const btn = $.el('button', { class: 'ahg-day-edit-btn', text: '✏️', title: 'Simular/editar batidas do dia' });
+                btn.style.cssText = 'position:absolute;bottom:4px;right:4px;z-index:20;background:var(--ahg-bg-card);border:1px solid var(--ahg-border);border-radius:4px;padding:1px 4px;font-size:10px;cursor:pointer;opacity:.7;transition:.15s;';
+                btn.addEventListener('mouseenter', () => btn.style.opacity = '1');
+                btn.addEventListener('mouseleave', () => btn.style.opacity = '.7');
+                btn.addEventListener('click', (e) => { e.stopPropagation(); abrirEditorDia(d); });
+                day.appendChild(btn);
+            }
+        });
+    }
+
+    function abrirEditorDia(dia) {
+        const existente = document.getElementById('ahg-day-editor');
+        if (existente) existente.remove();
+
+        const isDark = Tema.get() === 'dark';
+        const modal = $.el('div', { id: 'ahg-day-editor', style: 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000001;display:flex;align-items:center;justify-content:center;' });
+        const box = $.el('div', { style: `width:min(360px,95vw);background:${isDark ? '#111827' : '#fff'};border-radius:14px;padding:20px;color:${isDark ? '#dde' : '#1f2937'};font-family:Segoe UI,sans-serif;` });
+
+        const dataStr = dia.data.toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;"><h3 style="margin:0;font-size:16px;">✏️ ${dataStr}</h3><button id="ahg-day-editor-close" style="background:transparent;border:1px solid var(--ahg-border);color:${isDark ? '#dde' : '#1f2937'};padding:6px 12px;border-radius:6px;cursor:pointer;">Fechar</button></div>`;
+
+        html += `<div style="margin-bottom:12px;font-size:12px;">Simule batidas para calcular o total do dia.</div>`;
+        html += `<div id="ahg-day-editor-punches" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">`;
+        const punches = dia.batidas.length > 0 ? dia.batidas : ['08:00', '12:00', '13:00', '17:00'];
+        punches.forEach((p, i) => {
+            html += `<input type="time" class="ahg-day-punch-input" value="${p}" data-index="${i}" style="background:${isDark ? '#1f2937' : '#f3f4f6'};color:${isDark ? '#dde' : '#1f2937'};border:1px solid var(--ahg-border);border-radius:6px;padding:8px;">`;
+        });
+        html += `</div>`;
+        html += `<div style="display:flex;gap:8px;margin-bottom:12px;"><button id="ahg-day-add-punch" class="ahg-btn ahg-btn-sm">+ Batida</button><button id="ahg-day-rem-punch" class="ahg-btn ahg-btn-sm ahg-btn-danger">- Batida</button></div>`;
+        html += `<div style="font-size:14px;font-weight:700;margin-bottom:16px;">Total: <span id="ahg-day-total-preview">${fmtMin(calcularTrabalhado(punches))}</span></div>`;
+        html += `<div style="font-size:11px;opacity:.7;">Esta simulação não altera seus registros oficiais.</div>`;
+
+        box.innerHTML = html;
+        modal.appendChild(box);
+        document.body.appendChild(modal);
+
+        const atualizarPreview = () => {
+            const inputs = [...box.querySelectorAll('.ahg-day-punch-input')];
+            const valores = inputs.map(i => i.value).filter(v => v);
+            const total = calcularTrabalhado(valores);
+            $.qs('#ahg-day-total-preview', box).textContent = fmtMin(total);
+        };
+
+        $.on($.qs('#ahg-day-editor-close', box), 'click', () => modal.remove());
+        $.on(modal, 'click', (e) => { if (e.target === modal) modal.remove(); });
+        box.querySelectorAll('.ahg-day-punch-input').forEach(input => $.on(input, 'input', atualizarPreview));
+        $.on($.qs('#ahg-day-add-punch', box), 'click', () => {
+            const idx = box.querySelectorAll('.ahg-day-punch-input').length;
+            const input = $.el('input', { type: 'time', class: 'ahg-day-punch-input', 'data-index': idx, style: `background:${isDark ? '#1f2937' : '#f3f4f6'};color:${isDark ? '#dde' : '#1f2937'};border:1px solid var(--ahg-border);border-radius:6px;padding:8px;` });
+            $.on(input, 'input', atualizarPreview);
+            $.qs('#ahg-day-editor-punches', box).appendChild(input);
+            atualizarPreview();
+        });
+        $.on($.qs('#ahg-day-rem-punch', box), 'click', () => {
+            const inputs = box.querySelectorAll('.ahg-day-punch-input');
+            if (inputs.length > 1) inputs[inputs.length - 1].remove();
+            atualizarPreview();
+        });
+    }
+
+    function destacarAjustesNaoAprovados() {
+        const dias = document.querySelectorAll('.v-calendar-weekly__day');
+        dias.forEach(day => {
+            if (day.classList.contains('v-outside')) return;
+            const batidas = [...day.querySelectorAll('.batida')];
+            let temPendente = false;
+            batidas.forEach(b => {
+                if (b.dataset.ahgClassificado) return;
+                b.dataset.ahgClassificado = '1';
+                const tipo = classificarBatida(b);
+                if (tipo === 'manual') {
+                    b.style.cssText += 'border:1px dashed #f59e0b !important;background:rgba(245,158,11,.12) !important;color:#f59e0b !important;';
+                    b.title = 'Inclusão manual — aguardando aprovação';
+                    temPendente = true;
+                } else if (tipo === 'prevista') {
+                    b.style.cssText += 'border:1px dashed #9ca3af !important;opacity:.7;';
+                    b.title = 'Batida prevista';
+                } else if (tipo === 'remocao') {
+                    b.style.cssText += 'text-decoration:line-through !important;border:1px dashed #ef4444 !important;background:rgba(239,68,68,.12) !important;color:#ef4444 !important;';
+                    b.title = 'Remoção solicitada — aguardando aprovação';
+                    temPendente = true;
+                } else if (tipo === 'bonus') {
+                    b.style.cssText += 'border:1px dashed #7a6cff !important;background:rgba(122,108,255,.12) !important;color:#7a6cff !important;';
+                    b.title = 'Bonus / sobreaviso — aguardando aprovação';
+                    temPendente = true;
+                } else if (tipo === 'original') {
+                    b.style.cssText += 'color:#22c55e !important;';
+                    b.title = 'Batida aprovada';
+                }
+            });
+
+            // Indicador discreto de dia com ajustes pendentes
+            if (temPendente && !day.querySelector('.ahg-cal-overlay.pendente')) {
+                const overlay = $.el('div', { class: 'ahg-cal-overlay pendente', text: '📝', title: 'Ajustes pendentes de aprovação' });
+                overlay.style.cssText = 'background:rgba(245,158,11,.85);color:#fff;';
+                day.appendChild(overlay);
             }
         });
     }
