@@ -1,6 +1,6 @@
 # Guia: Atualizar o Ahgora Panel direto no Tampermonkey
 
-Este guia mostra como instalar ou atualizar o script `ahgora-panel.user.js` manualmente no editor do Tampermonkey, sem depender de download remoto.
+Este guia mostra como instalar ou atualizar o script `dist/ahgora-panel.user.js` manualmente no editor do Tampermonkey, sem depender de download remoto.
 
 ## Por que atualizar pelo editor?
 

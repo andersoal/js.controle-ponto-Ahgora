@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node smoke.test.js"
+    "test": "node smoke.test.js",
+    "qa:assisted": "node e2e/assisted-qa.js",
+    "qa:assisted:auto": "node e2e/assisted-qa.js --auto",
+    "qa:assisted:local": "node e2e/assisted-qa.js --auto --local"
   },
   "keywords": [],
   "author": "",

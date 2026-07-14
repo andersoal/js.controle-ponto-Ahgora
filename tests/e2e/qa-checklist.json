@@ -1,0 +1,153 @@
+{
+  "pages": [
+    {
+      "id": "mirror",
+      "name": "Espelho (Mirror)",
+      "url": "https://app.ahgora.com.br/externo/mirror",
+      "readySelector": ".v-calendar-weekly",
+      "items": [
+        {
+          "id": "mirror-panel-rendered",
+          "label": "Painel flutuante renderiza com título e versão",
+          "action": "none",
+          "assertion": "panelText.includes('Painel Inteligente v3')"
+        },
+        {
+          "id": "mirror-status-section",
+          "label": "Seção 'Status atual' exibe situação e batidas hoje",
+          "action": "none",
+          "assertion": "panelText.includes('Situação') && panelText.includes('Batidas hoje')"
+        },
+        {
+          "id": "mirror-goals-section",
+          "label": "Seção 'Marcos do dia' exibe 6h/8h/10h e saída ideal",
+          "action": "none",
+          "assertion": "panelText.includes('6h') && panelText.includes('8h') && panelText.includes('10h')"
+        },
+        {
+          "id": "mirror-bank-balance",
+          "label": "Seção 'Banco de Horas' aparece quando habilitada",
+          "action": "none",
+          "assertion": "panelText.includes('Banco de Horas')"
+        },
+        {
+          "id": "mirror-day-totals",
+          "label": "Células do calendário mostram totais do dia",
+          "action": "none",
+          "assertion": "await page.locator('.ahg-day-total').count() > 0"
+        },
+        {
+          "id": "mirror-edit-buttons",
+          "label": "Botão de edição por dia (✏) existe em dias úteis",
+          "action": "none",
+          "assertion": "await page.locator('.ahg-day-edit-btn').count() > 0"
+        },
+        {
+          "id": "mirror-theme-toggle",
+          "label": "Alternar tema para dark muda CSS --ahg-bg",
+          "action": "selectTheme",
+          "actionArg": "dark",
+          "assertion": "true"
+        },
+        {
+          "id": "mirror-details-modal",
+          "label": "Modal de detalhes mensais abre ao clicar em 'Horas realizadas'",
+          "action": "clickDetails",
+          "assertion": "await page.locator('#ahg-detail-modal').count() === 1"
+        },
+        {
+          "id": "mirror-privacy-toggle",
+          "label": "Botão de privacidade oculta/exibe horários no calendário",
+          "action": "togglePrivacy",
+          "assertion": "true"
+        },
+        {
+          "id": "mirror-punch-editor-open",
+          "label": "Editor de batidas abre para o dia 1",
+          "action": "openPunchEditor",
+          "actionArg": "1",
+          "assertion": "await page.locator('#ahg-punch-editor-2026-07-01').count() === 1"
+        },
+        {
+          "id": "mirror-punch-editor-multi",
+          "label": "Editor de batidas abre para o dia 8 mantendo o primeiro aberto",
+          "action": "openPunchEditor",
+          "actionArg": "8",
+          "assertion": "await page.locator('#ahg-punch-editor-2026-07-01').count() === 1 && await page.locator('#ahg-punch-editor-2026-07-08').count() === 1"
+        },
+        {
+          "id": "mirror-punch-editor-add",
+          "label": "Adiciona batida 18:00 no editor do dia 1",
+          "action": "addPunch",
+          "actionArg": "ahg-punch-editor-2026-07-01",
+          "assertion": "await page.locator('#ahg-punch-editor-2026-07-01 .ahg-pe-punch').count() === 5"
+        },
+        {
+          "id": "mirror-punch-editor-edit",
+          "label": "Edita primeira batida local para 08:30",
+          "action": "editPunch",
+          "actionArg": "ahg-punch-editor-2026-07-01",
+          "assertion": "true"
+        },
+        {
+          "id": "mirror-punch-editor-delete",
+          "label": "Remove uma batida do editor do dia 1",
+          "action": "deletePunch",
+          "actionArg": "ahg-punch-editor-2026-07-01",
+          "assertion": "await page.locator('#ahg-punch-editor-2026-07-01 .ahg-pe-punch').count() === 4"
+        },
+        {
+          "id": "mirror-punch-editor-save",
+          "label": "Salva override local no dia 1",
+          "action": "savePunchEditor",
+          "actionArg": "ahg-punch-editor-2026-07-01",
+          "assertion": "await page.locator('.v-calendar-weekly__day:nth-child(2).ahg-day-pending').count() === 1"
+        }
+      ]
+    },
+    {
+      "id": "logger",
+      "name": "Registrar Batida (Logger)",
+      "url": "https://app.ahgora.com.br/novabatidaonline",
+      "readySelector": "#clock",
+      "items": [
+        {
+          "id": "logger-panel-rendered",
+          "label": "Painel do logger renderiza com título e versão",
+          "action": "none",
+          "assertion": "panelText.includes('Logger v3')"
+        },
+        {
+          "id": "logger-last-punch",
+          "label": "Seção 'Última batida' está visível",
+          "action": "none",
+          "assertion": "panelText.includes('Última batida')"
+        },
+        {
+          "id": "logger-history",
+          "label": "Seção 'Histórico recente' está visível",
+          "action": "none",
+          "assertion": "panelText.includes('Histórico recente')"
+        },
+        {
+          "id": "logger-alarm-toggle",
+          "label": "Toggle master de alarme existe e responde",
+          "action": "toggleAlarm",
+          "assertion": "true"
+        },
+        {
+          "id": "logger-privacy-toggle",
+          "label": "Botão de privacidade funciona no logger",
+          "action": "togglePrivacy",
+          "assertion": "true"
+        },
+        {
+          "id": "logger-diagnostic",
+          "label": "Função global ahgDiagnostico existe e retorna versão",
+          "action": "none",
+          "assertion": "await page.evaluate(() => typeof ahgDiagnostico === 'function' && ahgDiagnostico().versao.startsWith('3.0'))"
+        }
+      ]
+    }
+  ]
+}

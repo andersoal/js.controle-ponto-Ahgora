@@ -43,7 +43,7 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 
 ## Configuracao rapida
 - Instalar Tampermonkey.
-- Carregar ahgora-panel.user.js (instalacao direta: https://github.com/jonathanfiss/js.controle-ponto-Ahgora/raw/refs/heads/master/ahgora-panel.user.js).
+- Carregar `dist/ahgora-panel.user.js` (instalacao direta: https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/dev/dist/ahgora-panel.user.js).
 - Acessar mirror/app Ahgora e validar carregamento do painel.
 
 ## Tolerancia de saldo diario

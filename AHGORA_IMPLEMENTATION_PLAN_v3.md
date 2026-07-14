@@ -1073,7 +1073,7 @@ alertas CLT, integração com calendários e logger de batidas ao Ahgora.
 
 ## Instalação
 1. Instale a extensão Tampermonkey.
-2. Clique no link de instalação: [ahgora-panel.user.js](...).
+2. Clique no link de instalação: [`dist/ahgora-panel.user.js`](dist/ahgora-panel.user.js).
 3. Acesse o espelho do Ahgora ou o novabatidaonline.
 
 ## Funcionalidades

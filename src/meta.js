@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ahgora — Painel Inteligente Local
 // @namespace    https://github.com/andersoal
-// @version      3.0.2
+// @version      3.1.0
 // @description  Painel com totais no calendario, logger de batidas, overlay de jornada na novabatidaonline, alarmes configuraveis, tema adaptativo e diagnostico
 // @author       Jonathan Fiss, Anderson Guarnier
 

@@ -8,7 +8,7 @@ import pathlib
 import sys
 import time
 
-SCRIPT_PATH = pathlib.Path("C:/ws/js.controle-ponto-Ahgora/ahgora-panel.user.js")
+SCRIPT_PATH = pathlib.Path("C:/ws/js.controle-ponto-Ahgora/dist/ahgora-panel.user.js")
 BATIDA_URL = "https://app.ahgora.com.br/novabatidaonline/?defaultDevice=a935336"
 MIRROR_URL = "https://mirror.app.ahgora.com.br"
 

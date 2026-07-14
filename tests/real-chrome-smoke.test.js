@@ -2,7 +2,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const userScript = fs.readFileSync(path.join(__dirname, '..', 'ahgora-panel.user.js'), 'utf8');
+const userScript = fs.readFileSync(path.join(__dirname, '..', 'dist', 'ahgora-panel.user.js'), 'utf8');
 
 (async () => {
   console.log('🚀 Real Chrome smoke test via CDP');
