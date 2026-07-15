@@ -136,23 +136,6 @@ export function openInNewTab(url) {
     if (win) win.opener = null;
 }
 
-export function createPrivacyFab({ id, icon, title, bottom = '20px', right, left, onClick }) {
-    if (document.getElementById(id)) return document.getElementById(id);
-
-    const btn = document.createElement('button');
-    btn.id = id;
-    btn.className = 'ahg-eye-fab';
-    btn.textContent = icon;
-    btn.title = title;
-    btn.style.bottom = bottom;
-    if (left !== undefined) btn.style.left = left;
-    if (right !== undefined) btn.style.right = right;
-
-    btn.addEventListener('click', onClick);
-    document.body.appendChild(btn);
-    return btn;
-}
-
 export function ensureDayChild(dayEl, className, tag = 'div') {
     let child = dayEl.querySelector(`.${className}`);
     if (!child) {

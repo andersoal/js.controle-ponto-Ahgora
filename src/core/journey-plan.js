@@ -41,7 +41,3 @@ export function setJourneyPlan(presetId) {
     gmSetJsonCrossOrigin(STORAGE_KEYS.JOURNEY_PLAN, plan);
     return plan;
 }
-
-export function toggleJourneyPreset(presetId) {
-    return presetId === 'p10' ? 'p8' : 'p10';
-}

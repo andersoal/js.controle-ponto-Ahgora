@@ -47,19 +47,6 @@ export const CSS_COMPONENTS = `
 .ahg-fab:hover { opacity: 1; transform: scale(1.05); }
 .ahg-fab.hidden { opacity: 0; pointer-events: none; transform: scale(0.8); }
 
-.ahg-eye-fab {
-    position: fixed; z-index: var(--z-fab);
-    width: 44px; height: 44px; border-radius: 50%;
-    background: var(--ahg-bg-card); color: var(--ahg-text);
-    border: 1px solid var(--ahg-border);
-    cursor: pointer; font-size: 18px;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 4px 14px var(--ahg-shadow);
-    opacity: .9; transition: opacity .2s, transform .2s;
-}
-.ahg-eye-fab:hover { opacity: 1; transform: scale(1.05); }
-.ahg-eye-fab.hidden { opacity: 0; pointer-events: none; transform: scale(0.8); }
-
 .ahg-floating-panel {
     position: fixed;
     display: flex; flex-direction: column;
@@ -138,6 +125,10 @@ export const CSS_COMPONENTS = `
     z-index: 10; pointer-events: none; white-space: nowrap;
 }
 .ahg-hide-times .ahg-day-total { opacity: .3; filter: blur(1px); }
+.ahg-hide-times .ahg-day-total-rounded { opacity: .3; filter: blur(1px); }
+.ahg-hide-times .ahg-pe-punch-time,
+.ahg-hide-times .ahg-pe-total-val,
+.ahg-hide-times .ahg-pe-violations { filter: blur(4px); user-select: none; }
 
 .ahg-privacy-btn {
     margin-left: auto;

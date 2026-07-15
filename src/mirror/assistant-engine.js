@@ -143,7 +143,7 @@ export function buildAssistantPlan({
         schedule.push(suggestion('return', returnTime, 'planned'));
         schedule.push(suggestion('exitFinal', exitFinal, 'planned'));
         workedPlanned = planMinutes;
-        idealExit = exitFinal - saldoSemana;
+        idealExit = capExit(exitFinal - saldoSemana, returnTime, shift1, 'idealExit');
     } else if (count === 1) {
         stage = 'interval';
         const entrada = toMin(batidas[0]);

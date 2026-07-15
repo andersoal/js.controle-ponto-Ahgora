@@ -36,18 +36,6 @@ export function privacyButtonState() {
     };
 }
 
-export function syncPrivacyButtons(ids = ['ahg-eye-fab-mirror', 'ahg-eye-fab-logger']) {
-    const state = privacyButtonState();
-    ids.forEach((id) => {
-        const btn = document.getElementById(id);
-        if (btn) {
-            btn.textContent = state.icon;
-            btn.title = state.title;
-            btn.setAttribute('aria-pressed', String(state.pressed));
-        }
-    });
-}
-
 export function renderClock(m) {
     if (m === null || m === undefined) return '--:--';
     return isPrivacyHidden() ? PRIVACY_MASK : fmtHour(m);

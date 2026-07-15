@@ -31,6 +31,16 @@ describe('AssistantEngine — buildAssistantPlan', () => {
             expect(plan.next.time).toBe(min(8, 30));
             expect(plan.enforcement.find((e) => e.ruleId === 'BR-001')).toBeUndefined();
         });
+
+        it('TC-BR005: saída ideal projetada também respeita os tetos legais', () => {
+            // Saldo semanal −3h pediria ideal 20:00; projeção 08:00/12:00/13:00/17:00
+            // → teto do dia (10h) e do turno (6h) limitam em 19:00.
+            const plan = buildAssistantPlan({ batidas: [], planMinutes: 480, saldoSemana: -180, now: min(8, 0) });
+            expect(plan.idealExit).toBe(min(19, 0));
+            const rule = plan.enforcement.find((e) => e.ruleId === 'BR-005' || e.ruleId === 'BR-004');
+            expect(rule).toBeTruthy();
+            expect(rule.level).toBe('hard-block');
+        });
     });
 
     describe('1 batida (interval) — plano do dia inteiro', () => {

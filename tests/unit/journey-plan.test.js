@@ -3,8 +3,7 @@ import {
     JOURNEY_PRESETS,
     normalizeJourneyPlan,
     getJourneyPlan,
-    setJourneyPlan,
-    toggleJourneyPreset
+    setJourneyPlan
 } from '../../src/core/journey-plan.js';
 
 // Simula o storage do Tampermonkey (GM_*), o seam real de persistência.
@@ -49,11 +48,5 @@ describe('JourneyPlan', () => {
         expect(plan.presetId).toBe('p10');
         expect(plan.minutes).toBe(600);
         expect(plan.updatedAt).toBeTruthy();
-    });
-
-    it('toggle alterna entre 8h e 10h', () => {
-        expect(toggleJourneyPreset('p8')).toBe('p10');
-        expect(toggleJourneyPreset('p10')).toBe('p8');
-        expect(toggleJourneyPreset('desconhecido')).toBe('p10');
     });
 });

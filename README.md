@@ -41,6 +41,12 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 | BR-014 | Aviso de folga/abono | informational | SHOW_COMP_LEAVE_NOTICE | SHOW_COMP_LEAVE_NOTICE=true | TC-BR014-01 |
 | BR-015 | Aviso de ausencias | informational | SHOW_ABSENCE_PROCESS_NOTICE | SHOW_ABSENCE_PROCESS_NOTICE=true | TC-BR015-01 |
 
+> **Nota — assistente de fluxo (v3.1):** a matriz acima classifica **violações**. O assistente
+> (`src/mirror/assistant-engine.js`) reporta o nível conforme a regra incide **sobre a sugestão**:
+> `hard-block` quando a sugestão foi limitada/movida pela regra; `warning-only` quando a sugestão
+> fica com destaque de risco; `informational` quando nada muda no cálculo (ex.: plano exatamente
+> no teto de 10h). Um mesmo ID pode, portanto, aparecer em níveis diferentes conforme o contexto.
+
 ## Configuracao rapida
 - Instalar Tampermonkey.
 - Carregar `dist/ahgora-panel.user.js` (instalacao direta: https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/dev/dist/ahgora-panel.user.js).
