@@ -3,6 +3,7 @@
  * Gerencia o histórico local de batidas, com reconciliação automática com o mirror.
  */
 
+import { bus } from '../core/event-bus.js';
 import { STORAGE_KEYS, gmGetJson, gmSetJson } from '../core/storage-adapter.js';
 import { formatDateKey, normalizePunchTime, shiftPunchTime, toMin } from '../core/time-utils.js';
 
@@ -14,6 +15,8 @@ export function getPunchHistory() {
 
 export function setPunchHistory(history) {
     gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history.slice(0, LOGGER_HISTORY_MAX_ENTRIES));
+    // Toda gravação avisa a UI: o painel do Logger re-renderiza sem F5 (issues/0004).
+    bus.emit('punch-history:changed');
 }
 
 export function savePunch(time, date = new Date(), timestamp = Date.now()) {

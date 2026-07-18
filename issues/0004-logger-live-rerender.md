@@ -43,3 +43,24 @@ atualizam sozinhos no painel do Logger — sem F5:
 ## Blocked by
 
 - [issues/0002 — Prefactor: extrair getLoggerVm e buildMirrorSummary](0002-prefactor-extract-composition-functions.md)
+
+## Resolution (implementação 2026-07-18 — falta só a contraprova ao vivo)
+
+Implementado:
+
+- **Mesma aba**: `setPunchHistory` emite `punch-history:changed` no bus — toda gravação
+  (inclusive a captura do modal-guard, que chama `savePunch`) re-renderiza o painel.
+- **Entre abas/origens**: `startLoggerLiveRefresh` (`src/logger/live-refresh.js`) escuta
+  `SHARED_TRUTH` via `GM_addValueChangeListener` quando disponível
+  (`gmOnValueChange`, storage-adapter) com fallback de polling leve (5s) sobre
+  `updatedAt`; refresh periódico de 60s mantém "Trabalhado"/sugestões com o relógio.
+- **Estado preservado**: re-render usa o mecanismo existente (`keepMinimized`,
+  `makePanelDraggable` idempotente, posição/privacidade vindas do storage); teste cobre
+  minimização preservada e ausência de listener fantasma entre ciclos.
+
+Testes em `tests/unit/live-refresh.test.js` (7): mesma aba, polling, listener GM,
+relógio, stop/no-leak e integração "--:-- → 14:25 sem reload". Suíte 261/261,
+smoke 34/34, bundle rebuildado.
+
+**Pendente**: verificação ao vivo com o rig numa batida natural (~1 min sem reload) —
+depende da próxima janela de batida do usuário.

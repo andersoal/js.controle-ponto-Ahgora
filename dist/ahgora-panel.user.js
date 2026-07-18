@@ -74,6 +74,21 @@
     } catch (_) {
     }
   }
+  function gmOnValueChange(key, callback) {
+    if (typeof GM_addValueChangeListener !== "function") return null;
+    try {
+      const id = GM_addValueChangeListener(key, (_name, _oldValue, newValue, remote) => {
+        callback(newValue, remote);
+      });
+      return () => {
+        if (typeof GM_removeValueChangeListener === "function") {
+          GM_removeValueChangeListener(id);
+        }
+      };
+    } catch (_) {
+      return null;
+    }
+  }
   var CROSS_ORIGIN_DOMAIN = ".ahgora.com.br";
   var CROSS_ORIGIN_MAX_AGE = 7 * 24 * 60 * 60;
   function isCrossOriginContext() {
@@ -3531,6 +3546,7 @@
   }
   function setPunchHistory(history) {
     gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history.slice(0, LOGGER_HISTORY_MAX_ENTRIES));
+    bus.emit("punch-history:changed");
   }
   function savePunch(time, date = /* @__PURE__ */ new Date(), timestamp = Date.now()) {
     const normalized = normalizePunchTime(time);
@@ -3551,6 +3567,35 @@
     history.shift();
     setPunchHistory(history);
     return true;
+  }
+
+  // src/logger/live-refresh.js
+  var LOGGER_TRUTH_POLL_MS = 5e3;
+  var LOGGER_CLOCK_REFRESH_MS = 6e4;
+  function startLoggerLiveRefresh(rerender, {
+    truthPollMs = LOGGER_TRUTH_POLL_MS,
+    clockRefreshMs = LOGGER_CLOCK_REFRESH_MS
+  } = {}) {
+    const timers = [];
+    const onHistoryChange = () => rerender();
+    bus.on("punch-history:changed", onHistoryChange);
+    const unsubscribeGm = gmOnValueChange(STORAGE_KEYS.SHARED_TRUTH, () => rerender());
+    if (!unsubscribeGm) {
+      let lastSeen = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null)?.updatedAt || null;
+      timers.push(setInterval(() => {
+        const updatedAt = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null)?.updatedAt || null;
+        if (updatedAt !== lastSeen) {
+          lastSeen = updatedAt;
+          rerender();
+        }
+      }, truthPollMs));
+    }
+    timers.push(setInterval(() => rerender(), clockRefreshMs));
+    return function stopLoggerLiveRefresh() {
+      bus.off("punch-history:changed", onHistoryChange);
+      unsubscribeGm?.();
+      timers.forEach(clearInterval);
+    };
   }
 
   // src/logger/mirror-sync.js
@@ -4114,6 +4159,7 @@
     const autoLink = buildAutoGcalMaxMinusLink(vm.guidance, vm.alarmConfig);
     maybeAutoOpenQuickCalendar(vm, autoLink);
     monitorModal(() => getLoggerVm());
+    startLoggerLiveRefresh(() => renderLogger(getLoggerVm()));
     setInterval(() => {
       const currentVm = getLoggerVm();
       evaluateLoggerAlarms(currentVm.guidance, getAlarmConfig());

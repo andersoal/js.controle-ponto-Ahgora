@@ -15,6 +15,7 @@ import { buildMirrorSummary } from './mirror/mirror-summary.js';
 import { renderMirrorPanel } from './mirror/panel-renderer.js';
 import { getLocalDayPunches, openPunchEditor } from './mirror/punch-editor.js';
 import { deleteLastSavedPunch, savePunch } from './logger/punch-history.js';
+import { startLoggerLiveRefresh } from './logger/live-refresh.js';
 import { buildSharedTruth, getYesterdayContext } from './logger/mirror-sync.js';
 import { getLoggerVm } from './logger/logger-vm.js';
 import { renderLoggerContainer } from './logger/logger-renderer.js';
@@ -220,6 +221,10 @@ function startLogger() {
     maybeAutoOpenQuickCalendar(vm, autoLink);
 
     monitorModal(() => getLoggerVm());
+
+    // Painel vivo sem F5: captura do modal-guard, SHARED_TRUTH novo do Espelho
+    // e relógio andando re-renderizam na sequência (issues/0004).
+    startLoggerLiveRefresh(() => renderLogger(getLoggerVm()));
 
     setInterval(() => {
         const currentVm = getLoggerVm();

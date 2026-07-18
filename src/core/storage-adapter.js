@@ -62,6 +62,27 @@ export function gmSetJson(key, value) {
     }
 }
 
+/**
+ * Escuta mudanças de valor GM (outras abas/origens do mesmo script).
+ * Retorna a função de unsubscribe, ou null quando a API não existe
+ * (o chamador deve cair para polling).
+ */
+export function gmOnValueChange(key, callback) {
+    if (typeof GM_addValueChangeListener !== 'function') return null;
+    try {
+        const id = GM_addValueChangeListener(key, (_name, _oldValue, newValue, remote) => {
+            callback(newValue, remote);
+        });
+        return () => {
+            if (typeof GM_removeValueChangeListener === 'function') {
+                GM_removeValueChangeListener(id);
+            }
+        };
+    } catch (_) {
+        return null;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Cookie cross-origin bridge
 // O mirror roda em mirror.app.ahgora.com.br e o logger em app.ahgora.com.br.
