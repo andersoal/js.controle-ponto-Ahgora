@@ -5,31 +5,18 @@
 
 import { CONFIG, ConfigStore } from './core/config.js';
 import { bus } from './core/event-bus.js';
-import { STORAGE_KEYS, gmGetJson, gmGetJsonCrossOrigin, gmSetJson, gmSetJsonCrossOrigin } from './core/storage-adapter.js';
-import { formatDateKey, nowMin, toMin } from './core/time-utils.js';
+import { STORAGE_KEYS, gmSetJsonCrossOrigin } from './core/storage-adapter.js';
+import { formatDateKey, nowMin } from './core/time-utils.js';
 import { decorateCalendarDays } from './mirror/calendar-decorator.js';
-import {
-    calcularInterjornadaMirror,
-    computeDailyAlert,
-    computeDayBalance,
-    computeExitMilestones,
-    computePeriodAggregates,
-    computeReturnWindow
-} from './mirror/calculator.js';
-import {
-    collectComplianceDays,
-    getDayRuleViolations,
-    getMonthlySundayRestWarning,
-    getPunchCountHealth,
-    getWeeklyOvertimeWarning,
-    getWeeklyRestWarning
-} from './mirror/compliance-engine.js';
-import { extrairBancoHoras, extrairDados } from './mirror/dom-scraper.js';
-import { buildPunchGuidance } from './mirror/guidance-engine.js';
+import { computeDayBalance } from './mirror/calculator.js';
+import { getDayRuleViolations } from './mirror/compliance-engine.js';
+import { extrairDados } from './mirror/dom-scraper.js';
+import { buildMirrorSummary } from './mirror/mirror-summary.js';
 import { renderMirrorPanel } from './mirror/panel-renderer.js';
 import { getLocalDayPunches, openPunchEditor } from './mirror/punch-editor.js';
-import { deleteLastSavedPunch, getPunchHistory, savePunch } from './logger/punch-history.js';
-import { buildLoggerPunchTimeline, buildSharedTruth, getMirrorTodayContext, getTodayBounds } from './logger/mirror-sync.js';
+import { deleteLastSavedPunch, savePunch } from './logger/punch-history.js';
+import { buildSharedTruth } from './logger/mirror-sync.js';
+import { getLoggerVm } from './logger/logger-vm.js';
 import { renderLoggerContainer } from './logger/logger-renderer.js';
 import { getAlarmConfig, evaluateLoggerAlarms, LOGGER_ALARM_CHECK_MS, setAlarmConfig } from './logger/alarm-engine.js';
 import { monitorModal } from './logger/modal-guard.js';
@@ -53,100 +40,6 @@ function detectPage() {
     if (href.includes('novabatidaonline')) return 'logger';
     if (href.includes('mirror') || href.includes('v-calendar-weekly')) return 'mirror';
     return 'unknown';
-}
-
-function buildTurno(entrada, saida, now) {
-    const e = toMin(entrada);
-    const s = saida ? toMin(saida) : now;
-    if (e === null || s === null) return null;
-    const total = s - e;
-    const classe =
-        total >= CONFIG.MAX_HORAS_TURNO ? 'danger' :
-        total >= CONFIG.MAX_HORAS_TURNO - 30 ? 'warn' : 'infos';
-    return { entrada, saida: saida || 'agora', aberto: !saida, total, limite: CONFIG.MAX_HORAS_TURNO, classe };
-}
-
-function buildStatus(batidas) {
-    const q = batidas.length;
-    if (q === 0) return '🛬 Não iniciado';
-    if (q === 1) return '🥇 Primeiro turno';
-    if (q === 2) return '⏸ Intervalo';
-    if (q === 3) return '🥈 Segundo turno';
-    if (q >= 4) return '🛫 Encerrado';
-    return '--';
-}
-
-function buildMirrorSummary(dias, hoje) {
-    const hojeDia = dias.find((x) => x.isToday);
-    if (!hojeDia) return null;
-
-    const agora = nowMin();
-    const { trabalhado, saldo } = computeDayBalance(hojeDia.batidas, hojeDia.isBusinessDay, agora);
-    hojeDia.trabalhado = trabalhado;
-    hojeDia.saldo = saldo;
-
-    dias.forEach((dia) => {
-        if (dia === hojeDia) return;
-        const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora);
-        dia.trabalhado = balance.trabalhado;
-        dia.saldo = balance.saldo;
-        dia.violations = getDayRuleViolations(dia);
-    });
-
-    hojeDia.violations = getDayRuleViolations(hojeDia);
-
-    const aggregates = computePeriodAggregates(dias, hoje);
-    const bancoHoras = extrairBancoHoras();
-    const guidance = buildPunchGuidance(hojeDia.batidas, aggregates.saldoSemana);
-    const milestones = computeExitMilestones(hojeDia.batidas, agora);
-    const retorno = computeReturnWindow(hojeDia.batidas);
-    const alerta = computeDailyAlert(hojeDia);
-
-    const turno1 = hojeDia.batidas[0] ? buildTurno(hojeDia.batidas[0], hojeDia.batidas[1], agora) : null;
-    const turno2 = hojeDia.batidas[2] ? buildTurno(hojeDia.batidas[2], hojeDia.batidas[3], agora) : null;
-
-    const amanha = new Date(hojeDia.data);
-    amanha.setDate(amanha.getDate() + 1);
-    const diaAmanha = dias.find((d) => d.dateKey === formatDateKey(amanha));
-    const primeiraBatidaAmanha = diaAmanha?.batidas?.[0] || null;
-    const interjornada = calcularInterjornadaMirror(
-        hojeDia.batidas[hojeDia.batidas.length - 1] || null,
-        primeiraBatidaAmanha
-    );
-
-    const ontem = new Date(hojeDia.data);
-    ontem.setDate(ontem.getDate() - 1);
-    const diaOntem = dias.find((d) => d.dateKey === formatDateKey(ontem));
-    const yesterdayLastPunch = diaOntem?.batidas?.[diaOntem.batidas.length - 1] || null;
-
-    const hojePunchHealth = getPunchCountHealth(hojeDia.batidas.length, { isToday: true });
-    const weeklyRestWarning = getWeeklyRestWarning(dias, hoje);
-    const weeklyOvertimeWarning = getWeeklyOvertimeWarning(aggregates.saldoSemana);
-    const monthlySundayRestWarning = getMonthlySundayRestWarning(dias, hoje);
-    const compliance = collectComplianceDays(dias);
-
-    return {
-        hoje: hojeDia,
-        dias,
-        bancoHoras,
-        ...aggregates,
-        ...milestones,
-        ...compliance,
-        retornoMinimo: retorno.retornoMinimo,
-        retornoMaximo: retorno.retornoMaximo,
-        alerta,
-        guidance,
-        turno1,
-        turno2,
-        status: buildStatus(hojeDia.batidas),
-        interjornada,
-        yesterdayLastPunch,
-        hojePunchHealth,
-        weeklyRestWarning,
-        weeklyOvertimeWarning,
-        monthlySundayRestWarning,
-        saidaIdeal: milestones.h8 !== null ? milestones.h8 - aggregates.saldoSemana : null
-    };
 }
 
 function persistMirrorSnapshot(resumo) {
@@ -282,28 +175,6 @@ function startMirror() {
             waitForMirrorCalendar(() => {}, { timeoutMs: 15000 });
         }
     });
-}
-
-function getLoggerVm() {
-    const bounds = getTodayBounds();
-    const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
-    const mirrorCtx = getMirrorTodayContext(sharedTruth, bounds.todayKey);
-    const history = getPunchHistory();
-    const timeline = buildLoggerPunchTimeline(history, mirrorCtx.mirrorPunches, bounds.startMs, bounds.endMs);
-
-    const alarmConfig = getAlarmConfig();
-    return {
-        ...timeline,
-        ...mirrorCtx,
-        workedToday: sharedTruth?.workedToday || 0,
-        dayBalance: sharedTruth?.dayBalance || 0,
-        weekBalance: sharedTruth?.weekBalance || 0,
-        monthBalance: sharedTruth?.monthBalance || 0,
-        status: sharedTruth?.status || '',
-        guidance: sharedTruth?.guidance || null,
-        alarmEnabled: alarmConfig?.enabled ?? true,
-        alarmConfig
-    };
 }
 
 function renderLogger(vm) {
