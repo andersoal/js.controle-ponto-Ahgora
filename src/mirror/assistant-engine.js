@@ -259,7 +259,10 @@ export function buildAssistantPlan({
         } else {
             const lastPunch = toMin(batidas[count - 1]);
             if (lastPunch !== null) {
-                nextDayEntry = lastPunch + CONFIG.DESCANSO_MINIMO;
+                // Descanso que termina ainda hoje não restringe amanhã (BR-001):
+                // só expõe nextDayEntry quando a janela cruza a meia-noite.
+                const restEnd = lastPunch + CONFIG.DESCANSO_MINIMO;
+                nextDayEntry = restEnd >= CONFIG.MINUTES_PER_DAY ? restEnd : null;
             }
         }
     }

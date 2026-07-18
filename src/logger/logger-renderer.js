@@ -136,7 +136,8 @@ export function renderLoggerContainer(vm, onSave, onDelete) {
     const assistant = buildAssistantPlan({
         batidas: vm.combinedPunches || [],
         planMinutes: plan.minutes,
-        saldoSemana: vm.weekBalance || 0
+        saldoSemana: vm.weekBalance || 0,
+        yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
     const view = { assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }) };
 

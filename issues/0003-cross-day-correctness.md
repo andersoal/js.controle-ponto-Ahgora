@@ -1,7 +1,7 @@
 ---
 title: "Cross-day: gating por dia no Logger, interjornada na sugestão de entrada, rótulo 'amanhã' honesto, virada de mês"
 labels: [ready-for-agent, bug]
-status: open
+status: closed
 created: 2026-07-18
 related: [../wayfinder/tickets/010-cross-day-next-punch-research.md]
 ---
@@ -51,3 +51,24 @@ usuário:
 ## Blocked by
 
 - [issues/0002 — Prefactor: extrair getLoggerVm e buildMirrorSummary](0002-prefactor-extract-composition-functions.md)
+
+## Resolution
+
+Fechado em 2026-07-18. Quatro correções:
+
+1. **Gating por dia**: `getLoggerVm` só copia agregados (`workedToday`/`dayBalance`/
+   `weekBalance`/`monthBalance`/`status`/`guidance`) quando `sharedTruth.todayKey` é hoje;
+   dia novo mostra zeros/neutro (fonte segue sinalizando "Cache de outro dia").
+2. **BR-001 na entrada**: `getYesterdayContext` (mirror-sync) resgata a última batida de
+   ontem do registro dedicado `PREV_DAY_LAST_PUNCH` ou de um `SHARED_TRUTH` cujo
+   `todayKey` é exatamente ontem; logger-renderer agora passa `yesterdayLastPunch` ao
+   engine (06:00 após sair 22:00 → sugestão 09:00 + alerta BR-001).
+3. **Rótulo honesto**: engine só expõe `nextDayEntry` quando o descanso cruza a
+   meia-noite; jornada encerrada cedo não exibe mais "amanhã a partir de 22:00".
+4. **Virada de mês**: `persistMirrorSnapshot` grava `PREV_DAY_LAST_PUNCH`
+   (`{dateKey, lastPunch}`); `buildMirrorSummary` aceita fallback persistido quando
+   ontem não está no calendário renderizado.
+
+Regressões dos 3 RED do wayfinder 010 reescritas nos seams reais
+(`logger-vm.test.js`, `assistant-engine.test.js`, `mirror-summary.test.js`).
+Suíte 254/254, smoke 34/34, bundle rebuildado.

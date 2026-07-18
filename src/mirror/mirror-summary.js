@@ -46,7 +46,7 @@ export function buildStatus(batidas) {
     return '--';
 }
 
-export function buildMirrorSummary(dias, hoje) {
+export function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = null } = {}) {
     const hojeDia = dias.find((x) => x.isToday);
     if (!hojeDia) return null;
 
@@ -84,10 +84,12 @@ export function buildMirrorSummary(dias, hoje) {
         primeiraBatidaAmanha
     );
 
+    // Na virada de mês, ontem não está no calendário renderizado — o fallback
+    // vem da última batida persistida no storage (issues/0003).
     const ontem = new Date(hojeDia.data);
     ontem.setDate(ontem.getDate() - 1);
     const diaOntem = dias.find((d) => d.dateKey === formatDateKey(ontem));
-    const yesterdayLastPunch = diaOntem?.batidas?.[diaOntem.batidas.length - 1] || null;
+    const yesterdayLastPunch = diaOntem?.batidas?.[diaOntem.batidas.length - 1] || yesterdayLastPunchFallback || null;
 
     const hojePunchHealth = getPunchCountHealth(hojeDia.batidas.length, { isToday: true });
     const weeklyRestWarning = getWeeklyRestWarning(dias, hoje);

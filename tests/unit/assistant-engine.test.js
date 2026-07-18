@@ -189,6 +189,27 @@ describe('AssistantEngine — buildAssistantPlan', () => {
             expect(plan.nextDayEntry).toBe(min(17, 0) + 11 * 60);
         });
 
+        it('dia encerrado cedo: descanso termina hoje → nextDayEntry null (amanhã livre)', () => {
+            // Regressão do ticket wayfinder 010: 11:00 + 11h = 22:00 ainda é HOJE;
+            // o card não pode rotular "amanhã a partir de 22:00".
+            const plan = buildAssistantPlan({
+                batidas: ['06:00', '08:00', '09:00', '11:00'],
+                planMinutes: 480,
+                now: min(12)
+            });
+            expect(plan.stage).toBe('done');
+            expect(plan.nextDayEntry).toBeNull();
+        });
+
+        it('saída tarde: 22:00 + 11h cruza a meia-noite → nextDayEntry 33:00 (exibe 09:00)', () => {
+            const plan = buildAssistantPlan({
+                batidas: ['13:00', '17:00', '18:00', '22:00'],
+                planMinutes: 480,
+                now: min(22, 30)
+            });
+            expect(plan.nextDayEntry).toBe(min(33));
+        });
+
         it('TC-BR006: 5 batidas exigem justificativa', () => {
             const plan = buildAssistantPlan({
                 batidas: ['08:00', '12:00', '13:00', '17:00', '18:00'],

@@ -43,12 +43,28 @@ describe('buildMirrorSummary (caracterização)', () => {
         expect(resumo.hoje.dateKey).toBe('2026-07-17');
     });
 
-    it('dia 1º do mês: yesterdayLastPunch é null porque ontem não está no calendário renderizado' +
-        ' [SABIDAMENTE ERRADO — issues/0003 vai persistir a última batida de ontem no storage]', () => {
+    it('dia 1º do mês: yesterdayLastPunch vem do fallback persistido quando ontem não está no calendário (issues/0003)', () => {
         const hoje = new Date(2026, 7, 1); // 1º de agosto; 31/07 não aparece na visão do mês
+        const dias = [makeDia(2026, 8, 1, ['09:00', '12:00'], hoje)];
+        const resumo = buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback: '22:00' });
+        expect(resumo.yesterdayLastPunch).toBe('22:00');
+    });
+
+    it('dia 1º do mês sem fallback: yesterdayLastPunch permanece null (melhor esforço)', () => {
+        const hoje = new Date(2026, 7, 1);
         const dias = [makeDia(2026, 8, 1, ['09:00', '12:00'], hoje)];
         const resumo = buildMirrorSummary(dias, hoje);
         expect(resumo.yesterdayLastPunch).toBeNull();
+    });
+
+    it('célula de ontem no calendário tem precedência sobre o fallback', () => {
+        const hoje = new Date(2026, 6, 17);
+        const dias = [
+            makeDia(2026, 7, 16, ['13:00', '17:00', '18:00', '22:00'], hoje),
+            makeDia(2026, 7, 17, ['09:00', '12:00'], hoje)
+        ];
+        const resumo = buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback: '20:00' });
+        expect(resumo.yesterdayLastPunch).toBe('22:00');
     });
 
     it('agrega saldoSemana só de dias fechados da mesma semana (hoje excluído)', () => {

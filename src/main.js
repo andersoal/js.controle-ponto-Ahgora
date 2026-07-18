@@ -5,7 +5,7 @@
 
 import { CONFIG, ConfigStore } from './core/config.js';
 import { bus } from './core/event-bus.js';
-import { STORAGE_KEYS, gmSetJsonCrossOrigin } from './core/storage-adapter.js';
+import { STORAGE_KEYS, gmGetJsonCrossOrigin, gmSetJsonCrossOrigin } from './core/storage-adapter.js';
 import { formatDateKey, nowMin } from './core/time-utils.js';
 import { decorateCalendarDays } from './mirror/calendar-decorator.js';
 import { computeDayBalance } from './mirror/calculator.js';
@@ -15,7 +15,7 @@ import { buildMirrorSummary } from './mirror/mirror-summary.js';
 import { renderMirrorPanel } from './mirror/panel-renderer.js';
 import { getLocalDayPunches, openPunchEditor } from './mirror/punch-editor.js';
 import { deleteLastSavedPunch, savePunch } from './logger/punch-history.js';
-import { buildSharedTruth } from './logger/mirror-sync.js';
+import { buildSharedTruth, getYesterdayContext } from './logger/mirror-sync.js';
 import { getLoggerVm } from './logger/logger-vm.js';
 import { renderLoggerContainer } from './logger/logger-renderer.js';
 import { getAlarmConfig, evaluateLoggerAlarms, LOGGER_ALARM_CHECK_MS, setAlarmConfig } from './logger/alarm-engine.js';
@@ -47,6 +47,17 @@ function persistMirrorSnapshot(resumo) {
     gmSetJsonCrossOrigin(STORAGE_KEYS.MIRROR_TODAY_REF, resumo.hoje.dateKey);
     gmSetJsonCrossOrigin(STORAGE_KEYS.WEEK_BALANCE_CACHE, resumo.saldoSemana);
     gmSetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, buildSharedTruth(resumo));
+
+    // Última batida de ontem sobrevive à virada de mês e alimenta o BR-001
+    // no Logger mesmo sem célula de ontem no calendário (issues/0003).
+    if (resumo.yesterdayLastPunch) {
+        const ontem = new Date(resumo.hoje.data);
+        ontem.setDate(ontem.getDate() - 1);
+        gmSetJsonCrossOrigin(STORAGE_KEYS.PREV_DAY_LAST_PUNCH, {
+            dateKey: formatDateKey(ontem),
+            lastPunch: resumo.yesterdayLastPunch
+        });
+    }
 }
 
 function hasTodayCell(dias, hoje) {
@@ -90,7 +101,12 @@ function tryRenderMirror(hoje = new Date()) {
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
 
-    const resumo = buildMirrorSummary(dias, hoje);
+    // Antes de sobrescrever o SHARED_TRUTH, resgata a última batida de ontem
+    // persistida (virada de mês: ontem não está no calendário renderizado).
+    const sharedTruthPrev = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
+    const { yesterdayLastPunch: yesterdayLastPunchFallback } = getYesterdayContext(sharedTruthPrev, hoje);
+
+    const resumo = buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback });
     if (!resumo) return null;
 
     persistMirrorSnapshot(resumo);

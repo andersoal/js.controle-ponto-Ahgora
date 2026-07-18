@@ -9,6 +9,7 @@ export const STORAGE_KEYS = Object.freeze({
     LOGGER_ALARM_FIRED: 'ahgora_logger_alarm_fired_v1',
     LOGGER_GCAL_AUTOPEN: 'ahgora_logger_gcal_autopen_v1',
     SHARED_TRUTH: 'ahgora_shared_truth_v1',
+    PREV_DAY_LAST_PUNCH: 'ahgora_prev_day_last_punch_v1',
     JOURNEY_PLAN: 'ahgora_journey_plan_v1',
     PANEL_POSITIONS: 'ahgora_panel_positions_v1',
     LOCAL_DAY_PUNCHES: 'ahgora_local_day_punches_v1',

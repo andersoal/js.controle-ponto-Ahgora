@@ -45,6 +45,30 @@ export function getMirrorTodayContext(sharedTruth, todayKey) {
     };
 }
 
+/**
+ * Contexto de ontem para a interjornada (BR-001): a última batida do dia
+ * anterior, vinda do registro dedicado persistido pelo Espelho ou de um
+ * SHARED_TRUTH cujo todayKey é exatamente ontem. Dados mais antigos que
+ * ontem não restringem a entrada (o descanso de 11h já passou).
+ */
+export function getYesterdayContext(sharedTruth, todayDate = new Date()) {
+    const ontem = new Date(todayDate);
+    ontem.setDate(ontem.getDate() - 1);
+    const yesterdayKey = formatDateKey(ontem);
+
+    const stored = gmGetJsonCrossOrigin(STORAGE_KEYS.PREV_DAY_LAST_PUNCH, null);
+    if (stored?.dateKey === yesterdayKey && stored.lastPunch) {
+        return { yesterdayLastPunch: stored.lastPunch };
+    }
+
+    if (sharedTruth?.todayKey === yesterdayKey) {
+        const punches = sharedTruth.todayPunches || [];
+        return { yesterdayLastPunch: punches[punches.length - 1] || null };
+    }
+
+    return { yesterdayLastPunch: null };
+}
+
 export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);
     const mirrorSet = new Set(mirrorPunches || []);

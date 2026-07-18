@@ -1,7 +1,7 @@
 ---
 title: "Prefactor: extrair getLoggerVm e buildMirrorSummary do main.js para módulos testáveis"
 labels: [ready-for-agent, prefactor]
-status: open
+status: closed
 created: 2026-07-18
 related: [../wayfinder/map-live-qa.md, ../wayfinder/tickets/010-cross-day-next-punch-research.md]
 ---
@@ -41,3 +41,11 @@ comentário apontando o ticket de fix que vai invertê-los.
 ## Blocked by
 
 None — can start immediately.
+
+## Resolution
+
+Fechado em 2026-07-18. `getLoggerVm` → `src/logger/logger-vm.js`; `buildMirrorSummary` +
+`buildStatus` → `src/mirror/mirror-summary.js`; main.js virou orquestração. Caracterização
+no seam real em `tests/unit/logger-vm.test.js` e `tests/unit/mirror-summary.test.js`,
+incluindo os dois comportamentos sabidamente errados (invertidos na sequência por
+issues/0003). Suíte 246/246, smoke 34/34, bundle rebuildado.

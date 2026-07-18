@@ -28,6 +28,7 @@
     LOGGER_ALARM_FIRED: "ahgora_logger_alarm_fired_v1",
     LOGGER_GCAL_AUTOPEN: "ahgora_logger_gcal_autopen_v1",
     SHARED_TRUTH: "ahgora_shared_truth_v1",
+    PREV_DAY_LAST_PUNCH: "ahgora_prev_day_last_punch_v1",
     JOURNEY_PLAN: "ahgora_journey_plan_v1",
     PANEL_POSITIONS: "ahgora_panel_positions_v1",
     LOCAL_DAY_PUNCHES: "ahgora_local_day_punches_v1",
@@ -1180,7 +1181,7 @@
     if (q >= 4) return "\u{1F6EB} Encerrado";
     return "--";
   }
-  function buildMirrorSummary(dias, hoje) {
+  function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = null } = {}) {
     const hojeDia = dias.find((x) => x.isToday);
     if (!hojeDia) return null;
     const agora = nowMin();
@@ -1214,7 +1215,7 @@
     const ontem = new Date(hojeDia.data);
     ontem.setDate(ontem.getDate() - 1);
     const diaOntem = dias.find((d) => d.dateKey === formatDateKey(ontem));
-    const yesterdayLastPunch = diaOntem?.batidas?.[diaOntem.batidas.length - 1] || null;
+    const yesterdayLastPunch = diaOntem?.batidas?.[diaOntem.batidas.length - 1] || yesterdayLastPunchFallback || null;
     const hojePunchHealth = getPunchCountHealth(hojeDia.batidas.length, { isToday: true });
     const weeklyRestWarning = getWeeklyRestWarning(dias, hoje);
     const weeklyOvertimeWarning = getWeeklyOvertimeWarning(aggregates.saldoSemana);
@@ -3129,7 +3130,8 @@
       } else {
         const lastPunch = toMin(batidas[count - 1]);
         if (lastPunch !== null) {
-          nextDayEntry = lastPunch + CONFIG.DESCANSO_MINIMO;
+          const restEnd = lastPunch + CONFIG.DESCANSO_MINIMO;
+          nextDayEntry = restEnd >= CONFIG.MINUTES_PER_DAY ? restEnd : null;
         }
       }
     }
@@ -3583,6 +3585,20 @@
       hasMirrorStaleCache
     };
   }
+  function getYesterdayContext(sharedTruth, todayDate = /* @__PURE__ */ new Date()) {
+    const ontem = new Date(todayDate);
+    ontem.setDate(ontem.getDate() - 1);
+    const yesterdayKey = formatDateKey(ontem);
+    const stored = gmGetJsonCrossOrigin(STORAGE_KEYS.PREV_DAY_LAST_PUNCH, null);
+    if (stored?.dateKey === yesterdayKey && stored.lastPunch) {
+      return { yesterdayLastPunch: stored.lastPunch };
+    }
+    if (sharedTruth?.todayKey === yesterdayKey) {
+      const punches = sharedTruth.todayPunches || [];
+      return { yesterdayLastPunch: punches[punches.length - 1] || null };
+    }
+    return { yesterdayLastPunch: null };
+  }
   function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);
     const mirrorSet = new Set(mirrorPunches || []);
@@ -3635,18 +3651,21 @@
     const bounds = getTodayBounds();
     const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
     const mirrorCtx = getMirrorTodayContext(sharedTruth, bounds.todayKey);
+    const yesterdayCtx = getYesterdayContext(sharedTruth);
     const history = getPunchHistory();
     const timeline = buildLoggerPunchTimeline(history, mirrorCtx.mirrorPunches, bounds.startMs, bounds.endMs);
+    const isTruthFresh = sharedTruth?.todayKey === bounds.todayKey;
     const alarmConfig = getAlarmConfig();
     return {
       ...timeline,
       ...mirrorCtx,
-      workedToday: sharedTruth?.workedToday || 0,
-      dayBalance: sharedTruth?.dayBalance || 0,
-      weekBalance: sharedTruth?.weekBalance || 0,
-      monthBalance: sharedTruth?.monthBalance || 0,
-      status: sharedTruth?.status || "",
-      guidance: sharedTruth?.guidance || null,
+      ...yesterdayCtx,
+      workedToday: isTruthFresh && sharedTruth?.workedToday || 0,
+      dayBalance: isTruthFresh && sharedTruth?.dayBalance || 0,
+      weekBalance: isTruthFresh && sharedTruth?.weekBalance || 0,
+      monthBalance: isTruthFresh && sharedTruth?.monthBalance || 0,
+      status: isTruthFresh && sharedTruth?.status || "",
+      guidance: isTruthFresh && sharedTruth?.guidance || null,
       alarmEnabled: alarmConfig?.enabled ?? true,
       alarmConfig
     };
@@ -3750,7 +3769,8 @@
     const assistant = buildAssistantPlan({
       batidas: vm.combinedPunches || [],
       planMinutes: plan.minutes,
-      saldoSemana: vm.weekBalance || 0
+      saldoSemana: vm.weekBalance || 0,
+      yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
     const view = { assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }) };
     const keepMinimized = panel.dataset.ahgRendered === "true" && !panel.classList.contains("active");
@@ -3958,6 +3978,14 @@
     gmSetJsonCrossOrigin(STORAGE_KEYS.MIRROR_TODAY_REF, resumo.hoje.dateKey);
     gmSetJsonCrossOrigin(STORAGE_KEYS.WEEK_BALANCE_CACHE, resumo.saldoSemana);
     gmSetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, buildSharedTruth(resumo));
+    if (resumo.yesterdayLastPunch) {
+      const ontem = new Date(resumo.hoje.data);
+      ontem.setDate(ontem.getDate() - 1);
+      gmSetJsonCrossOrigin(STORAGE_KEYS.PREV_DAY_LAST_PUNCH, {
+        dateKey: formatDateKey(ontem),
+        lastPunch: resumo.yesterdayLastPunch
+      });
+    }
   }
   function applyLocalOverrides(dias, overridesByDay) {
     dias.forEach((dia) => {
@@ -3990,7 +4018,9 @@
     if (!dias.length) return null;
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
-    const resumo = buildMirrorSummary(dias, hoje);
+    const sharedTruthPrev = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
+    const { yesterdayLastPunch: yesterdayLastPunchFallback } = getYesterdayContext(sharedTruthPrev, hoje);
+    const resumo = buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback });
     if (!resumo) return null;
     persistMirrorSnapshot(resumo);
     decorateCalendarDays(dias, overridesByDay, (dia) => handleOpenPunchEditor(dia, hoje));
