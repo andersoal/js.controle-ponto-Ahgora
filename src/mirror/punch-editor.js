@@ -6,11 +6,12 @@
 
 import { CONFIG } from '../core/config.js';
 import { STORAGE_KEYS, gmGetJson, gmSetJson } from '../core/storage-adapter.js';
-import { fmtMin, normalizePunchTime, toMin } from '../core/time-utils.js';
+import { escapeHtml, fmtMin, normalizePunchTime, toMin } from '../core/time-utils.js';
 import { computeDayBalance } from './calculator.js';
 import { getDayRuleViolations } from './compliance-engine.js';
 import { showLoggerToast, makePanelDraggable } from '../shared/ui-components.js';
 import { el } from '../shared/dom-builder.js';
+import { icon } from '../shared/icons.js';
 
 export function getLocalDayPunches() {
     return gmGetJson(STORAGE_KEYS.LOCAL_DAY_PUNCHES, {});
@@ -34,6 +35,12 @@ export function saveOverridesForDay(dateKey, punches) {
     setLocalDayPunches(overrides);
 }
 
+/** Entre vários editores abertos, o clicado sobe — sempre abaixo do toast. */
+function bringEditorToFront(editor) {
+    document.querySelectorAll('.ahg-punch-editor').forEach((p) => { p.style.zIndex = ''; });
+    editor.style.zIndex = 'var(--z-punch-editor-front)';
+}
+
 export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localPunches = [], onSave, targetEl }) {
     const editorId = `ahg-punch-editor-${dateKey}`;
     let existing = document.getElementById(editorId);
@@ -45,7 +52,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
     const editor = el('div', {
         id: editorId,
         className: 'ahg-panel ahg-punch-editor',
-        attrs: { 'data-date-key': dateKey }
+        attrs: { 'data-date-key': dateKey, tabindex: '-1' }
     });
 
     // Posição inicial: centralizado, ou próximo à célula clicada se informada.
@@ -68,6 +75,24 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
     let working = localPunches.length > 0 ? [...localPunches] : [...mirrorPunches];
     let editingIdx = null;
+    let confirmingClose = false;
+
+    // Estado efetivo persistido: overrides locais, ou o mirror quando não há ajuste.
+    const baselinePunches = () => {
+        const saved = getOverridesForDay(dateKey);
+        return saved.length > 0 ? saved : mirrorPunches;
+    };
+    const isDirty = () => JSON.stringify(working) !== JSON.stringify(baselinePunches());
+
+    function closeEditor({ force = false } = {}) {
+        if (!force && isDirty()) {
+            confirmingClose = true;
+            render();
+            return;
+        }
+        if (editor._ahgDragCleanup) editor._ahgDragCleanup();
+        editor.remove();
+    }
 
     function getPunchHint(batidas, idx) {
         if (!batidas || idx < 0 || idx >= batidas.length) return null;
@@ -96,12 +121,10 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
     function renderHint(hint) {
         if (!hint) return null;
-        const color = hint.level === 'error' ? '#ff8888' : hint.level === 'warn' ? '#ffd08a' : '#22c55e';
-        const icon = hint.level === 'ok' ? '✓' : '⚠';
+        const hintIcon = hint.level === 'ok' ? icon('check', { size: 10 }) : icon('triangle-alert', { size: 10 });
         return el('div', {
-            className: 'ahg-pe-hint',
-            style: { color },
-            text: `${icon} ${hint.text}`
+            className: `ahg-pe-hint ahg-pe-hint--${hint.level}`,
+            html: `${hintIcon} ${escapeHtml(hint.text)}`
         });
     }
 
@@ -123,15 +146,15 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
             });
             const confirmBtn = el('button', {
                 className: 'ahg-btn ahg-btn-sm ahg-pe-confirm',
-                attrs: { type: 'button', title: 'Confirmar (Enter)' },
+                attrs: { type: 'button', title: 'Confirmar (Enter)', 'aria-label': 'Confirmar horário' },
                 dataset: { idx: String(idx) },
-                text: '✓'
+                html: icon('check', { size: 11 })
             });
             const cancelBtn = el('button', {
                 className: 'ahg-btn ahg-btn-sm ahg-pe-cancel',
-                attrs: { type: 'button', title: 'Cancelar (Esc)' },
+                attrs: { type: 'button', title: 'Cancelar (Esc)', 'aria-label': 'Cancelar edição' },
                 dataset: { idx: String(idx) },
-                text: '✗',
+                html: icon('x', { size: 11 }),
                 on: { click: () => { editingIdx = null; render(); } }
             });
             confirmBtn.addEventListener('click', () => confirmInlineEdit(idx));
@@ -153,7 +176,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
             const srcSpan = el('span', {
                 className: 'ahg-pe-punch-src',
-                text: `${isMirror ? '🔒' : '📍'} ${isMirror ? 'mirror' : 'local'}`
+                html: `${isMirror ? icon('lock', { size: 9 }) : icon('map-pin', { size: 9 })} ${isMirror ? 'mirror' : 'local'}`
             });
 
             row.append(timeSpan, srcSpan);
@@ -161,9 +184,9 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
             if (!isMirror) {
                 const editBtn = el('button', {
                     className: 'ahg-btn ahg-btn-sm ahg-pe-edit-inline',
-                    attrs: { type: 'button', title: 'Editar' },
+                    attrs: { type: 'button', title: 'Editar', 'aria-label': `Editar batida ${time}` },
                     dataset: { idx: String(idx) },
-                    text: '✏'
+                    html: icon('pencil', { size: 11 })
                 });
                 editBtn.addEventListener('click', () => startInlineEdit(idx));
                 row.appendChild(editBtn);
@@ -171,12 +194,13 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
             const removeBtn = el('button', {
                 className: 'ahg-btn ahg-btn-sm ahg-btn-danger ahg-pe-remove',
-                attrs: { type: 'button', title: 'Remover' },
+                attrs: { type: 'button', title: 'Remover', 'aria-label': `Remover batida ${time}` },
                 dataset: { idx: String(idx) },
-                text: '×'
+                html: icon('trash', { size: 11 })
             });
             removeBtn.addEventListener('click', () => {
                 if (editingIdx === idx) editingIdx = null;
+                confirmingClose = false;
                 working = working.filter((_, i) => i !== idx);
                 render();
             });
@@ -213,7 +237,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
         if (!violations.length) return null;
         return el('div', {
             className: 'ahg-pe-violations',
-            text: violations.map((v) => `⚠ ${v.label}`).join(' · ')
+            html: violations.map((v) => `${icon('triangle-alert', { size: 10 })} ${escapeHtml(v.label)}`).join(' · ')
         });
     }
 
@@ -222,12 +246,16 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
             id: `ahg-pe-save-${dateKey}`,
             className: 'ahg-btn ahg-btn-success ahg-flex-1',
             attrs: { type: 'button' },
-            text: '💾 Salvar'
+            html: `${icon('save', { size: 11 })} Salvar`
         });
         saveBtn.addEventListener('click', () => {
             saveOverridesForDay(dateKey, working);
+            // Salvar lista vazia remove o override: o dia volta aos dados do mirror.
+            if (working.length === 0) working = [...mirrorPunches];
+            confirmingClose = false;
             showLoggerToast(`Batidas de ${dateLabel || dateKey} salvas.`);
             if (typeof onSave === 'function') onSave(working);
+            render();
         });
 
         const children = [saveBtn];
@@ -237,13 +265,25 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
                 id: `ahg-pe-reset-${dateKey}`,
                 className: 'ahg-btn ahg-btn-danger',
                 attrs: { type: 'button', title: 'Resetar para dados do mirror' },
-                text: '↺ Reset'
+                html: `${icon('rotate-ccw', { size: 11 })} Reset`
             });
             resetBtn.addEventListener('click', () => {
+                const previous = getOverridesForDay(dateKey);
                 saveOverridesForDay(dateKey, []);
                 working = [...mirrorPunches];
                 editingIdx = null;
-                showLoggerToast(`${dateLabel || dateKey}: resetado para dados do mirror.`);
+                confirmingClose = false;
+                showLoggerToast(`${dateLabel || dateKey}: resetado para dados do mirror.`, {
+                    action: {
+                        label: 'Desfazer',
+                        onClick: () => {
+                            saveOverridesForDay(dateKey, previous);
+                            working = [...previous];
+                            if (typeof onSave === 'function') onSave(previous);
+                            if (document.body.contains(editor)) render();
+                        }
+                    }
+                });
                 if (typeof onSave === 'function') onSave([]);
                 render();
             });
@@ -255,6 +295,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
     function startInlineEdit(idx) {
         editingIdx = idx;
+        confirmingClose = false;
         render();
         setTimeout(() => {
             const input = editor.querySelector(`.ahg-pe-inline-input[data-idx="${idx}"]`);
@@ -275,6 +316,18 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
     }
 
     function render() {
+        // Reconstrução total do DOM: devolve o foco do teclado ao controle equivalente.
+        const active = document.activeElement;
+        let focusSelector = null;
+        if (active && editor.contains(active)) {
+            if (active.id) {
+                focusSelector = `#${CSS.escape(active.id)}`;
+            } else if (active.dataset && active.dataset.idx !== undefined) {
+                const cls = [...active.classList].find((c) => c.startsWith('ahg-pe-'));
+                if (cls) focusSelector = `.${cls}[data-idx="${active.dataset.idx}"]`;
+            }
+        }
+
         const hasOverrides = getOverridesForDay(dateKey).length > 0;
         const mirrorSet = new Set(mirrorPunches);
         const agoraMin = new Date().getHours() * 60 + new Date().getMinutes();
@@ -284,19 +337,14 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
         const header = el('div', {
             className: 'ahg-pe-hdr',
             children: [
-                el('span', { text: `✏ ${dateLabel || dateKey}` }),
+                el('span', { html: `${icon('pencil', { size: 11 })} ${escapeHtml(dateLabel || dateKey)}` }),
                 el('span', { className: 'ahg-flex-1' }),
                 el('button', {
                     id: `ahg-pe-close-${dateKey}`,
                     className: 'ahg-btn ahg-btn-sm',
-                    attrs: { type: 'button', title: 'Fechar' },
-                    text: '×',
-                    on: {
-                        click: () => {
-                            if (editor._ahgDragCleanup) editor._ahgDragCleanup();
-                            editor.remove();
-                        }
-                    }
+                    attrs: { type: 'button', title: 'Fechar (Esc)', 'aria-label': 'Fechar editor' },
+                    html: icon('x', { size: 11 }),
+                    on: { click: () => closeEditor() }
                 })
             ]
         });
@@ -316,8 +364,8 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
         const addBtn = el('button', {
             id: `ahg-pe-add-btn-${dateKey}`,
             className: 'ahg-btn ahg-btn-success',
-            attrs: { type: 'button', title: 'Adicionar' },
-            text: '+'
+            attrs: { type: 'button', title: 'Adicionar', 'aria-label': 'Adicionar batida' },
+            html: icon('plus', { size: 11 })
         });
         addBtn.addEventListener('click', () => {
             const time = normalizePunchTime(addInput.value || '');
@@ -325,30 +373,76 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
             if (working.includes(time)) { showLoggerToast(`Batida ${time} já existe.`); return; }
             working = [...working, time].sort((a, b) => toMin(a) - toMin(b));
             editingIdx = null;
+            confirmingClose = false;
             render();
             editor.querySelector(`#ahg-pe-add-input-${dateKey}`)?.focus();
         });
+
+        const confirmBar = confirmingClose
+            ? el('div', {
+                className: 'ahg-pe-confirm-bar',
+                children: [
+                    el('span', { className: 'ahg-pe-confirm-msg', text: 'Descartar alterações não salvas?' }),
+                    el('div', {
+                        className: 'ahg-pe-bar-actions',
+                        children: [
+                            el('button', {
+                                id: `ahg-pe-discard-${dateKey}`,
+                                className: 'ahg-btn ahg-btn-sm ahg-btn-danger',
+                                attrs: { type: 'button' },
+                                text: 'Descartar',
+                                on: { click: () => closeEditor({ force: true }) }
+                            }),
+                            el('button', {
+                                id: `ahg-pe-keep-${dateKey}`,
+                                className: 'ahg-btn ahg-btn-sm',
+                                attrs: { type: 'button' },
+                                text: 'Continuar editando',
+                                on: { click: () => { confirmingClose = false; render(); } }
+                            })
+                        ]
+                    })
+                ]
+            })
+            : null;
 
         const body = el('div', {
             className: 'ahg-pe-body',
             children: [
                 el('div', {
                     className: 'ahg-pe-meta',
-                    text: `${mirrorPunches.length} no mirror${hasOverrides ? ' · ✏ ajustado localmente' : ''}`
+                    text: `${mirrorPunches.length} no mirror${hasOverrides ? ' · ajustado localmente' : ''}`
                 }),
                 ...punchRows,
                 el('div', { className: 'ahg-pe-add-row', children: [addInput, addBtn] }),
                 renderTotals({ trabalhado, saldo }),
                 renderViolations(violations),
-                renderActions({ hasOverrides })
+                renderActions({ hasOverrides }),
+                confirmBar
             ]
         });
 
         editor.innerHTML = '';
         editor.append(header, body);
+
+        if (confirmingClose) {
+            editor.querySelector(`#ahg-pe-keep-${dateKey}`)?.focus();
+        } else if (focusSelector) {
+            editor.querySelector(focusSelector)?.focus();
+        }
     }
 
+    editor.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        // O input inline trata o próprio Esc (cancela a edição, não fecha).
+        if (e.target.closest('.ahg-pe-inline-input')) return;
+        closeEditor();
+    });
+    editor.addEventListener('mousedown', () => bringEditorToFront(editor));
+
     document.body.appendChild(editor);
+    bringEditorToFront(editor);
     makePanelDraggable(editor, '.ahg-pe-hdr', { clampToViewport: true });
     render();
+    editor.focus();
 }

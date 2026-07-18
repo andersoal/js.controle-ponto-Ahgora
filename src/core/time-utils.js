@@ -116,19 +116,6 @@ export function fmtCountdown(ms) {
     return `${min}m ${pad2(sec)}s`;
 }
 
-export function roundUpQuarterHour(m) {
-    if (m === null || m === undefined) return null;
-    return Math.ceil(m / 15) * 15;
-}
-
-export function fmtQuarterDecimal(m) {
-    if (m === null || m === undefined) return '--';
-    const decimal = roundUpQuarterHour(m) / 60;
-    return Number.isInteger(decimal)
-        ? String(decimal)
-        : decimal.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-}
-
 export function minuteToDate(baseDate, minute) {
     if (minute === null || minute === undefined) return null;
     const date = new Date(baseDate || new Date());

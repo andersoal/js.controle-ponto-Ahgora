@@ -6,8 +6,9 @@
  */
 
 import { CONFIG } from '../core/config.js';
-import { fmtMin, fmtQuarterDecimal } from '../core/time-utils.js';
+import { fmtMin } from '../core/time-utils.js';
 import { ensureDayChild } from '../shared/ui-components.js';
+import { icon } from '../shared/icons.js';
 
 function removeDayChild(dayEl, className) {
     const child = dayEl.querySelector(`.${className}`);
@@ -20,14 +21,10 @@ export function updateDayTotalsDisplay(dayEl, trabalhado, violations = []) {
         const totalEl = ensureDayChild(dayEl, 'ahg-day-total');
         totalEl.textContent = fmtMin(trabalhado);
         totalEl.title = 'Total trabalhado no dia';
-
-        const roundedEl = ensureDayChild(dayEl, 'ahg-day-total-rounded');
-        roundedEl.textContent = `${fmtQuarterDecimal(trabalhado)}h`;
-        roundedEl.title = 'Total arredondado (quarto de hora)';
     } else {
         removeDayChild(dayEl, 'ahg-day-total');
-        removeDayChild(dayEl, 'ahg-day-total-rounded');
     }
+    removeDayChild(dayEl, 'ahg-day-total-rounded');
 }
 
 export function updateDayViolationBadge(dayEl, violations = []) {
@@ -60,10 +57,11 @@ export function updateDayEditButton(dayEl, facts, localOverrides, onOpenEditor) 
     dayEl.classList.toggle('ahg-day-pending', hasOverrides);
 
     const btn = ensureDayChild(dayEl, 'ahg-day-edit-btn', 'button');
-    btn.textContent = '✏';
+    btn.innerHTML = icon('pencil', { size: 11 });
     btn.title = hasOverrides
         ? `Batidas ajustadas localmente (${localOverrides.length}) — clique para editar`
         : 'Editar batidas';
+    btn.setAttribute('aria-label', btn.title);
     btn.classList.toggle('has-overrides', hasOverrides);
     btn.onclick = (e) => {
         e.stopPropagation();
@@ -81,7 +79,7 @@ export function updateDayInconsistencyBadge(dayEl, dia) {
         return;
     }
     const badge = ensureDayChild(dayEl, 'ahg-day-inconsistency', 'span');
-    badge.textContent = '⚠️';
+    badge.innerHTML = icon('triangle-alert', { size: 12 });
     badge.title = dia.isToday
         ? `${count} batidas: jornada aberta, precisa fechar com quantidade par`
         : `${count} batidas: registro inconsistente (esperado número par)`;
@@ -100,7 +98,7 @@ export function updateDayToleranceMark(dayEl, dia) {
         return;
     }
     const mark = ensureDayChild(dayEl, 'ahg-day-tolerance', 'span');
-    mark.textContent = '⚪';
+    mark.innerHTML = icon('circle', { size: 9 });
     mark.title = `Saldo de ${fmtMin(dia.saldo)} dentro da tolerância (±${CONFIG.TOLERANCIA}min): conta zero na semana/mês`;
     dayEl.classList.add('ahg-day-in-tolerance');
 }

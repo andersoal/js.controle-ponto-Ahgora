@@ -210,22 +210,57 @@ export function buildAssistantPlan({
         workedPlanned = turno1 + (exitFinal - entrada2);
         idealExit = capExit(exitFinal - saldoSemana, entrada2, turno1, 'idealExit');
     } else {
-        stage = count === 4 ? 'done' : count === 5 ? 'extra-turn' : 'done';
-        for (let i = 0; i < Math.min(count, 4); i++) {
+        // Contagem par = dia fechado; ímpar = turno extra aberto (precisa fechar).
+        stage = count % 2 === 0 ? 'done' : 'extra-turn';
+
+        // Todas as batidas aparecem no cronograma — nada é omitido (precisão auditável).
+        if (count === 4) {
             const ids = ['entry', 'exit1', 'return', 'exitFinal'];
-            schedule.push(suggestion(ids[i], toMin(batidas[i]), 'done'));
+            for (let i = 0; i < 4; i++) {
+                schedule.push(suggestion(ids[i], toMin(batidas[i]), 'done'));
+            }
+        } else {
+            for (let i = 0; i < count; i++) {
+                const turno = Math.floor(i / 2) + 1;
+                const label = i % 2 === 0 ? `Entrada ${turno}º turno` : `Saída ${turno}º turno`;
+                schedule.push({ id: `p${i}`, label, time: toMin(batidas[i]), status: 'done', windowMin: null, windowMax: null });
+            }
         }
-        if (stage === 'extra-turn') {
+
+        if (count > 4) {
             enforcement.push(rule(
                 'BR-006',
-                'hard-block',
+                stage === 'extra-turn' ? 'hard-block' : 'warning-only',
                 `${count} batidas: acima de 2 turnos exige justificativa.`,
                 'day'
             ));
         }
-        const lastPunch = toMin(batidas[count - 1]);
-        if (lastPunch !== null && count % 2 === 0) {
-            nextDayEntry = lastPunch + CONFIG.DESCANSO_MINIMO;
+
+        if (stage === 'extra-turn') {
+            // Turno aberto: sugere a saída que fecha o dia dentro dos tetos legais.
+            const entradaAberta = toMin(batidas[count - 1]);
+            let workedBefore = 0;
+            for (let i = 0; i + 1 < count; i += 2) {
+                workedBefore += toMin(batidas[i + 1]) - toMin(batidas[i]);
+            }
+            const desired = entradaAberta + Math.max(planMinutes - workedBefore, 0);
+            const exitFinal = capExit(desired, entradaAberta, workedBefore, 'exitFinal');
+            next = {
+                id: 'exitFinal',
+                label: SUGGESTION_LABELS.exitFinal,
+                time: exitFinal,
+                status: 'next',
+                windowMin: entradaAberta,
+                windowMax: entradaAberta + CONFIG.MAX_HORAS_TURNO
+            };
+            schedule.push({ ...next });
+            workedPlanned = workedBefore + (exitFinal - entradaAberta);
+            idealExit = capExit(exitFinal - saldoSemana, entradaAberta, workedBefore, 'idealExit');
+        } else {
+            const lastPunch = toMin(batidas[count - 1]);
+            if (lastPunch !== null) {
+                nextDayEntry = lastPunch + CONFIG.DESCANSO_MINIMO;
+            }
         }
     }
 

@@ -6,8 +6,6 @@ import {
     normalizePunchTime,
     shiftPunchTime,
     calcularTrabalhado,
-    roundUpQuarterHour,
-    fmtQuarterDecimal,
     fmtCountdown,
     escapeHtml,
     sameWeek,
@@ -101,22 +99,6 @@ describe('TimeUtils', () => {
 
         it('turno aberto usa now fornecido', () => {
             expect(calcularTrabalhado(['08:00'], 12 * 60)).toBe(240);
-        });
-    });
-
-    describe('roundUpQuarterHour', () => {
-        it('arredonda corretamente', () => {
-            expect(roundUpQuarterHour(0)).toBe(0);
-            expect(roundUpQuarterHour(1)).toBe(15);
-            expect(roundUpQuarterHour(14)).toBe(15);
-            expect(roundUpQuarterHour(15)).toBe(15);
-            expect(roundUpQuarterHour(16)).toBe(30);
-        });
-    });
-
-    describe('fmtQuarterDecimal', () => {
-        it('formata 500 como "8.5"', () => {
-            expect(fmtQuarterDecimal(500)).toBe('8.5');
         });
     });
 

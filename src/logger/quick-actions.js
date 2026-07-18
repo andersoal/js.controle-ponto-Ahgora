@@ -4,12 +4,13 @@
  */
 
 import { CONFIG } from '../core/config.js';
-import { fmtHour } from '../core/time-utils.js';
+import { escapeHtml, fmtHour } from '../core/time-utils.js';
 import { STORAGE_KEYS, gmGetJson, gmSetJson } from '../core/storage-adapter.js';
 import { openInNewTab } from '../shared/ui-components.js';
 import { DEFAULT_ALARM_CONFIG } from './alarm-engine.js';
 import { buildGoogleCalendarUrl, buildOutlookCalendarUrl } from './calendar-links.js';
 import { el } from '../shared/dom-builder.js';
+import { icon } from '../shared/icons.js';
 
 const LOGGER_GCAL_AUTOPEN_MAX_ENTRIES = 120;
 
@@ -84,7 +85,7 @@ function buildCalendarLink(label, url) {
     return el('a', {
         className: 'ahg-btn ahg-btn-sm',
         attrs: { href: url, target: '_blank', rel: 'noopener noreferrer' },
-        text: label
+        html: `${icon('calendar', { size: 11 })} ${escapeHtml(label)}`
     });
 }
 
@@ -97,10 +98,10 @@ export function buildQuickCalendarButtons(autoLink, alarmConfig) {
     const fragment = document.createDocumentFragment();
 
     if ((provider === 'google' || provider === 'both') && autoLink.gcal) {
-        fragment.appendChild(buildCalendarLink(`📅 Google ${labelSuffix}`, autoLink.gcal));
+        fragment.appendChild(buildCalendarLink(`Google ${labelSuffix}`, autoLink.gcal));
     }
     if ((provider === 'outlook' || provider === 'both') && autoLink.outlook) {
-        fragment.appendChild(buildCalendarLink(`🗓️ Outlook ${labelSuffix}`, autoLink.outlook));
+        fragment.appendChild(buildCalendarLink(`Outlook ${labelSuffix}`, autoLink.outlook));
     }
 
     return fragment;
@@ -132,10 +133,10 @@ export function buildStageActionRows(guidance, alarmConfig) {
         if (!link) return;
         const fragment = document.createDocumentFragment();
         if ((provider === 'google' || provider === 'both') && link.gcal) {
-            fragment.appendChild(buildCalendarLink(`📅 ${link.label}`, link.gcal));
+            fragment.appendChild(buildCalendarLink(`${link.label} · Google`, link.gcal));
         }
         if ((provider === 'outlook' || provider === 'both') && link.outlook) {
-            fragment.appendChild(buildCalendarLink(`🗓️ ${link.label}`, link.outlook));
+            fragment.appendChild(buildCalendarLink(`${link.label} · Outlook`, link.outlook));
         }
         if (fragment.childNodes.length) rows.push(fragment);
     };

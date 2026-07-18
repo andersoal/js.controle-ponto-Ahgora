@@ -20,6 +20,7 @@ import {
 } from '../core/privacy-engine.js';
 import { getAlarmConfig, setAlarmConfig } from './alarm-engine.js';
 import { buildAutoGcalMaxMinusLink, buildQuickCalendarButtons } from './quick-actions.js';
+import { icon } from '../shared/icons.js';
 
 function setFloatingPanelVisible(panel, fab, visible) {
     panel.classList.toggle('active', visible);
@@ -40,7 +41,7 @@ export function ensureLoggerContainer() {
     if (!fab) {
         fab = createFab({
             id: 'ahg-batida-fab',
-            icon: '⏱',
+            icon: icon('clock', { size: 22 }),
             bottom: '20px',
             right: '20px',
             title: 'Abrir logger Ahgora',
@@ -73,9 +74,9 @@ export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
 
     let html = `
     <div class="a-tit">
-        ⏱️ Logger v${CONFIG.VERSAO}
-        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-pressed="${privacyState.pressed}">${privacyState.icon}</button>
-        <span class="a-x" id="ahg-logger-min">–</span>
+        ${icon('clock')} Logger v${CONFIG.VERSAO}
+        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${privacyState.pressed ? icon('eye-off', { size: 14 }) : icon('eye', { size: 14 })}</button>
+        <span class="a-x" id="ahg-logger-min" title="Minimizar">${icon('minus', { size: 14 })}</span>
     </div>
     <div class="a-body">
         ${view.assistantHtml || ''}
@@ -116,8 +117,8 @@ export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
 
     html += `<hr class="a-div"><div class="a-sec">Ações</div>
         <div class="a-row infos ahg-flex-wrap ahg-gap-4">
-            <button class="ahg-btn ahg-btn-sm" id="ahg-logger-save" ${lastPunch ? '' : 'disabled'}>💾 Salvar última</button>
-            <button class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-delete">🗑️ Desfazer</button>
+            <button class="ahg-btn ahg-btn-sm" id="ahg-logger-save" ${lastPunch ? '' : 'disabled'}>${icon('save', { size: 11 })} Salvar última</button>
+            <button class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-delete">${icon('trash', { size: 11 })} Desfazer</button>
         </div>`;
 
     html += `</div><div class="a-foot">Atualizado ${fmtHour(new Date().getHours() * 60 + new Date().getMinutes())}</div>`;

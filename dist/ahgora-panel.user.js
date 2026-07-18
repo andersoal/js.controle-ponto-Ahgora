@@ -338,15 +338,6 @@
   function escapeHtml(value) {
     return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-  function roundUpQuarterHour(m) {
-    if (m === null || m === void 0) return null;
-    return Math.ceil(m / 15) * 15;
-  }
-  function fmtQuarterDecimal(m) {
-    if (m === null || m === void 0) return "--";
-    const decimal = roundUpQuarterHour(m) / 60;
-    return Number.isInteger(decimal) ? String(decimal) : decimal.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-  }
   function minuteToDate(baseDate, minute) {
     if (minute === null || minute === void 0) return null;
     const date = new Date(baseDate || /* @__PURE__ */ new Date());
@@ -400,6 +391,7 @@
     let initialLeft = 0;
     let initialTop = 0;
     function onMouseDown(e) {
+      if (e.target.closest("button, input, select, a, summary")) return;
       e.preventDefault();
       dragging = true;
       startX = e.clientX;
@@ -446,13 +438,18 @@
     panel._ahgDragCleanup = cleanup;
     return cleanup;
   }
-  function createFab({ id, icon, bottom = "20px", left, right, onClick, title = "" }) {
+  function createFab({ id, icon: icon2, bottom = "20px", left, right, onClick, title = "" }) {
     if (document.getElementById(id)) return document.getElementById(id);
     const btn = document.createElement("button");
     btn.id = id;
     btn.className = "ahg-fab";
-    btn.textContent = icon;
+    if (typeof icon2 === "string" && icon2.trim().startsWith("<svg")) {
+      btn.innerHTML = icon2;
+    } else {
+      btn.textContent = icon2;
+    }
     btn.title = title;
+    if (title) btn.setAttribute("aria-label", title);
     btn.style.bottom = bottom;
     if (left !== void 0) btn.style.left = left;
     if (right !== void 0) btn.style.right = right;
@@ -460,14 +457,43 @@
     document.body.appendChild(btn);
     return btn;
   }
-  function showLoggerToast(message, durationMs = 2200) {
+  function ensureToastRegion() {
+    let region = document.getElementById("ahg-toast-region");
+    if (!region) {
+      region = document.createElement("div");
+      region.id = "ahg-toast-region";
+      region.className = "ahg-toast-region";
+      region.setAttribute("role", "status");
+      region.setAttribute("aria-live", "polite");
+      document.body.appendChild(region);
+    }
+    return region;
+  }
+  function showLoggerToast(message, options = {}) {
+    const opts = typeof options === "number" ? { durationMs: options } : options || {};
+    const { durationMs = 2200, action = null } = opts;
     const toast = document.createElement("div");
     toast.className = "ahg-toast";
-    toast.textContent = message;
-    document.body.appendChild(toast);
+    const msg = document.createElement("span");
+    msg.textContent = message;
+    toast.appendChild(msg);
+    let timeout = durationMs;
+    if (action && typeof action.onClick === "function") {
+      timeout = Math.max(durationMs, 6e3);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ahg-btn ahg-btn-sm ahg-toast-action";
+      btn.textContent = action.label || "Desfazer";
+      btn.addEventListener("click", () => {
+        toast.remove();
+        action.onClick();
+      });
+      toast.appendChild(btn);
+    }
+    ensureToastRegion().appendChild(toast);
     setTimeout(() => {
       toast.remove();
-    }, durationMs);
+    }, timeout);
   }
   function openInNewTab(url) {
     const win = window.open(url, "_blank", "noopener,noreferrer");
@@ -483,6 +509,43 @@
     return child;
   }
 
+  // src/shared/icons.js
+  var PATHS = {
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    "eye-off": '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
+    minus: '<line x1="5" y1="12" x2="19" y2="12"/>',
+    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    "chevron-right": '<polyline points="9 18 15 12 9 6"/>',
+    dot: '<circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>',
+    circle: '<circle cx="12" cy="12" r="7"/>',
+    "circle-check": '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    "octagon-alert": '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
+    "bar-chart": '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    hourglass: '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 18.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
+    pencil: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+    lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    "map-pin": '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0Z"/><circle cx="12" cy="10" r="3"/>',
+    save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+    "rotate-ccw": '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
+    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    calendar: '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'
+  };
+  function icon(name, { size = 12, className = "", label = null } = {}) {
+    const paths = PATHS[name];
+    if (!paths) return "";
+    const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
+    return `<svg class="ahg-icon${className ? ` ${className}` : ""}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${a11y} focusable="false">${paths}</svg>`;
+  }
+
   // src/mirror/calendar-decorator.js
   function removeDayChild(dayEl, className) {
     const child = dayEl.querySelector(`.${className}`);
@@ -494,13 +557,10 @@
       const totalEl = ensureDayChild(dayEl, "ahg-day-total");
       totalEl.textContent = fmtMin(trabalhado);
       totalEl.title = "Total trabalhado no dia";
-      const roundedEl = ensureDayChild(dayEl, "ahg-day-total-rounded");
-      roundedEl.textContent = `${fmtQuarterDecimal(trabalhado)}h`;
-      roundedEl.title = "Total arredondado (quarto de hora)";
     } else {
       removeDayChild(dayEl, "ahg-day-total");
-      removeDayChild(dayEl, "ahg-day-total-rounded");
     }
+    removeDayChild(dayEl, "ahg-day-total-rounded");
   }
   function updateDayViolationBadge(dayEl, violations = []) {
     if (!dayEl) return;
@@ -525,8 +585,9 @@
     const hasOverrides = Boolean(localOverrides && localOverrides.length > 0);
     dayEl.classList.toggle("ahg-day-pending", hasOverrides);
     const btn = ensureDayChild(dayEl, "ahg-day-edit-btn", "button");
-    btn.textContent = "\u270F";
+    btn.innerHTML = icon("pencil", { size: 11 });
     btn.title = hasOverrides ? `Batidas ajustadas localmente (${localOverrides.length}) \u2014 clique para editar` : "Editar batidas";
+    btn.setAttribute("aria-label", btn.title);
     btn.classList.toggle("has-overrides", hasOverrides);
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -542,7 +603,7 @@
       return;
     }
     const badge = ensureDayChild(dayEl, "ahg-day-inconsistency", "span");
-    badge.textContent = "\u26A0\uFE0F";
+    badge.innerHTML = icon("triangle-alert", { size: 12 });
     badge.title = dia.isToday ? `${count} batidas: jornada aberta, precisa fechar com quantidade par` : `${count} batidas: registro inconsistente (esperado n\xFAmero par)`;
   }
   function updateDayToleranceMark(dayEl, dia) {
@@ -556,7 +617,7 @@
       return;
     }
     const mark = ensureDayChild(dayEl, "ahg-day-tolerance", "span");
-    mark.textContent = "\u26AA";
+    mark.innerHTML = icon("circle", { size: 9 });
     mark.title = `Saldo de ${fmtMin(dia.saldo)} dentro da toler\xE2ncia (\xB1${CONFIG.TOLERANCIA}min): conta zero na semana/m\xEAs`;
     dayEl.classList.add("ahg-day-in-tolerance");
   }
@@ -944,8 +1005,8 @@
   }
   function isDayCellHoliday(dayEl) {
     if (!dayEl) return false;
-    const icon = dayEl.querySelector(".material-icons");
-    return icon ? icon.textContent.trim() === "star" : false;
+    const icon2 = dayEl.querySelector(".material-icons");
+    return icon2 ? icon2.textContent.trim() === "star" : false;
   }
   function parseCalendarDayCell(dayEl, hoje = /* @__PURE__ */ new Date()) {
     if (!dayEl) return null;
@@ -1102,7 +1163,7 @@
   }
 
   // src/shared/css-injector.js
-  var CSS_ID = "ahg-css-v6";
+  var CSS_ID = "ahg-css-v7";
   var CSS_TOKENS = `
 :root {
     --ahg-primary: #7a6cff;
@@ -1115,11 +1176,32 @@
     --ahg-radius: 8px;
     --ahg-radius-lg: 12px;
 
+    /* Paleta sem\xE2ntica \u2014 tokenizada e reajustada por tema (ver override light) */
+    --ahg-ok: #22c55e;
+    --ahg-warn: #f59e0b;
+    --ahg-danger: #ef4444;
+    --ahg-info: #60a5fa;
+
+    /* Overlay neutro semi-transparente \u2014 leg\xEDvel sobre dark e light sem override */
+    --ahg-hover-bg: rgba(128,128,128,.05);
+
+    /* Preenchimentos s\xF3lidos para texto branco: >=4.5:1 com #fff em ambos os
+       temas e leg\xEDveis sobre a p\xE1gina host (clara). \xDAnicos tokens v\xE1lidos como
+       background de elementos com texto branco. */
+    --ahg-primary-strong: #4f46e5;
+    --ahg-ok-strong: #15803d;
+    --ahg-warn-strong: #b45309;
+    --ahg-danger-strong: #b91c1c;
+    --ahg-neutral-strong: #475569;
+
     --z-fab: 99990;
     --z-panel: 99990;
-    --z-toast: 100000;
     --z-detail-modal: 100010;
     --z-punch-editor: 100020;
+    /* Editor em foco entre m\xFAltiplos abertos \u2014 sempre abaixo do toast */
+    --z-punch-editor-front: 100021;
+    /* Toast \xE9 feedback ef\xEAmero: sempre acima de qualquer superf\xEDcie do painel */
+    --z-toast: 100030;
 }
 
 :root[data-theme="light"] {
@@ -1129,6 +1211,13 @@
     --ahg-text-label: #64748b;
     --ahg-border: #e2e8f0;
     --ahg-shadow: rgba(0,0,0,.12);
+
+    /* Tons escurecidos para atingir >=4.5:1 sobre superf\xEDcies claras */
+    --ahg-primary: #4f46e5;
+    --ahg-ok: #15803d;
+    --ahg-warn: #b45309;
+    --ahg-danger: #b91c1c;
+    --ahg-info: #1d4ed8;
 }
 `;
   var CSS_COMPONENTS = `
@@ -1143,6 +1232,31 @@
 }
 .ahg-fab:hover { opacity: 1; transform: scale(1.05); }
 .ahg-fab.hidden { opacity: 0; pointer-events: none; transform: scale(0.8); }
+
+/* Foco vis\xEDvel \u2014 controles reestilizados perdem o anel nativo do navegador */
+.ahg-fab:focus-visible,
+.ahg-btn:focus-visible,
+.ahg-privacy-btn:focus-visible,
+.a-x:focus-visible,
+.ahg-as-preset:focus-visible,
+.ahg-as-cal:focus-visible,
+.ahg-config-select:focus-visible,
+.ahg-day-edit-btn:focus-visible,
+.ahg-day-request-badge:focus-visible,
+.ahg-pe-inline-input:focus-visible,
+.ahg-pe-add-row input:focus-visible,
+.ahg-details summary.a-sec:focus-visible,
+.a-row.clickable:focus-visible,
+.ahg-punch-editor .ahg-pe-punch-time.ahg-pe-edit-time:focus-visible {
+    outline: 2px solid var(--ahg-primary);
+    outline-offset: 2px;
+}
+
+/* Dentro de cont\xEAineres rol\xE1veis (overflow) o anel externo seria cortado \u2014 desenha por dentro */
+.ahg-details summary.a-sec:focus-visible,
+.a-row.clickable:focus-visible {
+    outline-offset: -2px;
+}
 
 .ahg-floating-panel {
     position: fixed;
@@ -1195,34 +1309,42 @@
 .a-row {
     display: flex; justify-content: space-between; align-items: center;
     padding: 7px 10px; border-radius: var(--ahg-radius); background: transparent;
-    border-left: 3px solid var(--ahg-border); gap: 8px;
+    border: 1px solid var(--ahg-border); gap: 8px;
 }
-.a-row.ok { border-color: #22c55e; background: rgba(34,197,94,.06); }
-.a-row.warn { border-color: #f59e0b; background: rgba(245,158,11,.06); }
-.a-row.danger { border-color: #ef4444; background: rgba(239,68,68,.08); }
-.a-row.infos { border-color: var(--ahg-primary); background: color-mix(in srgb, var(--ahg-primary) 5%, transparent); }
-.a-row.neu { border-color: var(--ahg-border); background: rgba(128,128,128,.04); }
-.a-lbl { color: var(--ahg-text-label); font-size: 10px; font-weight: 600; white-space: nowrap; }
+.a-row.ok { border-color: color-mix(in srgb, var(--ahg-ok) 35%, transparent); background: color-mix(in srgb, var(--ahg-ok) 8%, transparent); }
+.a-row.warn { border-color: color-mix(in srgb, var(--ahg-warn) 35%, transparent); background: color-mix(in srgb, var(--ahg-warn) 8%, transparent); }
+.a-row.danger { border-color: color-mix(in srgb, var(--ahg-danger) 40%, transparent); background: color-mix(in srgb, var(--ahg-danger) 10%, transparent); }
+.a-row.infos { border-color: color-mix(in srgb, var(--ahg-primary) 30%, transparent); background: color-mix(in srgb, var(--ahg-primary) 6%, transparent); }
+.a-row.neu { border-color: var(--ahg-border); background: var(--ahg-hover-bg); }
+.a-lbl { color: var(--ahg-text-label); font-size: 10px; font-weight: 600; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
 .a-val { font-weight: 700; font-size: 12px; text-align: right; }
-.a-val.pos { color: #22c55e; } .a-val.neg { color: #ef4444; }
-.a-val.warn { color: #f59e0b; } .a-val.neu { color: var(--ahg-primary); }
-.a-foot { font-size: 9px; font-weight: 600; color: var(--ahg-text-label); text-align: right; padding: 6px 14px; opacity: .6; }
+.a-val.pos { color: var(--ahg-ok); } .a-val.neg { color: var(--ahg-danger); }
+.a-val.warn { color: var(--ahg-warn); } .a-val.neu { color: var(--ahg-primary); }
+/* <small> sem classe \xC9 o valor da linha (avisos): herda a cor sem\xE2ntica. */
+.a-val small { display: block; font-size: 9px; font-weight: 600; }
+/* .a-cap \xE9 legenda sob um valor: linha pr\xF3pria e cor neutra, para n\xE3o competir
+   com o n\xFAmero nem duplicar o alarme da cor sem\xE2ntica. */
+.a-val small.a-cap { margin-top: 3px; color: var(--ahg-text-label); }
+.a-foot { font-size: 9px; font-weight: 600; color: var(--ahg-text-label); text-align: right; padding: 6px 14px; }
 
 .ahg-btn {
     border: 1px solid var(--ahg-primary); background: color-mix(in srgb, var(--ahg-primary) 12%, transparent);
     color: var(--ahg-text); border-radius: var(--ahg-radius); padding: 6px 12px;
-    cursor: pointer; font-size: 11px; font-weight: 700; transition: .15s; white-space: nowrap;
+    cursor: pointer; font-size: 11px; font-weight: 700; white-space: nowrap;
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+    transition: background .15s, transform .1s;
 }
 .ahg-btn:hover { background: color-mix(in srgb, var(--ahg-primary) 18%, transparent); }
+.ahg-btn:active { transform: translateY(1px); }
+.ahg-btn-sm { padding: 2px 7px; font-size: 11px; min-width: 26px; min-height: 24px; line-height: 1; }
 
 .ahg-day-total {
     position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
-    background: var(--ahg-primary); color: #fff; padding: 2px 6px; border-radius: 4px;
+    background: var(--ahg-primary-strong); color: #fff; padding: 2px 6px; border-radius: 4px;
     font-size: 10px; font-weight: 700; box-shadow: 0 2px 4px rgba(0,0,0,.2);
     z-index: 10; pointer-events: none; white-space: nowrap;
 }
 .ahg-hide-times .ahg-day-total { opacity: .3; filter: blur(1px); }
-.ahg-hide-times .ahg-day-total-rounded { opacity: .3; filter: blur(1px); }
 .ahg-hide-times .ahg-pe-punch-time,
 .ahg-hide-times .ahg-pe-total-val,
 .ahg-hide-times .ahg-pe-violations { filter: blur(4px); user-select: none; }
@@ -1233,36 +1355,39 @@
     width: 28px; height: 28px; border-radius: 50%;
     border: 1px solid var(--ahg-border); background: transparent;
     color: var(--ahg-text); cursor: pointer; opacity: .6;
-    font-size: 16px; transition: .15s;
+    font-size: 16px; transition: opacity .15s, background .15s;
 }
 .ahg-privacy-btn:hover { opacity: 1; background: color-mix(in srgb, var(--ahg-primary) 8%, transparent); }
 
 .a-x {
     margin-left: 6px;
-    cursor: pointer; opacity: .6; font-size: 16px; transition: .15s;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 24px; min-height: 24px;
+    cursor: pointer; opacity: .6; font-size: 16px; transition: opacity .15s;
 }
 .a-x:hover { opacity: 1; }
 
 .a-div { border: none; border-top: 1px solid var(--ahg-border); margin: 4px 0; }
-.a-sec { font-size: 9px; letter-spacing: .5px; text-transform: uppercase; color: var(--ahg-text-label); padding: 6px 0 2px; font-weight: 700; opacity: .7; }
+.a-sec { font-size: 9px; letter-spacing: .5px; text-transform: uppercase; color: var(--ahg-text-label); padding: 6px 0 2px; font-weight: 700; }
 .a-row.clickable { cursor: pointer; }
-.a-row.clickable:hover { background: rgba(128,128,128,.05); }
+.a-row.clickable:hover { background: var(--ahg-hover-bg); }
 
-.ahg-btn-success { border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.1); color: #22c55e; }
-.ahg-btn-danger { border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.1); color: #ef4444; }
+.ahg-btn-success { border-color: color-mix(in srgb, var(--ahg-ok) 45%, transparent); background: color-mix(in srgb, var(--ahg-ok) 12%, transparent); color: var(--ahg-ok); }
+.ahg-btn-danger { border-color: color-mix(in srgb, var(--ahg-danger) 45%, transparent); background: color-mix(in srgb, var(--ahg-danger) 12%, transparent); color: var(--ahg-danger); }
 
 .ahg-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 11px; }
-.ahg-toggle input { display: none; }
+.ahg-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
 .ahg-toggle-track {
     width: 36px; height: 20px; background: var(--ahg-border); border-radius: 10px;
-    position: relative; transition: .2s; flex-shrink: 0;
+    position: relative; transition: background .2s; flex-shrink: 0;
 }
 .ahg-toggle input:checked + .ahg-toggle-track { background: var(--ahg-primary); }
+.ahg-toggle input:focus-visible + .ahg-toggle-track { outline: 2px solid var(--ahg-primary); outline-offset: 2px; }
 .ahg-toggle-thumb {
     width: 16px; height: 16px; background: #fff; border-radius: 50%;
-    position: absolute; top: 2px; left: 2px; transition: .2s;
+    position: absolute; top: 2px; left: 2px; transition: transform .2s;
 }
-.ahg-toggle input:checked + .ahg-toggle-track .ahg-toggle-thumb { left: 18px; }
+.ahg-toggle input:checked + .ahg-toggle-track .ahg-toggle-thumb { transform: translateX(16px); }
 
 .ahg-config-grid { display: grid; gap: 8px; padding: 4px 0; }
 .ahg-config-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1313,7 +1438,7 @@
 
 .ahg-punch-editor .ahg-pe-empty {
     font-size: 10px;
-    opacity: .45;
+    color: var(--ahg-text-label);
     padding: 4px 0;
 }
 
@@ -1332,12 +1457,12 @@
 
 .ahg-punch-editor .ahg-pe-punch-time.ahg-pe-edit-time {
     cursor: pointer;
-    text-decoration: underline dotted rgba(122, 108, 255, .5);
+    text-decoration: underline dotted color-mix(in srgb, var(--ahg-primary) 55%, transparent);
 }
 
 .ahg-punch-editor .ahg-pe-punch-src {
     font-size: 9px;
-    opacity: .45;
+    color: var(--ahg-text-label);
     flex: 1;
 }
 
@@ -1356,8 +1481,11 @@
 .ahg-punch-editor .ahg-pe-hint {
     font-size: 9px;
     padding: 0 2px 4px 6px;
-    opacity: .9;
+    color: var(--ahg-text-label);
 }
+.ahg-punch-editor .ahg-pe-hint--ok { color: var(--ahg-ok); }
+.ahg-punch-editor .ahg-pe-hint--warn { color: var(--ahg-warn); }
+.ahg-punch-editor .ahg-pe-hint--error { color: var(--ahg-danger); }
 
 .ahg-punch-editor .ahg-pe-add-row {
     display: flex;
@@ -1389,7 +1517,7 @@
     text-align: center;
     padding: 4px;
     border-radius: var(--ahg-radius);
-    background: rgba(128, 128, 128, .05);
+    background: var(--ahg-hover-bg);
 }
 
 .ahg-punch-editor .ahg-pe-total-lbl {
@@ -1407,7 +1535,7 @@
 
 .ahg-punch-editor .ahg-pe-violations {
     font-size: 9px;
-    color: #f59e0b;
+    color: var(--ahg-warn);
     margin-top: 2px;
 }
 
@@ -1417,6 +1545,18 @@
     margin-top: 6px;
 }
 
+/* Guarda de descarte: fechar com edi\xE7\xF5es n\xE3o salvas pede confirma\xE7\xE3o inline */
+.ahg-pe-confirm-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 6px 8px; margin-top: 4px;
+    border: 1px solid color-mix(in srgb, var(--ahg-warn) 40%, transparent);
+    background: color-mix(in srgb, var(--ahg-warn) 8%, transparent);
+    border-radius: var(--ahg-radius);
+    font-size: 10px;
+}
+.ahg-pe-confirm-bar .ahg-pe-confirm-msg { color: var(--ahg-warn); font-weight: 600; }
+.ahg-pe-confirm-bar .ahg-pe-bar-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
 .ahg-day-edit-btn {
     position: absolute;
     top: 35px;
@@ -1424,12 +1564,17 @@
     transform: translateX(-50%);
     background: transparent;
     border: 1px solid transparent;
-    color: var(--ahg-primary);
+    color: var(--ahg-primary-strong);
     font-size: 9px;
     cursor: pointer;
     z-index: 12;
-    opacity: 0;
-    padding: 1px 4px;
+    opacity: .35;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 24px;
+    min-width: 24px;
+    padding: 3px 6px;
     line-height: 1;
     border-radius: 3px;
     transition: opacity .15s;
@@ -1438,24 +1583,28 @@
 }
 
 .v-calendar-weekly__day:hover .ahg-day-edit-btn {
-    opacity: .5;
+    opacity: .75;
+}
+
+.ahg-day-edit-btn:focus-visible {
+    opacity: 1;
 }
 
 .ahg-day-edit-btn:hover {
     opacity: 1 !important;
-    background: rgba(122, 108, 255, .15);
-    border-color: rgba(122, 108, 255, .4);
+    background: color-mix(in srgb, var(--ahg-primary) 15%, transparent);
+    border-color: color-mix(in srgb, var(--ahg-primary) 40%, transparent);
 }
 
 .ahg-day-edit-btn.has-overrides {
     opacity: .85;
-    color: #f59e0b;
-    border-color: rgba(245, 158, 11, .35);
-    background: rgba(245, 158, 11, .08);
+    color: var(--ahg-warn);
+    border-color: color-mix(in srgb, var(--ahg-warn) 35%, transparent);
+    background: color-mix(in srgb, var(--ahg-warn) 8%, transparent);
 }
 
 .v-calendar-weekly__day.ahg-day-pending {
-    outline: 2px solid rgba(245, 158, 11, .45);
+    outline: 2px solid color-mix(in srgb, var(--ahg-warn) 45%, transparent);
     outline-offset: -2px;
 }
 
@@ -1467,15 +1616,29 @@
     z-index: 11; pointer-events: auto; cursor: help;
     box-shadow: 0 1px 3px rgba(0,0,0,.3);
 }
-.ahg-day-request-badge.inclusao { background: #22c55e; }
-.ahg-day-request-badge.exclusao { background: #ef4444; }
-.ahg-day-request-badge.ambos { background: #f59e0b; }
-.ahg-day-request-badge.solicitacao { background: #7a6cff; }
+.ahg-day-request-badge.inclusao { background: var(--ahg-ok-strong); }
+.ahg-day-request-badge.exclusao { background: var(--ahg-danger-strong); }
+.ahg-day-request-badge.ambos { background: var(--ahg-warn-strong); }
+.ahg-day-request-badge.solicitacao { background: var(--ahg-primary-strong); }
 
 .ahg-day-punch-manual {
-    color: #22c55e !important;
+    color: var(--ahg-ok-strong) !important;
     font-weight: 700;
 }
+
+/* C\xF3digos de viola\xE7\xE3o (TUR \xB7 DIA \xB7 ...) \u2014 canto inferior esquerdo da c\xE9lula */
+.ahg-day-violations {
+    position: absolute; bottom: 4px; left: 4px;
+    background: var(--ahg-neutral-strong); color: #fff;
+    padding: 1px 5px; border-radius: 4px;
+    font-size: 9px; font-weight: 800; letter-spacing: .3px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.2);
+    z-index: 11; pointer-events: auto; cursor: help;
+    white-space: nowrap; max-width: calc(100% - 8px);
+    overflow: hidden; text-overflow: ellipsis;
+}
+.ahg-day-violations.is-warning { background: var(--ahg-warn-strong); }
+.ahg-day-violations.is-critical { background: var(--ahg-danger-strong); }
 
 #ahg-detail-modal {
     position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -1487,85 +1650,111 @@
     display: flex; flex-direction: column;
 }
 
-.ahg-toast {
+.ahg-toast-region {
     position: fixed; bottom: 20px; right: 20px; z-index: var(--z-toast);
+    display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+    pointer-events: none;
+}
+.ahg-toast {
     background: var(--ahg-bg-card); color: var(--ahg-text);
     border: 1px solid var(--ahg-border); border-radius: var(--ahg-radius);
     padding: 12px 16px;
     box-shadow: 0 8px 32px var(--ahg-shadow);
     font-size: 13px;
+    display: flex; align-items: center; gap: 10px;
+    pointer-events: auto;
     animation: ahg-fadein .3s ease;
 }
+.ahg-toast-action { flex-shrink: 0; }
 @keyframes ahg-fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 /* Assistente de fluxo de batidas */
 .ahg-assistant {
-    border: 1px solid var(--ahg-border); border-left: 3px solid var(--ahg-primary);
+    border: 1px solid color-mix(in srgb, var(--ahg-primary) 30%, var(--ahg-border));
     border-radius: var(--ahg-radius); padding: 10px; margin-bottom: 4px;
     background: color-mix(in srgb, var(--ahg-primary) 6%, transparent);
     display: flex; flex-direction: column; gap: 8px;
 }
 .ahg-as-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ahg-as-title { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--ahg-text-label); }
+.ahg-as-title { font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--ahg-text-label); display: inline-flex; align-items: center; gap: 4px; }
 .ahg-as-presets { display: inline-flex; border: 1px solid var(--ahg-border); border-radius: 999px; overflow: hidden; flex-shrink: 0; }
 .ahg-as-preset {
     border: none; background: transparent; color: var(--ahg-text-label);
-    font-size: 10px; font-weight: 700; padding: 3px 10px; cursor: pointer; transition: .15s;
+    font-size: 10px; font-weight: 700; padding: 3px 10px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; min-height: 24px;
+    transition: background .15s, color .15s;
 }
 .ahg-as-preset:hover { color: var(--ahg-text); }
-.ahg-as-preset.active { background: var(--ahg-primary); color: #fff; }
+.ahg-as-preset.active { background: var(--ahg-primary-strong); color: #fff; }
 .ahg-as-next { display: flex; align-items: center; gap: 10px; }
 .ahg-as-next-time { font-size: 30px; font-weight: 800; color: var(--ahg-primary); line-height: 1; }
+.ahg-as-next-time.done { color: var(--ahg-ok); display: inline-flex; align-items: center; }
 .ahg-as-next-info { display: flex; flex-direction: column; gap: 2px; }
 .ahg-as-next-label { font-size: 11px; font-weight: 700; }
 .ahg-as-next-window { font-size: 10px; color: var(--ahg-text-label); }
 .ahg-as-alerts { display: flex; flex-direction: column; gap: 3px; }
 .ahg-as-alert { display: flex; gap: 6px; align-items: baseline; font-size: 10px; }
 .ahg-as-alert-badge { border-radius: 4px; padding: 0 5px; font-weight: 800; font-size: 9px; white-space: nowrap; }
-.ahg-as-alert-badge.danger { background: rgba(239,68,68,.16); color: #ef4444; }
-.ahg-as-alert-badge.warn { background: rgba(245,158,11,.16); color: #f59e0b; }
+.ahg-as-alert-badge.danger { background: color-mix(in srgb, var(--ahg-danger) 16%, transparent); color: var(--ahg-danger); }
+.ahg-as-alert-badge.warn { background: color-mix(in srgb, var(--ahg-warn) 16%, transparent); color: var(--ahg-warn); }
 .ahg-as-alert-badge.infos { background: color-mix(in srgb, var(--ahg-primary) 14%, transparent); color: var(--ahg-primary); }
 .ahg-as-alert-msg { color: var(--ahg-text-label); }
 .ahg-as-schedule { display: flex; flex-direction: column; gap: 2px; }
 .ahg-as-step { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 4px; border-radius: 4px; }
-.ahg-as-step.done { opacity: .55; }
+/* Esmaecer por cor (n\xE3o por opacity): mant\xE9m >=4.5:1 nos dois temas */
+.ahg-as-step.done { color: var(--ahg-text-label); }
+.ahg-as-step.done .ahg-as-step-time { font-weight: 400; color: var(--ahg-text-label); }
+.ahg-as-step.done .ahg-as-step-icon { color: var(--ahg-ok); }
 .ahg-as-step.next { background: color-mix(in srgb, var(--ahg-primary) 10%, transparent); font-weight: 700; }
 .ahg-as-step-icon { width: 12px; text-align: center; color: var(--ahg-primary); }
 .ahg-as-step-label { flex: 1; color: var(--ahg-text-label); }
 .ahg-as-step-time { font-weight: 700; }
-.ahg-as-step-cal { display: inline-flex; gap: 2px; min-width: 16px; }
-.ahg-as-cal { text-decoration: none; font-size: 11px; opacity: .7; transition: .15s; }
-.ahg-as-cal:hover { opacity: 1; }
-.ahg-as-ideal { font-size: 10px; color: var(--ahg-text-label); }
+.ahg-as-step-cal { display: inline-flex; gap: 2px; min-width: 24px; }
+.ahg-as-cal {
+    text-decoration: none; color: var(--ahg-text-label); opacity: .75;
+    display: inline-flex; align-items: center; justify-content: center; gap: 1px;
+    min-width: 24px; min-height: 24px; border-radius: 4px;
+    transition: opacity .15s, background .15s;
+}
+.ahg-as-cal:hover { opacity: 1; background: color-mix(in srgb, var(--ahg-primary) 10%, transparent); }
+.ahg-as-cal-tag { font-size: 8px; font-weight: 800; line-height: 1; }
+.ahg-as-ideal { font-size: 10px; color: var(--ahg-text-label); display: inline-flex; align-items: center; gap: 4px; }
 .ahg-as-ideal b { color: var(--ahg-text); }
 
 /* Vis\xE3o semanal (meta vs. trabalhado) */
 .ahg-week { display: flex; flex-direction: column; gap: 3px; padding: 4px 0; }
 .ahg-week-day { display: flex; align-items: center; gap: 6px; font-size: 10px; }
 .ahg-week-day.today .ahg-week-lbl { color: var(--ahg-primary); font-weight: 800; }
-.ahg-week-day.future { opacity: .55; }
+.ahg-week-day.future { color: var(--ahg-text-label); }
+.ahg-week-day.future .ahg-week-val { font-weight: 400; color: var(--ahg-text-label); }
 .ahg-week-lbl { width: 24px; color: var(--ahg-text-label); font-weight: 700; }
 .ahg-week-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--ahg-border); overflow: hidden; }
 .ahg-week-fill { height: 100%; background: var(--ahg-primary); border-radius: 3px; }
 .ahg-week-val { min-width: 40px; text-align: right; font-weight: 700; }
 .ahg-week-delta { min-width: 40px; text-align: right; }
-.ahg-week-delta.pos { color: #22c55e; }
-.ahg-week-delta.neg { color: #ef4444; }
+.ahg-week-delta.pos { color: var(--ahg-ok); }
+.ahg-week-delta.neg { color: var(--ahg-danger); }
 .ahg-week-balance { font-size: 10px; color: var(--ahg-text-label); padding-top: 2px; }
-.ahg-week-balance .pos { color: #22c55e; }
-.ahg-week-balance .neg { color: #ef4444; }
+.ahg-week-balance .pos { color: var(--ahg-ok); }
+.ahg-week-balance .neg { color: var(--ahg-danger); }
 
 /* Badge de inconsist\xEAncia (batidas \xEDmpares) \u2014 apenas passado/presente */
 .ahg-day-inconsistency {
-    position: absolute; top: 4px; left: 4px; font-size: 10px;
+    position: absolute; top: 4px; left: 4px; line-height: 0;
+    color: var(--ahg-warn-strong);
     z-index: 11; pointer-events: auto; cursor: help;
 }
 
-/* Marca discreta de dia em toler\xE2ncia (\xB110min) */
+/* Marca discreta de dia em toler\xE2ncia (\xB110min) \u2014 quieta mas leg\xEDvel (>=3:1 sobre a p\xE1gina host clara) */
 .ahg-day-tolerance {
-    position: absolute; bottom: 4px; right: 4px; font-size: 8px;
-    opacity: .65; z-index: 11; pointer-events: auto; cursor: help;
+    position: absolute; bottom: 4px; right: 4px; line-height: 0;
+    color: var(--ahg-neutral-strong);
+    opacity: .8; z-index: 11; pointer-events: auto; cursor: help;
 }
+
+/* \xCDcones SVG inline \u2014 herdam a cor do texto */
+.ahg-icon { flex-shrink: 0; vertical-align: -2px; }
+.ahg-pe-hint, .ahg-pe-violations { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 
 /* Expans\xE3o de dados densos */
 .ahg-details { display: block; }
@@ -1581,19 +1770,32 @@
 .ahg-gap-4 { gap: 4px; }
 .ahg-gap-8 { gap: 8px; }
 .ahg-text-right { text-align: right; }
-.ahg-color-pos { color: #22c55e; }
-.ahg-color-neg { color: #ef4444; }
-.ahg-pe-row--warn { border-left: 2px solid #ffd08a; padding-left: 4px; }
-.ahg-pe-row--error { border-left: 2px solid #ff8888; padding-left: 4px; }
+.ahg-color-pos { color: var(--ahg-ok); }
+.ahg-color-neg { color: var(--ahg-danger); }
+.ahg-pe-row--warn { border: 1px solid color-mix(in srgb, var(--ahg-warn) 40%, transparent); border-radius: var(--ahg-radius); background: color-mix(in srgb, var(--ahg-warn) 8%, transparent); padding: 2px 4px; }
+.ahg-pe-row--error { border: 1px solid color-mix(in srgb, var(--ahg-danger) 45%, transparent); border-radius: var(--ahg-radius); background: color-mix(in srgb, var(--ahg-danger) 10%, transparent); padding: 2px 4px; }
 .ahg-label-inline { font-size: 13px; cursor: pointer; }
 .ahg-modal-hint { font-size: 12px; margin: 6px 0; }
-.ahg-modal-hint--info { color: #60a5fa; }
-.ahg-modal-hint--error { color: #ef4444; }
-.ahg-modal-hint--ok { color: #22c55e; }
+.ahg-modal-hint--info { color: var(--ahg-info); }
+.ahg-modal-hint--error { color: var(--ahg-danger); }
+.ahg-modal-hint--ok { color: var(--ahg-ok); }
 
 @media (max-width: 480px) {
     #ahg-panel { min-width: auto; width: calc(100vw - 40px); right: 10px; left: 10px; }
-    #ahg-fab { right: 10px; bottom: 10px; }
+    #ahg-batida-panel { min-width: auto; max-width: none; left: 10px; right: 10px; }
+    #ahg-detail-modal { min-width: auto; width: calc(100vw - 20px); max-width: none; }
+    .ahg-punch-editor { min-width: auto; width: calc(100vw - 20px); max-width: none; }
+    #ahg-fab { right: 10px !important; bottom: 10px !important; }
+}
+
+/* Movimento reduzido \u2014 respeitado em todos os elementos do painel (convidado discreto: n\xE3o afeta a p\xE1gina host) */
+@media (prefers-reduced-motion: reduce) {
+    .ahg-fab, .ahg-floating-panel, .ahg-btn,
+    .ahg-privacy-btn, .a-x, .ahg-as-preset, .ahg-as-cal,
+    .ahg-toggle-track, .ahg-toggle-thumb, .ahg-day-edit-btn {
+        transition-duration: .01ms !important;
+    }
+    .ahg-toast { animation: none !important; }
 }
 `;
   function injectCSS() {
@@ -1636,7 +1838,6 @@
   function privacyButtonState() {
     const hidden = isPrivacyHidden();
     return {
-      icon: hidden ? "\u{1F648}" : "\u{1F441}",
       title: hidden ? "Privacidade ativa \u2014 clique para desativar" : "Privacidade inativa \u2014 clique para ativar",
       pressed: hidden
     };
@@ -1651,7 +1852,8 @@
   }
   function renderText(text) {
     if (text === null || text === void 0) return "";
-    return isPrivacyHidden() ? PRIVACY_MASK : escapeHtml(String(text));
+    const safe = escapeHtml(String(text));
+    return isPrivacyHidden() ? safe.replace(/\b\d{1,2}:\d{2}\b/g, PRIVACY_MASK) : safe;
   }
 
   // src/shared/dom-builder.js
@@ -1893,6 +2095,12 @@
     }
     setLocalDayPunches(overrides);
   }
+  function bringEditorToFront(editor) {
+    document.querySelectorAll(".ahg-punch-editor").forEach((p) => {
+      p.style.zIndex = "";
+    });
+    editor.style.zIndex = "var(--z-punch-editor-front)";
+  }
   function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localPunches = [], onSave, targetEl }) {
     const editorId = `ahg-punch-editor-${dateKey}`;
     let existing = document.getElementById(editorId);
@@ -1903,7 +2111,7 @@
     const editor = el("div", {
       id: editorId,
       className: "ahg-panel ahg-punch-editor",
-      attrs: { "data-date-key": dateKey }
+      attrs: { "data-date-key": dateKey, tabindex: "-1" }
     });
     editor.style.top = "80px";
     editor.style.left = "50%";
@@ -1920,6 +2128,21 @@
     }
     let working = localPunches.length > 0 ? [...localPunches] : [...mirrorPunches];
     let editingIdx = null;
+    let confirmingClose = false;
+    const baselinePunches = () => {
+      const saved = getOverridesForDay(dateKey);
+      return saved.length > 0 ? saved : mirrorPunches;
+    };
+    const isDirty = () => JSON.stringify(working) !== JSON.stringify(baselinePunches());
+    function closeEditor({ force = false } = {}) {
+      if (!force && isDirty()) {
+        confirmingClose = true;
+        render();
+        return;
+      }
+      if (editor._ahgDragCleanup) editor._ahgDragCleanup();
+      editor.remove();
+    }
     function getPunchHint(batidas, idx) {
       if (!batidas || idx < 0 || idx >= batidas.length) return null;
       const total = batidas.length;
@@ -1943,12 +2166,10 @@
     }
     function renderHint(hint) {
       if (!hint) return null;
-      const color = hint.level === "error" ? "#ff8888" : hint.level === "warn" ? "#ffd08a" : "#22c55e";
-      const icon = hint.level === "ok" ? "\u2713" : "\u26A0";
+      const hintIcon = hint.level === "ok" ? icon("check", { size: 10 }) : icon("triangle-alert", { size: 10 });
       return el("div", {
-        className: "ahg-pe-hint",
-        style: { color },
-        text: `${icon} ${hint.text}`
+        className: `ahg-pe-hint ahg-pe-hint--${hint.level}`,
+        html: `${hintIcon} ${escapeHtml(hint.text)}`
       });
     }
     function renderPunchRow(time, idx, { hasOverrides, mirrorSet }) {
@@ -1967,15 +2188,15 @@
         });
         const confirmBtn = el("button", {
           className: "ahg-btn ahg-btn-sm ahg-pe-confirm",
-          attrs: { type: "button", title: "Confirmar (Enter)" },
+          attrs: { type: "button", title: "Confirmar (Enter)", "aria-label": "Confirmar hor\xE1rio" },
           dataset: { idx: String(idx) },
-          text: "\u2713"
+          html: icon("check", { size: 11 })
         });
         const cancelBtn = el("button", {
           className: "ahg-btn ahg-btn-sm ahg-pe-cancel",
-          attrs: { type: "button", title: "Cancelar (Esc)" },
+          attrs: { type: "button", title: "Cancelar (Esc)", "aria-label": "Cancelar edi\xE7\xE3o" },
           dataset: { idx: String(idx) },
-          text: "\u2717",
+          html: icon("x", { size: 11 }),
           on: { click: () => {
             editingIdx = null;
             render();
@@ -2005,27 +2226,28 @@
         }
         const srcSpan = el("span", {
           className: "ahg-pe-punch-src",
-          text: `${isMirror ? "\u{1F512}" : "\u{1F4CD}"} ${isMirror ? "mirror" : "local"}`
+          html: `${isMirror ? icon("lock", { size: 9 }) : icon("map-pin", { size: 9 })} ${isMirror ? "mirror" : "local"}`
         });
         row.append(timeSpan, srcSpan);
         if (!isMirror) {
           const editBtn = el("button", {
             className: "ahg-btn ahg-btn-sm ahg-pe-edit-inline",
-            attrs: { type: "button", title: "Editar" },
+            attrs: { type: "button", title: "Editar", "aria-label": `Editar batida ${time}` },
             dataset: { idx: String(idx) },
-            text: "\u270F"
+            html: icon("pencil", { size: 11 })
           });
           editBtn.addEventListener("click", () => startInlineEdit(idx));
           row.appendChild(editBtn);
         }
         const removeBtn = el("button", {
           className: "ahg-btn ahg-btn-sm ahg-btn-danger ahg-pe-remove",
-          attrs: { type: "button", title: "Remover" },
+          attrs: { type: "button", title: "Remover", "aria-label": `Remover batida ${time}` },
           dataset: { idx: String(idx) },
-          text: "\xD7"
+          html: icon("trash", { size: 11 })
         });
         removeBtn.addEventListener("click", () => {
           if (editingIdx === idx) editingIdx = null;
+          confirmingClose = false;
           working = working.filter((_, i) => i !== idx);
           render();
         });
@@ -2059,7 +2281,7 @@
       if (!violations.length) return null;
       return el("div", {
         className: "ahg-pe-violations",
-        text: violations.map((v) => `\u26A0 ${v.label}`).join(" \xB7 ")
+        html: violations.map((v) => `${icon("triangle-alert", { size: 10 })} ${escapeHtml(v.label)}`).join(" \xB7 ")
       });
     }
     function renderActions({ hasOverrides }) {
@@ -2067,12 +2289,15 @@
         id: `ahg-pe-save-${dateKey}`,
         className: "ahg-btn ahg-btn-success ahg-flex-1",
         attrs: { type: "button" },
-        text: "\u{1F4BE} Salvar"
+        html: `${icon("save", { size: 11 })} Salvar`
       });
       saveBtn.addEventListener("click", () => {
         saveOverridesForDay(dateKey, working);
+        if (working.length === 0) working = [...mirrorPunches];
+        confirmingClose = false;
         showLoggerToast(`Batidas de ${dateLabel || dateKey} salvas.`);
         if (typeof onSave === "function") onSave(working);
+        render();
       });
       const children = [saveBtn];
       if (hasOverrides) {
@@ -2080,13 +2305,25 @@
           id: `ahg-pe-reset-${dateKey}`,
           className: "ahg-btn ahg-btn-danger",
           attrs: { type: "button", title: "Resetar para dados do mirror" },
-          text: "\u21BA Reset"
+          html: `${icon("rotate-ccw", { size: 11 })} Reset`
         });
         resetBtn.addEventListener("click", () => {
+          const previous = getOverridesForDay(dateKey);
           saveOverridesForDay(dateKey, []);
           working = [...mirrorPunches];
           editingIdx = null;
-          showLoggerToast(`${dateLabel || dateKey}: resetado para dados do mirror.`);
+          confirmingClose = false;
+          showLoggerToast(`${dateLabel || dateKey}: resetado para dados do mirror.`, {
+            action: {
+              label: "Desfazer",
+              onClick: () => {
+                saveOverridesForDay(dateKey, previous);
+                working = [...previous];
+                if (typeof onSave === "function") onSave(previous);
+                if (document.body.contains(editor)) render();
+              }
+            }
+          });
           if (typeof onSave === "function") onSave([]);
           render();
         });
@@ -2096,6 +2333,7 @@
     }
     function startInlineEdit(idx) {
       editingIdx = idx;
+      confirmingClose = false;
       render();
       setTimeout(() => {
         const input = editor.querySelector(`.ahg-pe-inline-input[data-idx="${idx}"]`);
@@ -2123,6 +2361,16 @@
       render();
     }
     function render() {
+      const active = document.activeElement;
+      let focusSelector = null;
+      if (active && editor.contains(active)) {
+        if (active.id) {
+          focusSelector = `#${CSS.escape(active.id)}`;
+        } else if (active.dataset && active.dataset.idx !== void 0) {
+          const cls = [...active.classList].find((c) => c.startsWith("ahg-pe-"));
+          if (cls) focusSelector = `.${cls}[data-idx="${active.dataset.idx}"]`;
+        }
+      }
       const hasOverrides = getOverridesForDay(dateKey).length > 0;
       const mirrorSet = new Set(mirrorPunches);
       const agoraMin = (/* @__PURE__ */ new Date()).getHours() * 60 + (/* @__PURE__ */ new Date()).getMinutes();
@@ -2131,19 +2379,14 @@
       const header = el("div", {
         className: "ahg-pe-hdr",
         children: [
-          el("span", { text: `\u270F ${dateLabel || dateKey}` }),
+          el("span", { html: `${icon("pencil", { size: 11 })} ${escapeHtml(dateLabel || dateKey)}` }),
           el("span", { className: "ahg-flex-1" }),
           el("button", {
             id: `ahg-pe-close-${dateKey}`,
             className: "ahg-btn ahg-btn-sm",
-            attrs: { type: "button", title: "Fechar" },
-            text: "\xD7",
-            on: {
-              click: () => {
-                if (editor._ahgDragCleanup) editor._ahgDragCleanup();
-                editor.remove();
-              }
-            }
+            attrs: { type: "button", title: "Fechar (Esc)", "aria-label": "Fechar editor" },
+            html: icon("x", { size: 11 }),
+            on: { click: () => closeEditor() }
           })
         ]
       });
@@ -2158,8 +2401,8 @@
       const addBtn = el("button", {
         id: `ahg-pe-add-btn-${dateKey}`,
         className: "ahg-btn ahg-btn-success",
-        attrs: { type: "button", title: "Adicionar" },
-        text: "+"
+        attrs: { type: "button", title: "Adicionar", "aria-label": "Adicionar batida" },
+        html: icon("plus", { size: 11 })
       });
       addBtn.addEventListener("click", () => {
         const time = normalizePunchTime(addInput.value || "");
@@ -2173,29 +2416,72 @@
         }
         working = [...working, time].sort((a, b) => toMin(a) - toMin(b));
         editingIdx = null;
+        confirmingClose = false;
         render();
         editor.querySelector(`#ahg-pe-add-input-${dateKey}`)?.focus();
       });
+      const confirmBar = confirmingClose ? el("div", {
+        className: "ahg-pe-confirm-bar",
+        children: [
+          el("span", { className: "ahg-pe-confirm-msg", text: "Descartar altera\xE7\xF5es n\xE3o salvas?" }),
+          el("div", {
+            className: "ahg-pe-bar-actions",
+            children: [
+              el("button", {
+                id: `ahg-pe-discard-${dateKey}`,
+                className: "ahg-btn ahg-btn-sm ahg-btn-danger",
+                attrs: { type: "button" },
+                text: "Descartar",
+                on: { click: () => closeEditor({ force: true }) }
+              }),
+              el("button", {
+                id: `ahg-pe-keep-${dateKey}`,
+                className: "ahg-btn ahg-btn-sm",
+                attrs: { type: "button" },
+                text: "Continuar editando",
+                on: { click: () => {
+                  confirmingClose = false;
+                  render();
+                } }
+              })
+            ]
+          })
+        ]
+      }) : null;
       const body = el("div", {
         className: "ahg-pe-body",
         children: [
           el("div", {
             className: "ahg-pe-meta",
-            text: `${mirrorPunches.length} no mirror${hasOverrides ? " \xB7 \u270F ajustado localmente" : ""}`
+            text: `${mirrorPunches.length} no mirror${hasOverrides ? " \xB7 ajustado localmente" : ""}`
           }),
           ...punchRows,
           el("div", { className: "ahg-pe-add-row", children: [addInput, addBtn] }),
           renderTotals({ trabalhado, saldo }),
           renderViolations(violations),
-          renderActions({ hasOverrides })
+          renderActions({ hasOverrides }),
+          confirmBar
         ]
       });
       editor.innerHTML = "";
       editor.append(header, body);
+      if (confirmingClose) {
+        editor.querySelector(`#ahg-pe-keep-${dateKey}`)?.focus();
+      } else if (focusSelector) {
+        editor.querySelector(focusSelector)?.focus();
+      }
     }
+    editor.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (e.target.closest(".ahg-pe-inline-input")) return;
+      closeEditor();
+    });
+    editor.addEventListener("mousedown", () => bringEditorToFront(editor));
     document.body.appendChild(editor);
+    bringEditorToFront(editor);
     makePanelDraggable(editor, ".ahg-pe-hdr", { clampToViewport: true });
     render();
+    editor.focus();
   }
 
   // src/shared/notification-api.js
@@ -2483,7 +2769,7 @@
     return el("a", {
       className: "ahg-btn ahg-btn-sm",
       attrs: { href: url, target: "_blank", rel: "noopener noreferrer" },
-      text: label
+      html: `${icon("calendar", { size: 11 })} ${escapeHtml(label)}`
     });
   }
   function buildQuickCalendarButtons(autoLink, alarmConfig) {
@@ -2493,10 +2779,10 @@
     const labelSuffix = `-${autoLink.leadMinutes}m`;
     const fragment = document.createDocumentFragment();
     if ((provider === "google" || provider === "both") && autoLink.gcal) {
-      fragment.appendChild(buildCalendarLink(`\u{1F4C5} Google ${labelSuffix}`, autoLink.gcal));
+      fragment.appendChild(buildCalendarLink(`Google ${labelSuffix}`, autoLink.gcal));
     }
     if ((provider === "outlook" || provider === "both") && autoLink.outlook) {
-      fragment.appendChild(buildCalendarLink(`\u{1F5D3}\uFE0F Outlook ${labelSuffix}`, autoLink.outlook));
+      fragment.appendChild(buildCalendarLink(`Outlook ${labelSuffix}`, autoLink.outlook));
     }
     return fragment;
   }
@@ -2718,22 +3004,51 @@
       workedPlanned = turno1 + (exitFinal - entrada2);
       idealExit = capExit(exitFinal - saldoSemana, entrada2, turno1, "idealExit");
     } else {
-      stage = count === 4 ? "done" : count === 5 ? "extra-turn" : "done";
-      for (let i = 0; i < Math.min(count, 4); i++) {
+      stage = count % 2 === 0 ? "done" : "extra-turn";
+      if (count === 4) {
         const ids = ["entry", "exit1", "return", "exitFinal"];
-        schedule.push(suggestion(ids[i], toMin(batidas[i]), "done"));
+        for (let i = 0; i < 4; i++) {
+          schedule.push(suggestion(ids[i], toMin(batidas[i]), "done"));
+        }
+      } else {
+        for (let i = 0; i < count; i++) {
+          const turno = Math.floor(i / 2) + 1;
+          const label = i % 2 === 0 ? `Entrada ${turno}\xBA turno` : `Sa\xEDda ${turno}\xBA turno`;
+          schedule.push({ id: `p${i}`, label, time: toMin(batidas[i]), status: "done", windowMin: null, windowMax: null });
+        }
       }
-      if (stage === "extra-turn") {
+      if (count > 4) {
         enforcement.push(rule(
           "BR-006",
-          "hard-block",
+          stage === "extra-turn" ? "hard-block" : "warning-only",
           `${count} batidas: acima de 2 turnos exige justificativa.`,
           "day"
         ));
       }
-      const lastPunch = toMin(batidas[count - 1]);
-      if (lastPunch !== null && count % 2 === 0) {
-        nextDayEntry = lastPunch + CONFIG.DESCANSO_MINIMO;
+      if (stage === "extra-turn") {
+        const entradaAberta = toMin(batidas[count - 1]);
+        let workedBefore = 0;
+        for (let i = 0; i + 1 < count; i += 2) {
+          workedBefore += toMin(batidas[i + 1]) - toMin(batidas[i]);
+        }
+        const desired = entradaAberta + Math.max(planMinutes - workedBefore, 0);
+        const exitFinal = capExit(desired, entradaAberta, workedBefore, "exitFinal");
+        next = {
+          id: "exitFinal",
+          label: SUGGESTION_LABELS.exitFinal,
+          time: exitFinal,
+          status: "next",
+          windowMin: entradaAberta,
+          windowMax: entradaAberta + CONFIG.MAX_HORAS_TURNO
+        };
+        schedule.push({ ...next });
+        workedPlanned = workedBefore + (exitFinal - entradaAberta);
+        idealExit = capExit(exitFinal - saldoSemana, entradaAberta, workedBefore, "idealExit");
+      } else {
+        const lastPunch = toMin(batidas[count - 1]);
+        if (lastPunch !== null) {
+          nextDayEntry = lastPunch + CONFIG.DESCANSO_MINIMO;
+        }
       }
     }
     if (workedPlanned !== null && workedPlanned >= CONFIG.MAX_HORAS_DIA && !enforcement.some((e) => e.ruleId === "BR-005")) {
@@ -2815,22 +3130,22 @@
     let html = "";
     if (provider === "google" || provider === "both") {
       const url = buildGoogleCalendarUrl(params);
-      if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Google Calendar">\u{1F4C5}</a>`;
+      if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Google Calendar" aria-label="Adicionar ao Google Calendar">${icon("calendar")}<span class="ahg-as-cal-tag">G</span></a>`;
     }
     if (provider === "outlook" || provider === "both") {
       const url = buildOutlookCalendarUrl(params);
-      if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Outlook">\u{1F5D3}\uFE0F</a>`;
+      if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Outlook" aria-label="Adicionar ao Outlook">${icon("calendar")}<span class="ahg-as-cal-tag">O</span></a>`;
     }
     return html;
   }
   function buildScheduleHtml(assistant, alarmConfig) {
     if (!assistant.schedule?.length) return "";
     const steps = assistant.schedule.map((step) => {
-      const icon = step.status === "done" ? "\u2714" : step.status === "next" ? "\u25B6" : "\xB7";
+      const stepIcon = step.status === "done" ? icon("check", { size: 11 }) : step.status === "next" ? icon("chevron-right", { size: 11 }) : icon("dot", { size: 11 });
       const calendar = step.status === "done" ? "" : buildCalendarLinksHtml(step, alarmConfig);
       return `
         <div class="ahg-as-step ${step.status}">
-            <span class="ahg-as-step-icon">${icon}</span>
+            <span class="ahg-as-step-icon">${stepIcon}</span>
             <span class="ahg-as-step-label">${escapeHtml(step.label)}</span>
             <span class="ahg-as-step-time">${renderClock(step.time)}</span>
             <span class="ahg-as-step-cal">${calendar}</span>
@@ -2866,18 +3181,18 @@
       const nextDay = assistant.nextDayEntry !== null && assistant.nextDayEntry !== void 0 ? `<div class="ahg-as-next-window">amanh\xE3 a partir de ${renderClock(assistant.nextDayEntry)}</div>` : "";
       body = `
         <div class="ahg-as-next">
-            <div class="ahg-as-next-time">\u2705</div>
+            <div class="ahg-as-next-time done">${icon("circle-check", { size: 30 })}</div>
             <div class="ahg-as-next-info">
                 <span class="ahg-as-next-label">Jornada encerrada</span>
                 ${nextDay}
             </div>
         </div>`;
     }
-    const ideal = assistant.idealExit !== null && assistant.idealExit !== void 0 ? `<div class="ahg-as-ideal">\u{1F3C6} Sa\xEDda ideal <b>${renderClock(assistant.idealExit)}</b> <small>compensa o saldo da semana</small></div>` : "";
+    const ideal = assistant.idealExit !== null && assistant.idealExit !== void 0 ? `<div class="ahg-as-ideal">${icon("flag", { size: 11 })} Sa\xEDda ideal <b>${renderClock(assistant.idealExit)}</b> <small>compensa o saldo da semana</small></div>` : "";
     return `
     <div class="ahg-assistant" id="ahg-assistant" data-stage="${escapeHtml(assistant.stage)}">
         <div class="ahg-as-head">
-            <span class="ahg-as-title">\u{1F3AF} ${escapeHtml(title)}</span>
+            <span class="ahg-as-title">${icon("target", { size: 11 })} ${escapeHtml(title)}</span>
             ${buildPresetButtonsHtml(plan)}
         </div>
         ${body}
@@ -2930,7 +3245,7 @@
     if (!fab) {
       fab = createFab({
         id: "ahg-fab",
-        icon: "\u23F1",
+        icon: icon("clock", { size: 22 }),
         bottom: "20px",
         right: "20px",
         title: "Abrir painel Ahgora",
@@ -2942,26 +3257,33 @@
   function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
     const r = resumo;
     const state = privacyButtonState();
-    const anomalyLabel = r.punchAnomalyDays?.length ? r.punchAnomalyDays.slice(0, 4).map((x) => `${fmtHour(x.count)}`).join(" \xB7 ") : "Sem inconsist\xEAncias";
+    const fmtAnomalyDay = (x) => {
+      const d = x.date instanceof Date ? x.date : new Date(x.date);
+      return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} (${x.count})`;
+    };
+    const anomalyExtra = (r.punchAnomalyDays?.length || 0) > 4 ? ` +${r.punchAnomalyDays.length - 4}` : "";
+    const anomalyLabel = r.punchAnomalyDays?.length ? r.punchAnomalyDays.slice(0, 4).map(fmtAnomalyDay).join(" \xB7 ") + anomalyExtra : "Sem inconsist\xEAncias";
+    const healthLevel = r.hojePunchHealth?.level;
+    const healthIcon = healthLevel === "neg" ? icon("octagon-alert") : healthLevel === "warn" ? icon("triangle-alert") : icon("circle-check");
     let html = `
     <div class="a-tit">
-        \u23F1 Painel Inteligente v${CONFIG.VERSAO}
-        <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-pressed="${state.pressed}">${state.icon}</button>
-        <span class="a-x" id="ahg-min" title="Minimizar">\u2013</span>
+        ${icon("clock")} Painel Inteligente v${CONFIG.VERSAO}
+        <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-label="${state.title}" aria-pressed="${state.pressed}">${state.pressed ? icon("eye-off", { size: 14 }) : icon("eye", { size: 14 })}</button>
+        <span class="a-x" id="ahg-min" title="Minimizar">${icon("minus", { size: 14 })}</span>
     </div>
     <div class="a-body">
         ${view.assistantHtml || ""}
         <div class="a-sec">Status atual</div>
         <div class="a-row infos"><span class="a-lbl">Situa\xE7\xE3o</span><span class="a-val neu">${renderText(r.status)}</span></div>
         <div class="a-row ${r.hojePunchHealth?.level === "neg" ? "danger" : r.hojePunchHealth?.level === "warn" ? "warn" : "ok"}">
-            <span class="a-lbl">${r.hojePunchHealth?.icon || ""} Batidas hoje</span>
+            <span class="a-lbl">${healthIcon} Batidas hoje</span>
             <span class="a-val ${r.hojePunchHealth?.level === "neg" ? "neg" : r.hojePunchHealth?.level === "warn" ? "warn" : "pos"}">${r.hoje.batidas.length} \xB7 ${renderText(r.hojePunchHealth?.short || "")}</span>
         </div>
         <div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val ${r.hoje.saldo >= 0 ? "pos" : "warn"}">${renderMinutes(r.hoje.trabalhado)}</span></div>
         <div class="a-row infos"><span class="a-lbl">Saldo do dia</span><span class="a-val ${r.hoje.saldo >= 0 ? "pos" : "neg"}">${renderMinutes(r.hoje.saldo)}</span></div>
     `;
     if (cfg.flags?.F006_inconsistencias && r.punchAnomalyDays?.length > 0) {
-      html += `<div class="a-row warn"><span class="a-lbl">\u26A0\uFE0F Aten\xE7\xE3o</span><span class="a-val warn"><small>${renderText(anomalyLabel)}</small></span></div>`;
+      html += `<div class="a-row warn"><span class="a-lbl">${icon("triangle-alert")} Aten\xE7\xE3o</span><span class="a-val warn"><small>${renderText(anomalyLabel)}</small></span></div>`;
     }
     if (r.alerta) {
       html += `<div class="a-row danger"><span class="a-lbl">Alerta</span><span class="a-val neg">${renderText(r.alerta)}</span></div>`;
@@ -2972,7 +3294,7 @@
     }
     html += `<hr class="a-div"><div class="a-sec">Semanal \u2014 sem. ${getWeekNumber(/* @__PURE__ */ new Date())}</div>
         <div class="a-row ${r.saldoSemana >= 0 ? "ok" : "warn"}"><span class="a-lbl">Saldo semanal</span>
-        <span class="a-val ${r.saldoSemana >= 0 ? "pos" : "neg"}">${renderMinutes(r.saldoSemana)}<small>${renderMinutes(r.totalSemana)} trabalhadas \xB7 ${r.diasRegistrados} dias</small></span></div>
+        <span class="a-val ${r.saldoSemana >= 0 ? "pos" : "neg"}">${renderMinutes(r.saldoSemana)}<small class="a-cap">${renderMinutes(r.totalSemana)} trabalhadas \xB7 ${r.diasRegistrados} dias</small></span></div>
         ${view.weekHtml || ""}`;
     if (r.weeklyRestWarning) {
       html += `<div class="a-row warn"><span class="a-lbl">Descanso semanal</span><span class="a-val warn"><small>${renderText(r.weeklyRestWarning)}</small></span></div>`;
@@ -2985,32 +3307,34 @@
     }
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-day-details"><summary class="a-sec">Hoje em detalhe</summary>`;
     if (r.turno1) {
-      html += `<div class="a-row ${r.turno1.classe}"><span class="a-lbl">1\xBA turno</span><span class="a-val neu">${renderText(r.turno1.entrada)} \u2192 ${renderText(r.turno1.saida)}<small>${renderMinutes(r.turno1.total)} ${r.turno1.aberto ? "\xB7 em andamento" : ""}</small></span></div>`;
+      html += `<div class="a-row ${r.turno1.classe}"><span class="a-lbl">1\xBA turno</span><span class="a-val neu">${renderText(r.turno1.entrada)} \u2192 ${renderText(r.turno1.saida)}<small class="a-cap">${renderMinutes(r.turno1.total)} ${r.turno1.aberto ? "\xB7 em andamento" : ""}</small></span></div>`;
     }
     if (r.turno2) {
-      html += `<div class="a-row ${r.turno2.classe}"><span class="a-lbl">2\xBA turno</span><span class="a-val neu">${renderText(r.turno2.entrada)} \u2192 ${renderText(r.turno2.saida)}<small>${renderMinutes(r.turno2.total)} ${r.turno2.aberto ? "\xB7 em andamento" : ""}</small></span></div>`;
+      html += `<div class="a-row ${r.turno2.classe}"><span class="a-lbl">2\xBA turno</span><span class="a-val neu">${renderText(r.turno2.entrada)} \u2192 ${renderText(r.turno2.saida)}<small class="a-cap">${renderMinutes(r.turno2.total)} ${r.turno2.aberto ? "\xB7 em andamento" : ""}</small></span></div>`;
     }
     if (r.retornoMinimo) {
-      html += `<div class="a-row infos"><span class="a-lbl">\u23F8 Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} \u2192 ${renderClock(r.retornoMaximo)}</span></div>`;
+      html += `<div class="a-row infos"><span class="a-lbl">${icon("pause")} Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} \u2192 ${renderClock(r.retornoMaximo)}</span></div>`;
     }
-    html += `<div class="a-row ${r.interjornada?.podeBater ? "ok" : "warn"}"><span class="a-lbl">\u{1F6CC} Interjornada</span><span class="a-val ${r.interjornada?.podeBater ? "pos" : "warn"}">${renderText(r.interjornada?.texto)}<small>${r.interjornada?.proximaPermitida ? "m\xEDnimo: " + renderText(r.interjornada.proximaPermitida) : ""}</small></span></div>`;
+    html += `<div class="a-row ${r.interjornada?.podeBater ? "ok" : "warn"}"><span class="a-lbl">${icon("moon")} Interjornada</span><span class="a-val ${r.interjornada?.podeBater ? "pos" : "warn"}">${renderText(r.interjornada?.texto)}<small class="a-cap">${r.interjornada?.proximaPermitida ? "m\xEDnimo: " + renderText(r.interjornada.proximaPermitida) : ""}</small></span></div>`;
     html += `<div class="a-sec">Marcos do dia</div>
-        <div class="a-row warn"><span class="a-lbl">\u26A0\uFE0F 6h turno</span><span class="a-val warn">${renderClock(r.h6)}</span></div>
-        <div class="a-row ok"><span class="a-lbl">\u2705 8h dia</span><span class="a-val pos">${renderClock(r.h8)}</span></div>
-        <div class="a-row danger"><span class="a-lbl">\u26D4 10h limite</span><span class="a-val neg">${renderClock(r.h10)}</span></div>
-        <div class="a-row infos"><span class="a-lbl">\u{1F3C6} Sa\xEDda ideal</span><span class="a-val neu">${renderClock(r.saidaIdeal)}</span></div>
+        <div class="a-row warn"><span class="a-lbl">${icon("triangle-alert")} 6h turno</span><span class="a-val warn">${renderClock(r.h6)}</span></div>
+        <div class="a-row ok"><span class="a-lbl">${icon("circle-check")} 8h dia</span><span class="a-val pos">${renderClock(r.h8)}</span></div>
+        <div class="a-row danger"><span class="a-lbl">${icon("octagon-alert")} 10h limite</span><span class="a-val neg">${renderClock(r.h10)}</span></div>
+        <div class="a-row infos"><span class="a-lbl">${icon("flag")} Sa\xEDda ideal</span><span class="a-val neu">${renderClock(r.saidaIdeal)}</span></div>
     </details>`;
-    html += `<hr class="a-div"><div class="a-sec">Mensal</div>
+    html += `<hr class="a-div"><details class="ahg-details" id="ahg-month-details"><summary class="a-sec">Mensal \xB7 <span class="${r.saldoMes >= 0 ? "ahg-color-pos" : "ahg-color-neg"}">${renderMinutes(r.saldoMes)}</span></summary>
         <div class="a-row ${r.saldoMes >= 0 ? "ok" : "warn"}"><span class="a-lbl">Saldo mensal</span>
-        <span class="a-val ${r.saldoMes >= 0 ? "pos" : "neg"}">${renderMinutes(r.saldoMes)}<small>${r.diasRestantesMes} \xFAteis restantes</small></span></div>
-        <div class="a-row infos clickable" id="ahg-open-details"><span class="a-lbl">\u{1F4CA} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
-        <div class="a-row infos clickable" id="ahg-export-csv"><span class="a-lbl">\u{1F4E5} Exportar CSV</span><span class="a-val neu"><small>relat\xF3rio do m\xEAs</small></span></div>`;
+        <span class="a-val ${r.saldoMes >= 0 ? "pos" : "neg"}">${renderMinutes(r.saldoMes)}<small class="a-cap">${r.diasRestantesMes} \xFAteis restantes</small></span></div>
+        <div class="a-row infos clickable" id="ahg-open-details"><span class="a-lbl">${icon("bar-chart")} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
+        <div class="a-row infos clickable" id="ahg-export-csv"><span class="a-lbl">${icon("download")} Exportar CSV</span><span class="a-val neu"><small>relat\xF3rio do m\xEAs</small></span></div>
+    </details>`;
     if (cfg.flags?.F009_banco_horas && r.bancoHoras !== null && r.bancoHoras !== void 0) {
-      html += `<hr class="a-div"><div class="a-sec">Banco de Horas</div>
-            <div class="a-row ${r.bancoHoras >= 0 ? "ok" : "warn"}"><span class="a-lbl">\u{1F4B0} Saldo acumulado</span>
-            <span class="a-val ${r.bancoHoras >= 0 ? "pos" : "neg"}">${renderMinutes(r.bancoHoras)}</span></div>`;
+      html += `<hr class="a-div"><details class="ahg-details" id="ahg-bank-details"><summary class="a-sec">Banco de Horas \xB7 <span class="${r.bancoHoras >= 0 ? "ahg-color-pos" : "ahg-color-neg"}">${renderMinutes(r.bancoHoras)}</span></summary>
+            <div class="a-row ${r.bancoHoras >= 0 ? "ok" : "warn"}"><span class="a-lbl">${icon("hourglass")} Saldo acumulado</span>
+            <span class="a-val ${r.bancoHoras >= 0 ? "pos" : "neg"}">${renderMinutes(r.bancoHoras)}</span></div>
+        </details>`;
     }
-    html += `<hr class="a-div"><div class="a-sec">Configura\xE7\xF5es</div>
+    html += `<hr class="a-div"><details class="ahg-details" id="ahg-config-details"><summary class="a-sec">Configura\xE7\xF5es</summary>
         <div class="ahg-config-grid">
             <div class="ahg-config-item"><span class="ahg-config-label">Tema</span>
                 <select class="ahg-config-select" id="ahg-tema-select">
@@ -3022,7 +3346,8 @@
             <div class="ahg-config-item">
                 <label class="ahg-toggle"><input type="checkbox" id="ahg-zen-toggle" ${cfg.modoZen ? "checked" : ""}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span>Modo Zen</label>
             </div>
-        </div>`;
+        </div>
+    </details>`;
     html += `</div><div class="a-foot">Atualizado ${fmtHour(nowMin())}</div>`;
     return html;
   }
@@ -3047,8 +3372,23 @@
     };
     const keepMinimized = panel.dataset.ahgRendered === "true" && !panel.classList.contains("active");
     panel.dataset.ahgRendered = "true";
+    const openDetailIds = [...panel.querySelectorAll("details[open]")].map((d) => d.id).filter(Boolean);
+    const bodyScroll = panel.querySelector(".a-body")?.scrollTop || 0;
+    const active = document.activeElement;
+    let focusSelector = null;
+    if (active && panel.contains(active)) {
+      if (active.id) focusSelector = `#${CSS.escape(active.id)}`;
+      else if (active.dataset?.preset) focusSelector = `.ahg-as-preset[data-preset="${active.dataset.preset}"]`;
+    }
     panel.innerHTML = buildPanelHtml(resumo, cfg, !!calendarButtons, view);
     setFloatingPanelVisible(panel, fab, !keepMinimized);
+    openDetailIds.forEach((id) => {
+      const details = panel.querySelector(`#${id}`);
+      if (details) details.open = true;
+    });
+    const bodyEl = panel.querySelector(".a-body");
+    if (bodyEl && bodyScroll) bodyEl.scrollTop = bodyScroll;
+    if (focusSelector) panel.querySelector(focusSelector)?.focus();
     bindAssistantCard(panel, {
       onPresetSelect: (presetId) => {
         setJourneyPlan(presetId);
@@ -3225,7 +3565,7 @@
     if (!fab) {
       fab = createFab({
         id: "ahg-batida-fab",
-        icon: "\u23F1",
+        icon: icon("clock", { size: 22 }),
         bottom: "20px",
         right: "20px",
         title: "Abrir logger Ahgora",
@@ -3254,9 +3594,9 @@
     const source = resolveDataSource(state);
     let html = `
     <div class="a-tit">
-        \u23F1\uFE0F Logger v${CONFIG.VERSAO}
-        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-pressed="${privacyState.pressed}">${privacyState.icon}</button>
-        <span class="a-x" id="ahg-logger-min">\u2013</span>
+        ${icon("clock")} Logger v${CONFIG.VERSAO}
+        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${privacyState.pressed ? icon("eye-off", { size: 14 }) : icon("eye", { size: 14 })}</button>
+        <span class="a-x" id="ahg-logger-min" title="Minimizar">${icon("minus", { size: 14 })}</span>
     </div>
     <div class="a-body">
         ${view.assistantHtml || ""}
@@ -3291,8 +3631,8 @@
     }
     html += `<hr class="a-div"><div class="a-sec">A\xE7\xF5es</div>
         <div class="a-row infos ahg-flex-wrap ahg-gap-4">
-            <button class="ahg-btn ahg-btn-sm" id="ahg-logger-save" ${lastPunch ? "" : "disabled"}>\u{1F4BE} Salvar \xFAltima</button>
-            <button class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-delete">\u{1F5D1}\uFE0F Desfazer</button>
+            <button class="ahg-btn ahg-btn-sm" id="ahg-logger-save" ${lastPunch ? "" : "disabled"}>${icon("save", { size: 11 })} Salvar \xFAltima</button>
+            <button class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-delete">${icon("trash", { size: 11 })} Desfazer</button>
         </div>`;
     html += `</div><div class="a-foot">Atualizado ${fmtHour((/* @__PURE__ */ new Date()).getHours() * 60 + (/* @__PURE__ */ new Date()).getMinutes())}</div>`;
     return html;

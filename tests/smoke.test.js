@@ -127,7 +127,8 @@ async function runMirrorTests(browser) {
   // Botão de privacidade do espelho existe (no header do painel).
   await assert('Botão de privacidade do espelho existe', await page.locator('#ahg-privacy-toggle').count() === 1);
 
-  // Força persistência do ConfigStore alterando o tema.
+  // Força persistência do ConfigStore alterando o tema (seção colapsada por padrão).
+  await page.evaluate(() => document.querySelector('#ahg-config-details')?.setAttribute('open', ''));
   await page.selectOption('#ahg-tema-select', 'dark');
   await page.waitForTimeout(200);
   const configRaw = await page.evaluate(() => localStorage.getItem('@ahgora-panel/config'));
@@ -183,7 +184,8 @@ async function runInteracaoTests(browser) {
   await injectUserScript(page);
   await page.waitForSelector('#ahg-panel', { state: 'attached', timeout: 10000 });
 
-  // Tema: alterna para escuro e depois claro, verificando mudança real.
+  // Tema: alterna para escuro e depois claro, verificando mudança real (seção colapsada por padrão).
+  await page.evaluate(() => document.querySelector('#ahg-config-details')?.setAttribute('open', ''));
   await page.waitForSelector('#ahg-tema-select', { timeout: 5000 });
   await page.selectOption('#ahg-tema-select', 'dark');
   await page.waitForTimeout(300);
@@ -203,7 +205,8 @@ async function runInteracaoTests(browser) {
   const activePreset = await page.locator('#ahg-panel .ahg-as-preset.active').getAttribute('data-preset');
   await assert('Preset 10h ativa com um toque', activePreset === 'p10');
 
-  // Detalhes mensais: clica no botão e verifica modal.
+  // Detalhes mensais: expande a seção colapsada, clica no botão e verifica modal.
+  await page.click('#ahg-month-details summary');
   await page.click('#ahg-open-details');
   const detailsVisible = await page.locator('#ahg-detail-modal').count() === 1;
   await assert('Modal de detalhes mensais abre', detailsVisible);

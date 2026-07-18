@@ -39,8 +39,10 @@ Padrões visuais e de interação para as interfaces de painel (Mirror) e logger
 
 ## Hierarquia de Informação (v3.1)
 - **Topo:** assistente → status atual (situação, batidas, trabalhado, saldo do dia) → alertas.
-- **Meio:** calendário rápido, semanal (saldo + visão semanal), mensal (saldo, detalhes em modal, CSV), banco de horas.
-- **Dados densos** (turnos, intrajornada, interjornada, marcos 6h/8h/10h) vivem na expansão `<details class="ahg-details">` "Hoje em detalhe", fechada por padrão.
+- **Meio:** calendário rápido, semanal (saldo + visão semanal) — sempre visíveis.
+- **Consulta ocasional:** Mensal (saldo, detalhes em modal, CSV), Banco de Horas e Configurações ficam em expansões `<details class="ahg-details">` fechadas por padrão; o `<summary>` carrega o número-chave da seção (ex.: "Mensal · +2:30"), preservando a leitura de relance.
+- **Dados densos** (turnos, intrajornada, interjornada, marcos 6h/8h/10h) vivem na expansão "Hoje em detalhe", fechada por padrão.
+- **Re-render sem custo de contexto:** o rebuild do painel preserva expansões abertas e a rolagem do corpo (`renderMirrorPanel`).
 
 ## Decorações de Calendário
 - **Tolerância:** dias fechados com saldo não nulo dentro de ±10min recebem marca discreta ⚪ (`.ahg-day-tolerance`) com tooltip explicando o efeito zero no saldo.

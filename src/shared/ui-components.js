@@ -50,6 +50,8 @@ export function makePanelDraggable(panel, handleSelector, options = {}) {
     let initialTop = 0;
 
     function onMouseDown(e) {
+        // Controles dentro do handle (privacidade, minimizar) não iniciam arrasto.
+        if (e.target.closest('button, input, select, a, summary')) return;
         e.preventDefault();
         dragging = true;
         startX = e.clientX;
@@ -109,8 +111,13 @@ export function createFab({ id, icon, bottom = '20px', left, right, onClick, tit
     const btn = document.createElement('button');
     btn.id = id;
     btn.className = 'ahg-fab';
-    btn.textContent = icon;
+    if (typeof icon === 'string' && icon.trim().startsWith('<svg')) {
+        btn.innerHTML = icon;
+    } else {
+        btn.textContent = icon;
+    }
     btn.title = title;
+    if (title) btn.setAttribute('aria-label', title);
     btn.style.bottom = bottom;
     if (left !== undefined) btn.style.left = left;
     if (right !== undefined) btn.style.right = right;
@@ -120,15 +127,53 @@ export function createFab({ id, icon, bottom = '20px', left, right, onClick, tit
     return btn;
 }
 
-export function showLoggerToast(message, durationMs = 2200) {
+/** Região viva única: toasts empilham e são anunciados por leitores de tela. */
+function ensureToastRegion() {
+    let region = document.getElementById('ahg-toast-region');
+    if (!region) {
+        region = document.createElement('div');
+        region.id = 'ahg-toast-region';
+        region.className = 'ahg-toast-region';
+        region.setAttribute('role', 'status');
+        region.setAttribute('aria-live', 'polite');
+        document.body.appendChild(region);
+    }
+    return region;
+}
+
+/**
+ * @param {string} message
+ * @param {number|{durationMs?: number, action?: {label: string, onClick: Function}}} [options]
+ *   `action` adiciona um botão (ex.: Desfazer) e estende a duração do toast.
+ */
+export function showLoggerToast(message, options = {}) {
+    const opts = typeof options === 'number' ? { durationMs: options } : (options || {});
+    const { durationMs = 2200, action = null } = opts;
+
     const toast = document.createElement('div');
     toast.className = 'ahg-toast';
-    toast.textContent = message;
-    document.body.appendChild(toast);
+    const msg = document.createElement('span');
+    msg.textContent = message;
+    toast.appendChild(msg);
 
+    let timeout = durationMs;
+    if (action && typeof action.onClick === 'function') {
+        timeout = Math.max(durationMs, 6000);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ahg-btn ahg-btn-sm ahg-toast-action';
+        btn.textContent = action.label || 'Desfazer';
+        btn.addEventListener('click', () => {
+            toast.remove();
+            action.onClick();
+        });
+        toast.appendChild(btn);
+    }
+
+    ensureToastRegion().appendChild(toast);
     setTimeout(() => {
         toast.remove();
-    }, durationMs);
+    }, timeout);
 }
 
 export function openInNewTab(url) {

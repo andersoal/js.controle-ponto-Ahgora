@@ -9,6 +9,7 @@ import { escapeHtml, fmtHour } from '../core/time-utils.js';
 import { renderClock, renderMinutes } from '../core/privacy-engine.js';
 import { JOURNEY_PRESETS } from '../core/journey-plan.js';
 import { buildGoogleCalendarUrl, buildOutlookCalendarUrl } from '../logger/calendar-links.js';
+import { icon } from './icons.js';
 
 const STAGE_TITLES = {
     entry: 'Próxima batida — Entrada',
@@ -53,11 +54,11 @@ function buildCalendarLinksHtml(step, alarmConfig) {
     let html = '';
     if (provider === 'google' || provider === 'both') {
         const url = buildGoogleCalendarUrl(params);
-        if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Google Calendar">📅</a>`;
+        if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Google Calendar" aria-label="Adicionar ao Google Calendar">${icon('calendar')}<span class="ahg-as-cal-tag">G</span></a>`;
     }
     if (provider === 'outlook' || provider === 'both') {
         const url = buildOutlookCalendarUrl(params);
-        if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Outlook">🗓️</a>`;
+        if (url) html += `<a class="ahg-as-cal" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="Adicionar ao Outlook" aria-label="Adicionar ao Outlook">${icon('calendar')}<span class="ahg-as-cal-tag">O</span></a>`;
     }
     return html;
 }
@@ -65,11 +66,13 @@ function buildCalendarLinksHtml(step, alarmConfig) {
 function buildScheduleHtml(assistant, alarmConfig) {
     if (!assistant.schedule?.length) return '';
     const steps = assistant.schedule.map((step) => {
-        const icon = step.status === 'done' ? '✔' : step.status === 'next' ? '▶' : '·';
+        const stepIcon = step.status === 'done'
+            ? icon('check', { size: 11 })
+            : step.status === 'next' ? icon('chevron-right', { size: 11 }) : icon('dot', { size: 11 });
         const calendar = step.status === 'done' ? '' : buildCalendarLinksHtml(step, alarmConfig);
         return `
         <div class="ahg-as-step ${step.status}">
-            <span class="ahg-as-step-icon">${icon}</span>
+            <span class="ahg-as-step-icon">${stepIcon}</span>
             <span class="ahg-as-step-label">${escapeHtml(step.label)}</span>
             <span class="ahg-as-step-time">${renderClock(step.time)}</span>
             <span class="ahg-as-step-cal">${calendar}</span>
@@ -112,7 +115,7 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
             : '';
         body = `
         <div class="ahg-as-next">
-            <div class="ahg-as-next-time">✅</div>
+            <div class="ahg-as-next-time done">${icon('circle-check', { size: 30 })}</div>
             <div class="ahg-as-next-info">
                 <span class="ahg-as-next-label">Jornada encerrada</span>
                 ${nextDay}
@@ -121,13 +124,13 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
     }
 
     const ideal = assistant.idealExit !== null && assistant.idealExit !== undefined
-        ? `<div class="ahg-as-ideal">🏆 Saída ideal <b>${renderClock(assistant.idealExit)}</b> <small>compensa o saldo da semana</small></div>`
+        ? `<div class="ahg-as-ideal">${icon('flag', { size: 11 })} Saída ideal <b>${renderClock(assistant.idealExit)}</b> <small>compensa o saldo da semana</small></div>`
         : '';
 
     return `
     <div class="ahg-assistant" id="ahg-assistant" data-stage="${escapeHtml(assistant.stage)}">
         <div class="ahg-as-head">
-            <span class="ahg-as-title">🎯 ${escapeHtml(title)}</span>
+            <span class="ahg-as-title">${icon('target', { size: 11 })} ${escapeHtml(title)}</span>
             ${buildPresetButtonsHtml(plan)}
         </div>
         ${body}

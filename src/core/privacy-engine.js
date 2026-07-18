@@ -30,7 +30,6 @@ export function applyPrivacyState() {
 export function privacyButtonState() {
     const hidden = isPrivacyHidden();
     return {
-        icon: hidden ? '🙈' : '👁',
         title: hidden ? 'Privacidade ativa — clique para desativar' : 'Privacidade inativa — clique para ativar',
         pressed: hidden
     };
@@ -48,7 +47,10 @@ export function renderMinutes(m) {
 
 export function renderText(text) {
     if (text === null || text === undefined) return '';
-    return isPrivacyHidden() ? PRIVACY_MASK : escapeHtml(String(text));
+    const safe = escapeHtml(String(text));
+    // Privacidade mascara apenas os horários dentro do texto; status e estrutura
+    // permanecem legíveis (DESIGN.md: masking não oculta a estrutura).
+    return isPrivacyHidden() ? safe.replace(/\b\d{1,2}:\d{2}\b/g, PRIVACY_MASK) : safe;
 }
 
 export function renderMinuteRange(a, b) {
