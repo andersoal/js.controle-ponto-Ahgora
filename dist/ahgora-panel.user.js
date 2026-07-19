@@ -1461,6 +1461,7 @@
     margin-left: 6px;
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 24px; min-height: 24px;
+    background: transparent; border: none; padding: 0; color: inherit;
     cursor: pointer; opacity: .6; font-size: 16px; transition: opacity .15s;
 }
 .a-x:hover { opacity: 1; }
@@ -1937,7 +1938,8 @@
     const hidden = isPrivacyHidden();
     return {
       title: hidden ? "Privacidade ativa \u2014 clique para desativar" : "Privacidade inativa \u2014 clique para ativar",
-      pressed: hidden
+      pressed: hidden,
+      iconName: hidden ? "eye-off" : "eye"
     };
   }
   function renderClock(m) {
@@ -3362,21 +3364,24 @@
     };
     const anomalyExtra = (r.punchAnomalyDays?.length || 0) > 4 ? ` +${r.punchAnomalyDays.length - 4}` : "";
     const anomalyLabel = r.punchAnomalyDays?.length ? r.punchAnomalyDays.slice(0, 4).map(fmtAnomalyDay).join(" \xB7 ") + anomalyExtra : "Sem inconsist\xEAncias";
-    const healthLevel = r.hojePunchHealth?.level;
-    const healthIcon = healthLevel === "neg" ? icon("octagon-alert") : healthLevel === "warn" ? icon("triangle-alert") : icon("circle-check");
+    const HEALTH_STYLES = {
+      neg: { icon: "octagon-alert", row: "danger", val: "neg" },
+      warn: { icon: "triangle-alert", row: "warn", val: "warn" }
+    };
+    const health = HEALTH_STYLES[r.hojePunchHealth?.level] || { icon: "circle-check", row: "ok", val: "pos" };
     let html = `
     <div class="a-tit">
         ${icon("clock")} Painel Inteligente v${CONFIG.VERSAO}
-        <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-label="${state.title}" aria-pressed="${state.pressed}">${state.pressed ? icon("eye-off", { size: 14 }) : icon("eye", { size: 14 })}</button>
-        <span class="a-x" id="ahg-min" title="Minimizar">${icon("minus", { size: 14 })}</span>
+        <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-label="${state.title}" aria-pressed="${state.pressed}">${icon(state.iconName, { size: 14 })}</button>
+        <button class="a-x" id="ahg-min" title="Minimizar" aria-label="Minimizar painel">${icon("minus", { size: 14 })}</button>
     </div>
     <div class="a-body">
         ${view.assistantHtml || ""}
         <div class="a-sec">Status atual</div>
         <div class="a-row infos"><span class="a-lbl">Situa\xE7\xE3o</span><span class="a-val neu">${renderText(r.status)}</span></div>
-        <div class="a-row ${r.hojePunchHealth?.level === "neg" ? "danger" : r.hojePunchHealth?.level === "warn" ? "warn" : "ok"}">
-            <span class="a-lbl">${healthIcon} Batidas hoje</span>
-            <span class="a-val ${r.hojePunchHealth?.level === "neg" ? "neg" : r.hojePunchHealth?.level === "warn" ? "warn" : "pos"}">${r.hoje.batidas.length} \xB7 ${renderText(r.hojePunchHealth?.short || "")}</span>
+        <div class="a-row ${health.row}">
+            <span class="a-lbl">${icon(health.icon)} Batidas hoje</span>
+            <span class="a-val ${health.val}">${r.hoje.batidas.length} \xB7 ${renderText(r.hojePunchHealth?.short || "")}</span>
         </div>
         <div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val ${r.hoje.saldo >= 0 ? "pos" : "warn"}">${renderMinutes(r.hoje.trabalhado)}</span></div>
         <div class="a-row infos"><span class="a-lbl">Saldo do dia</span><span class="a-val ${r.hoje.saldo >= 0 ? "pos" : "neg"}">${renderMinutes(r.hoje.saldo)}</span></div>
@@ -3424,8 +3429,8 @@
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-month-details"><summary class="a-sec">Mensal \xB7 <span class="${r.saldoMes >= 0 ? "ahg-color-pos" : "ahg-color-neg"}">${renderMinutes(r.saldoMes)}</span></summary>
         <div class="a-row ${r.saldoMes >= 0 ? "ok" : "warn"}"><span class="a-lbl">Saldo mensal</span>
         <span class="a-val ${r.saldoMes >= 0 ? "pos" : "neg"}">${renderMinutes(r.saldoMes)}<small class="a-cap">${r.diasRestantesMes} \xFAteis restantes</small></span></div>
-        <div class="a-row infos clickable" id="ahg-open-details"><span class="a-lbl">${icon("bar-chart")} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
-        <div class="a-row infos clickable" id="ahg-export-csv"><span class="a-lbl">${icon("download")} Exportar CSV</span><span class="a-val neu"><small>relat\xF3rio do m\xEAs</small></span></div>
+        <div class="a-row infos clickable" id="ahg-open-details" role="button" tabindex="0"><span class="a-lbl">${icon("bar-chart")} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
+        <div class="a-row infos clickable" id="ahg-export-csv" role="button" tabindex="0"><span class="a-lbl">${icon("download")} Exportar CSV</span><span class="a-val neu"><small>relat\xF3rio do m\xEAs</small></span></div>
     </details>`;
     if (cfg.flags?.F009_banco_horas && r.bancoHoras !== null && r.bancoHoras !== void 0) {
       html += `<hr class="a-div"><details class="ahg-details" id="ahg-bank-details"><summary class="a-sec">Banco de Horas \xB7 <span class="${r.bancoHoras >= 0 ? "ahg-color-pos" : "ahg-color-neg"}">${renderMinutes(r.bancoHoras)}</span></summary>
@@ -3482,7 +3487,7 @@
     panel.innerHTML = buildPanelHtml(resumo, cfg, !!calendarButtons, view);
     setFloatingPanelVisible(panel, fab, !keepMinimized);
     openDetailIds.forEach((id) => {
-      const details = panel.querySelector(`#${id}`);
+      const details = panel.querySelector(`#${CSS.escape(id)}`);
       if (details) details.open = true;
     });
     const bodyEl = panel.querySelector(".a-body");
@@ -3513,14 +3518,18 @@
         renderMirrorPanel(resumo);
       });
     }
-    const detailsBtn = panel.querySelector("#ahg-open-details");
-    if (detailsBtn) {
-      detailsBtn.addEventListener("click", () => abrirDetalhes(resumo.dias));
-    }
-    const csvBtn = panel.querySelector("#ahg-export-csv");
-    if (csvBtn) {
-      csvBtn.addEventListener("click", () => exportarCsvMensal(resumo.dias));
-    }
+    const bindActivate = (el2, fn) => {
+      if (!el2) return;
+      el2.addEventListener("click", fn);
+      el2.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          fn();
+        }
+      });
+    };
+    bindActivate(panel.querySelector("#ahg-open-details"), () => abrirDetalhes(resumo.dias));
+    bindActivate(panel.querySelector("#ahg-export-csv"), () => exportarCsvMensal(resumo.dias));
     const themeSelect = panel.querySelector("#ahg-tema-select");
     if (themeSelect) {
       themeSelect.addEventListener("change", (e) => {
@@ -3763,8 +3772,8 @@
     let html = `
     <div class="a-tit">
         ${icon("clock")} Logger v${CONFIG.VERSAO}
-        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${privacyState.pressed ? icon("eye-off", { size: 14 }) : icon("eye", { size: 14 })}</button>
-        <span class="a-x" id="ahg-logger-min" title="Minimizar">${icon("minus", { size: 14 })}</span>
+        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${icon(privacyState.iconName, { size: 14 })}</button>
+        <button class="a-x" id="ahg-logger-min" title="Minimizar" aria-label="Minimizar painel">${icon("minus", { size: 14 })}</button>
     </div>
     <div class="a-body">
         ${view.assistantHtml || ""}

@@ -75,8 +75,8 @@ export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
     let html = `
     <div class="a-tit">
         ${icon('clock')} Logger v${CONFIG.VERSAO}
-        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${privacyState.pressed ? icon('eye-off', { size: 14 }) : icon('eye', { size: 14 })}</button>
-        <span class="a-x" id="ahg-logger-min" title="Minimizar">${icon('minus', { size: 14 })}</span>
+        <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${icon(privacyState.iconName, { size: 14 })}</button>
+        <button class="a-x" id="ahg-logger-min" title="Minimizar" aria-label="Minimizar painel">${icon('minus', { size: 14 })}</button>
     </div>
     <div class="a-body">
         ${view.assistantHtml || ''}

@@ -11,27 +11,14 @@ import { renderLoggerContainer } from '../../src/logger/logger-renderer.js';
 import { getLoggerVm } from '../../src/logger/logger-vm.js';
 import { STORAGE_KEYS } from '../../src/core/storage-adapter.js';
 import { bus } from '../../src/core/event-bus.js';
-
-function mockLocalStorage() {
-    global.localStorage = {
-        _data: new Map(),
-        getItem(key) {
-            return this._data.has(key) ? this._data.get(key) : null;
-        },
-        setItem(key, value) {
-            this._data.set(key, String(value));
-        },
-        removeItem(key) {
-            this._data.delete(key);
-        }
-    };
-}
+import { formatDateKey } from '../../src/core/time-utils.js';
+import { installMockLocalStorage } from './helpers/mock-local-storage.js';
 
 let stop = null;
 
 beforeEach(() => {
     document.body.innerHTML = '';
-    mockLocalStorage();
+    installMockLocalStorage();
     bus.clear();
     vi.useFakeTimers();
 });
@@ -128,6 +115,37 @@ describe('integração: batida capturada aparece no painel sem reload', () => {
         // Mesma cadeia do modal-guard: savePunch dispara o re-render.
         savePunch('14:25');
         expect(panel.innerHTML).toContain('14:25');
+    });
+
+    it('SHARED_TRUTH novo do Espelho aparece no painel sem reload (polling)', () => {
+        const todayKey = formatDateKey(new Date());
+        stop = startLoggerLiveRefresh(() => renderLoggerContainer(getLoggerVm()));
+
+        renderLoggerContainer(getLoggerVm());
+        const panel = document.getElementById('ahg-batida-panel');
+        expect(panel.innerHTML).toContain('--:--');
+
+        localStorage.setItem(STORAGE_KEYS.SHARED_TRUTH, JSON.stringify({
+            updatedAt: 'B',
+            todayKey,
+            todayPunches: ['08:00', '12:00'],
+            workedToday: 240
+        }));
+        vi.advanceTimersByTime(LOGGER_TRUTH_POLL_MS + 10);
+        expect(panel.innerHTML).toContain('12:00');
+        expect(panel.innerHTML).toContain('Mirror sincronizado');
+    });
+
+    it('re-render preserva a máscara de privacidade ativa', () => {
+        localStorage.setItem(STORAGE_KEYS.PRIVACY_HIDE, 'true');
+        stop = startLoggerLiveRefresh(() => renderLoggerContainer(getLoggerVm()));
+
+        renderLoggerContainer(getLoggerVm());
+        savePunch('14:25');
+
+        const panel = document.getElementById('ahg-batida-panel');
+        expect(panel.querySelector('.ahg-time-display').textContent).toBe('••:••');
+        expect(panel.innerHTML).not.toContain('14:25');
     });
 
     it('re-render preserva a minimização escolhida', () => {

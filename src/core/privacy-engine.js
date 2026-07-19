@@ -31,7 +31,8 @@ export function privacyButtonState() {
     const hidden = isPrivacyHidden();
     return {
         title: hidden ? 'Privacidade ativa — clique para desativar' : 'Privacidade inativa — clique para ativar',
-        pressed: hidden
+        pressed: hidden,
+        iconName: hidden ? 'eye-off' : 'eye'
     };
 }
 

@@ -68,24 +68,25 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
         ? r.punchAnomalyDays.slice(0, 4).map(fmtAnomalyDay).join(' · ') + anomalyExtra
         : 'Sem inconsistências';
 
-    const healthLevel = r.hojePunchHealth?.level;
-    const healthIcon = healthLevel === 'neg'
-        ? icon('octagon-alert')
-        : healthLevel === 'warn' ? icon('triangle-alert') : icon('circle-check');
+    const HEALTH_STYLES = {
+        neg: { icon: 'octagon-alert', row: 'danger', val: 'neg' },
+        warn: { icon: 'triangle-alert', row: 'warn', val: 'warn' }
+    };
+    const health = HEALTH_STYLES[r.hojePunchHealth?.level] || { icon: 'circle-check', row: 'ok', val: 'pos' };
 
     let html = `
     <div class="a-tit">
         ${icon('clock')} Painel Inteligente v${CONFIG.VERSAO}
-        <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-label="${state.title}" aria-pressed="${state.pressed}">${state.pressed ? icon('eye-off', { size: 14 }) : icon('eye', { size: 14 })}</button>
-        <span class="a-x" id="ahg-min" title="Minimizar">${icon('minus', { size: 14 })}</span>
+        <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-label="${state.title}" aria-pressed="${state.pressed}">${icon(state.iconName, { size: 14 })}</button>
+        <button class="a-x" id="ahg-min" title="Minimizar" aria-label="Minimizar painel">${icon('minus', { size: 14 })}</button>
     </div>
     <div class="a-body">
         ${view.assistantHtml || ''}
         <div class="a-sec">Status atual</div>
         <div class="a-row infos"><span class="a-lbl">Situação</span><span class="a-val neu">${renderText(r.status)}</span></div>
-        <div class="a-row ${r.hojePunchHealth?.level === 'neg' ? 'danger' : r.hojePunchHealth?.level === 'warn' ? 'warn' : 'ok'}">
-            <span class="a-lbl">${healthIcon} Batidas hoje</span>
-            <span class="a-val ${r.hojePunchHealth?.level === 'neg' ? 'neg' : r.hojePunchHealth?.level === 'warn' ? 'warn' : 'pos'}">${r.hoje.batidas.length} · ${renderText(r.hojePunchHealth?.short || '')}</span>
+        <div class="a-row ${health.row}">
+            <span class="a-lbl">${icon(health.icon)} Batidas hoje</span>
+            <span class="a-val ${health.val}">${r.hoje.batidas.length} · ${renderText(r.hojePunchHealth?.short || '')}</span>
         </div>
         <div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'warn'}">${renderMinutes(r.hoje.trabalhado)}</span></div>
         <div class="a-row infos"><span class="a-lbl">Saldo do dia</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'neg'}">${renderMinutes(r.hoje.saldo)}</span></div>
@@ -142,8 +143,8 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-month-details"><summary class="a-sec">Mensal · <span class="${r.saldoMes >= 0 ? 'ahg-color-pos' : 'ahg-color-neg'}">${renderMinutes(r.saldoMes)}</span></summary>
         <div class="a-row ${r.saldoMes >= 0 ? 'ok' : 'warn'}"><span class="a-lbl">Saldo mensal</span>
         <span class="a-val ${r.saldoMes >= 0 ? 'pos' : 'neg'}">${renderMinutes(r.saldoMes)}<small class="a-cap">${r.diasRestantesMes} úteis restantes</small></span></div>
-        <div class="a-row infos clickable" id="ahg-open-details"><span class="a-lbl">${icon('bar-chart')} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
-        <div class="a-row infos clickable" id="ahg-export-csv"><span class="a-lbl">${icon('download')} Exportar CSV</span><span class="a-val neu"><small>relatório do mês</small></span></div>
+        <div class="a-row infos clickable" id="ahg-open-details" role="button" tabindex="0"><span class="a-lbl">${icon('bar-chart')} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
+        <div class="a-row infos clickable" id="ahg-export-csv" role="button" tabindex="0"><span class="a-lbl">${icon('download')} Exportar CSV</span><span class="a-val neu"><small>relatório do mês</small></span></div>
     </details>`;
 
     if (cfg.flags?.F009_banco_horas && r.bancoHoras !== null && r.bancoHoras !== undefined) {
@@ -214,7 +215,7 @@ export function renderMirrorPanel(resumo) {
     setFloatingPanelVisible(panel, fab, !keepMinimized);
 
     openDetailIds.forEach((id) => {
-        const details = panel.querySelector(`#${id}`);
+        const details = panel.querySelector(`#${CSS.escape(id)}`);
         if (details) details.open = true;
     });
     const bodyEl = panel.querySelector('.a-body');
@@ -252,15 +253,19 @@ export function renderMirrorPanel(resumo) {
         });
     }
 
-    const detailsBtn = panel.querySelector('#ahg-open-details');
-    if (detailsBtn) {
-        detailsBtn.addEventListener('click', () => abrirDetalhes(resumo.dias));
-    }
-
-    const csvBtn = panel.querySelector('#ahg-export-csv');
-    if (csvBtn) {
-        csvBtn.addEventListener('click', () => exportarCsvMensal(resumo.dias));
-    }
+    // Linhas clicáveis são role="button": ativam também por Enter/Espaço (WCAG AA).
+    const bindActivate = (el, fn) => {
+        if (!el) return;
+        el.addEventListener('click', fn);
+        el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fn();
+            }
+        });
+    };
+    bindActivate(panel.querySelector('#ahg-open-details'), () => abrirDetalhes(resumo.dias));
+    bindActivate(panel.querySelector('#ahg-export-csv'), () => exportarCsvMensal(resumo.dias));
 
     const themeSelect = panel.querySelector('#ahg-tema-select');
     if (themeSelect) {

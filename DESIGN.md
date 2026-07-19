@@ -29,7 +29,7 @@ Padrões visuais e de interação para as interfaces de painel (Mirror) e logger
 - **Cidadão de primeira classe:** o card do assistente (`.ahg-assistant`) abre o corpo de ambos os painéis (Mirror e Logger), antes de qualquer outra seção. Ele responde "qual é a minha próxima batida e quando".
 - **Próxima batida em destaque:** horário grande (`.ahg-as-next-time`, cor primária) com rótulo e janela legal (`janela mín – máx`) ao lado.
 - **Preset de jornada:** toggle segmentado 8h/10h (`.ahg-as-presets`, pílula com opção ativa preenchida). Um toque replaneja o dia inteiro; o preset persiste via storage (chave `ahgora_journey_plan_v1`) e é compartilhado entre Mirror e Logger.
-- **Cronograma do dia:** lista `.ahg-as-step` com estados `done` (esmaecido, ✔), `next` (realçado, ▶) e `planned` (·). Passos futuros oferecem quick-add de calendário (📅 Google / 🗓️ Outlook) reutilizando os links existentes.
+- **Cronograma do dia:** lista `.ahg-as-step` com estados `done` (esmaecido, ícone SVG `check`), `next` (realçado, `chevron-right`) e `planned` (`dot`). Passos futuros oferecem quick-add de calendário (ícone `calendar` com tag G/O para Google/Outlook) reutilizando os links existentes. Ícones vêm do sistema SVG central (`src/shared/icons.js`) — sem emojis na UI.
 - **Alertas por enforcement:** cada regra aplicada vira `.ahg-as-alert` com badge do ID (BR-001..) colorido por nível — `hard-block` → danger, `warning-only` → warn, `informational` → infos. Hard-blocks limitam a sugestão; warnings só destacam o risco.
 - **Saída ideal:** linha `.ahg-as-ideal` sempre compensando o saldo semanal, limitada pelos tetos legais.
 

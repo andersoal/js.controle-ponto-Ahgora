@@ -4,11 +4,13 @@
  * não vestem "Hoje", e a última batida de ontem alimenta o BR-001.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getLoggerVm } from '../../src/logger/logger-vm.js';
+import { renderLoggerContainer } from '../../src/logger/logger-renderer.js';
 import { buildAssistantPlan } from '../../src/mirror/assistant-engine.js';
 import { STORAGE_KEYS } from '../../src/core/storage-adapter.js';
 import { formatDateKey } from '../../src/core/time-utils.js';
+import { installMockLocalStorage } from './helpers/mock-local-storage.js';
 
 // SHARED_TRUTH como o Espelho gravou num dia PASSADO (última visita ao mirror).
 const STALE_TRUTH = {
@@ -29,19 +31,7 @@ function seedTruth(truth) {
 }
 
 beforeEach(() => {
-    // Mesmo idiom de storage-adapter.test.js: mock explícito de localStorage.
-    global.localStorage = {
-        _data: new Map(),
-        getItem(key) {
-            return this._data.has(key) ? this._data.get(key) : null;
-        },
-        setItem(key, value) {
-            this._data.set(key, String(value));
-        },
-        removeItem(key) {
-            this._data.delete(key);
-        }
-    };
+    installMockLocalStorage();
 });
 
 describe('getLoggerVm (caracterização)', () => {
@@ -121,6 +111,24 @@ describe('cross-day: manhã seguinte no Logger (regressão do ticket wayfinder 0
         expect(plan.next.id).toBe('entry');
         expect(plan.next.time).toBe(9 * 60);
         expect(plan.enforcement.some((e) => e.ruleId === 'BR-001')).toBe(true);
+    });
+
+    it('seam real completo: painel renderizado às 06:00 mostra a sugestão 09:00 com alerta BR-001', () => {
+        // Relógio congelado às 06:00 de hoje para tornar o render determinístico.
+        vi.useFakeTimers();
+        const morning = new Date();
+        morning.setHours(6, 0, 0, 0);
+        vi.setSystemTime(morning);
+        try {
+            seedTruth({ ...STALE_TRUTH, todayKey: yesterdayKey() });
+            document.body.innerHTML = '';
+            renderLoggerContainer(getLoggerVm());
+            const panel = document.getElementById('ahg-batida-panel');
+            expect(panel.innerHTML).toContain('BR-001');
+            expect(panel.innerHTML).toContain('09:00');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('registro dedicado PREV_DAY_LAST_PUNCH alimenta BR-001 mesmo com SHARED_TRUTH de hoje (virada de mês)', () => {

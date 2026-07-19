@@ -205,6 +205,7 @@ export const CSS_COMPONENTS = `
     margin-left: 6px;
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 24px; min-height: 24px;
+    background: transparent; border: none; padding: 0; color: inherit;
     cursor: pointer; opacity: .6; font-size: 16px; transition: opacity .15s;
 }
 .a-x:hover { opacity: 1; }
