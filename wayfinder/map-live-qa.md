@@ -75,6 +75,18 @@ handed off, outside this map.
   reliably when reached, and render-once hides successful syncs until F5; bonus: the mirror
   module also runs uselessly on the outer page. Corrected day-1 misread: `#ahg-screen` is
   the site's own element.
+- [Code recheck of the July-7 bugs #1–#6 against v3.1](tickets/011-recheck-july7-bugs-v31.md) —
+  #2 fixed (live-confirmed) e #3 fixed (issues/0004, contraprova pendente); #1 parcialmente
+  (defaults ligados, UI de config ainda ausente); #4/#5/#6 ainda presentes (família 3º turno);
+  as 3 observações de 07/07 seguem de pé.
+- [Saída ideal shows a time in the past](tickets/015-saida-ideal-uncapped.md) — root cause:
+  `capExit` só limita por cima, `exitFinal − saldoSemana` sem piso; comportamento correto
+  decidido: piso `max(now, entrada do turno aberto)`; repro 2 RED / 2 GREEN em
+  `wayfinder/assets/`.
+- [Assemble the deduplicated bug backlog](tickets/014-assemble-bug-backlog.md) — **mapa
+  encerrado**: issues/0005–0009 criadas (3º turno, alarmes extra-turn, higiene config,
+  piso da saída ideal, detecção de página do Espelho); fixes já feitos deduplicados
+  (0003/0004); July-7 #1 cross-referenciado ao redesign.
 
 ## Not yet specified
 

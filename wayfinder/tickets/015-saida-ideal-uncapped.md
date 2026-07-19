@@ -1,10 +1,11 @@
 ---
 title: "Saída ideal shows a time in the past (week balance applied uncapped?)"
 labels: [wayfinder:research]
-status: open
-assignee:
+status: closed
+assignee: andersoal
 blocked-by: []
 map: ../map-live-qa.md
+resolved: 2026-07-19
 ---
 
 ## Question
@@ -25,3 +26,27 @@ AFK: reproduce with a unit test using the observed inputs (batidas 07:07/13:25/1
 saldoSemana +485 min). Deliverable: failing test + root-cause pointer (file:line) in the
 Resolution; feeds the backlog ticket. Also decide what the *correct* behavior is: floor at
 "now"? at last punch + minimum rest? never earlier than retorno?
+
+## Resolution
+
+**Root-caused (2026-07-19). O "cap" de `bddabbf` limita na direção errada: só por cima.**
+Reprodução executável: [`wayfinder/assets/015-ideal-exit-floor.test.js`](../assets/015-ideal-exit-floor.test.js)
+— `npx vitest run --config wayfinder/assets/vitest.repro.config.js` → **2 RED / 2 GREEN**
+com os inputs observados ao vivo (batidas 07:07/13:25/14:25, saldo +485, now 14:45).
+
+Aritmética confirmada, exatamente como o ticket suspeitava:
+`idealExit = capExit(exitFinal − saldoSemana, …)` (`src/mirror/assistant-engine.js:211`,
+branch count===3; o mesmo padrão nos branches 0/1/2 e extra-turn). `capExit`
+(`assistant-engine.js:105-119`) aplica apenas os **tetos** BR-004/BR-005
+(`Math.min(desired, shiftCap, dayCap)`) — não existe piso. Com saldo semanal grande,
+`967 − 485 = 482` (08:02) passa intocado: horas no passado, antes do retorno.
+
+**Comportamento correto (decidido):** piso em `max(now, entrada do turno aberto)` —
+a Saída ideal nunca aponta para antes do momento atual nem de antes do início do turno
+em andamento; quando o piso ativa, o significado é "já pode sair" (o card pode
+comunicar isso em vez de exibir um horário). O RED da projeção sem batidas mostra que
+o piso vale para todos os branches, não só o count===3 observado.
+
+Nota: com o gating por dia de issues/0003, um `saldoSemana` de ontem não chega mais ao
+assistente num dia novo — o compounding apontado no ticket 010 já morreu; este defeito
+permanece com saldo legítimo do próprio dia. Feeds o ticket 014.
