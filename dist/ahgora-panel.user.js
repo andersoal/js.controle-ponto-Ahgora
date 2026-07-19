@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Ahgora — Painel Inteligente Local
 // @namespace    https://github.com/andersoal
-// @version      3.1.0
+// @version      3.1.1
 // @description  Painel com totais no calendario, logger de batidas, overlay de jornada na novabatidaonline, alarmes configuraveis, tema adaptativo e diagnostico
 // @author       Jonathan Fiss, Anderson Guarnier
 
@@ -134,7 +134,7 @@
 
   // src/core/config.js
   var CONFIG = Object.freeze({
-    VERSAO: "3.1.0",
+    VERSAO: "3.1.1",
     BUILD_DATE: "2026-07-14",
     // Constantes de tempo
     MINUTES_PER_HOUR: 60,
@@ -3643,15 +3643,21 @@
     const ontem = new Date(todayDate);
     ontem.setDate(ontem.getDate() - 1);
     const yesterdayKey = formatDateKey(ontem);
+    const candidates = [];
     const stored = gmGetJsonCrossOrigin(STORAGE_KEYS.PREV_DAY_LAST_PUNCH, null);
     if (stored?.dateKey === yesterdayKey && stored.lastPunch) {
-      return { yesterdayLastPunch: stored.lastPunch };
+      candidates.push(stored.lastPunch);
     }
     if (sharedTruth?.todayKey === yesterdayKey) {
       const punches = sharedTruth.todayPunches || [];
-      return { yesterdayLastPunch: punches[punches.length - 1] || null };
+      if (punches.length) candidates.push(punches[punches.length - 1]);
     }
-    return { yesterdayLastPunch: null };
+    getPunchHistory().forEach((entry) => {
+      if (entry.dateKey === yesterdayKey && entry.time) candidates.push(entry.time);
+    });
+    if (!candidates.length) return { yesterdayLastPunch: null };
+    const yesterdayLastPunch = candidates.reduce((a, b) => toMin(b) > toMin(a) ? b : a);
+    return { yesterdayLastPunch };
   }
   function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);

@@ -5,6 +5,7 @@
 
 import { STORAGE_KEYS, gmGetJsonCrossOrigin } from '../core/storage-adapter.js';
 import { formatDateKey, toMin } from '../core/time-utils.js';
+import { getPunchHistory } from './punch-history.js';
 
 export function getTodayBounds(date = new Date()) {
     const start = new Date(date);
@@ -47,26 +48,36 @@ export function getMirrorTodayContext(sharedTruth, todayKey) {
 
 /**
  * Contexto de ontem para a interjornada (BR-001): a última batida do dia
- * anterior, vinda do registro dedicado persistido pelo Espelho ou de um
- * SHARED_TRUTH cujo todayKey é exatamente ontem. Dados mais antigos que
- * ontem não restringem a entrada (o descanso de 11h já passou).
+ * anterior, considerando todas as fontes — registro dedicado persistido pelo
+ * Espelho, SHARED_TRUTH cujo todayKey é exatamente ontem e o histórico local
+ * de capturas do Logger (dias sem visita ao Espelho). Vence o horário mais
+ * tarde. Dados mais antigos que ontem não restringem a entrada (com 11h de
+ * descanso, uma batida de anteontem não pode alcançar hoje).
  */
 export function getYesterdayContext(sharedTruth, todayDate = new Date()) {
     const ontem = new Date(todayDate);
     ontem.setDate(ontem.getDate() - 1);
     const yesterdayKey = formatDateKey(ontem);
 
+    const candidates = [];
+
     const stored = gmGetJsonCrossOrigin(STORAGE_KEYS.PREV_DAY_LAST_PUNCH, null);
     if (stored?.dateKey === yesterdayKey && stored.lastPunch) {
-        return { yesterdayLastPunch: stored.lastPunch };
+        candidates.push(stored.lastPunch);
     }
 
     if (sharedTruth?.todayKey === yesterdayKey) {
         const punches = sharedTruth.todayPunches || [];
-        return { yesterdayLastPunch: punches[punches.length - 1] || null };
+        if (punches.length) candidates.push(punches[punches.length - 1]);
     }
 
-    return { yesterdayLastPunch: null };
+    getPunchHistory().forEach((entry) => {
+        if (entry.dateKey === yesterdayKey && entry.time) candidates.push(entry.time);
+    });
+
+    if (!candidates.length) return { yesterdayLastPunch: null };
+    const yesterdayLastPunch = candidates.reduce((a, b) => (toMin(b) > toMin(a) ? b : a));
+    return { yesterdayLastPunch };
 }
 
 export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {

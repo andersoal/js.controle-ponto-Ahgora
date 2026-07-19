@@ -131,6 +131,19 @@ describe('cross-day: manhã seguinte no Logger (regressão do ticket wayfinder 0
         }
     });
 
+    it('dia só de Logger (sem visita ao Espelho): captura local de ontem alimenta BR-001', () => {
+        // Nenhum SHARED_TRUTH útil; a saída 22:00 de ontem existe apenas no
+        // histórico local (cadeia do modal-guard).
+        const ontem = new Date();
+        ontem.setDate(ontem.getDate() - 1);
+        localStorage.setItem(STORAGE_KEYS.PUNCH_HISTORY, JSON.stringify([
+            { time: '22:00', dateKey: formatDateKey(ontem), timestamp: ontem.getTime() },
+            { time: '18:00', dateKey: formatDateKey(ontem), timestamp: ontem.getTime() - 4 * 3600000 }
+        ]));
+        const vm = getLoggerVm();
+        expect(vm.yesterdayLastPunch).toBe('22:00');
+    });
+
     it('registro dedicado PREV_DAY_LAST_PUNCH alimenta BR-001 mesmo com SHARED_TRUTH de hoje (virada de mês)', () => {
         seedTruth({ ...STALE_TRUTH, todayKey: formatDateKey(new Date()), todayPunches: [] });
         localStorage.setItem(STORAGE_KEYS.PREV_DAY_LAST_PUNCH, JSON.stringify({

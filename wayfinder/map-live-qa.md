@@ -39,8 +39,9 @@ handed off, outside this map.
   Odd punch counts, day rollover, and edge cases are simulated (fixtures, unit tests, or
   storage manipulation in-page) — never extra real punches.
 - **Backlog home (decided):** one markdown issue per confirmed bug in `issues/`, following the
-  `issues/0001-…` convention. Evidence (screenshots, storage dumps) under
-  `tests/e2e/qa-evidence/<date>/`, linked from each issue.
+  `issues/0001-…` convention. Evidence (screenshots, storage dumps, recordings) under
+  `tests/e2e/qa-evidence/<date>/` — **local-only, gitignored** (decidido 2026-07-19: 53MB de
+  .webm não entram no histórico git); issues referenciam caminhos que existem na máquina de QA.
 - **Live sessions are opportunistic:** HITL live tickets run when the user is about to punch
   (~4 windows/day). AFK research tickets fill the gaps.
 - **Prior art:** `QA_BATIDA_2026-07-07.md` (live session, bugs #1–#6 against v3.0.5 — bug #3

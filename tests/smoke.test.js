@@ -8,7 +8,7 @@ const userScript = fs.readFileSync(SCRIPT_PATH, 'utf8');
 
 const MIRROR_URL = 'https://mirror.app.ahgora.com.br/';
 const BATIDA_URL = 'https://app.ahgora.com.br/novabatidaonline';
-const EXPECTED_VERSION = '3.1.0';
+const EXPECTED_VERSION = '3.1.1';
 
 const RESULTS = {
   passed: 0,

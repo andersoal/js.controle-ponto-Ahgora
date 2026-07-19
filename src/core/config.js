@@ -6,7 +6,7 @@
 import { gmGetJson, gmSetJson } from './storage-adapter.js';
 
 export const CONFIG = Object.freeze({
-    VERSAO: '3.1.0',
+    VERSAO: '3.1.1',
     BUILD_DATE: '2026-07-14',
 
     // Constantes de tempo
