@@ -21,6 +21,11 @@ day/week punch-workflow assistant (next-punch reminders, journey-length presets 
 quick calendar add). Visual identity is refined, not replaced. Implementation happens after
 hand-off, outside this map.
 
+**Reached 2026-07-20** — v3.1 shipped the redesign ahead of this map's own tickets running;
+the map closed by auditing the shipped state instead of designing from scratch (see Decisions
+below). One ticket remains open with no blockers ([017](tickets/017-br013-015-data-source-research.md));
+everything else is resolved.
+
 ## Notes
 
 - **Build rule (binding, every backlog item must comply):** source lives in `src/` modules;
@@ -47,16 +52,34 @@ hand-off, outside this map.
 
 <!-- one line per closed ticket: gist + link -->
 
+- **Re-scoped 2026-07-20** (grilling session): v3.1 (`a7f5b05`…`e050693`) shipped most of this
+  map's vision before the map's own tickets ran. Re-scoped from "spec + prototype from
+  scratch" to "audit what shipped, spin off real gaps" — see
+  [ticket 001](tickets/001-audit-current-ui-ux.md).
+- [Audit v3.1.1-as-shipped against the four pain axes](tickets/001-audit-current-ui-ux.md) —
+  all 28 stories in [issues/0001](../issues/0001-ui-ux-redesign-v3-spec.md) checked; Mirror,
+  Logger, and calendar decorations fully fulfilled (closing tickets 004/005/006 as overtaken);
+  one real gap on chrome (toast messages hadn't migrated off emoji — fixed inline, closing
+  ticket 007 too).
+- [Spec the assistant's behavior](tickets/002-spec-workflow-assistant-behavior.md) — closed as
+  overtaken (journey plan, phase suggestions, compliance enforcement, calendar quick-add, week
+  view all shipped); one real gap spun into
+  [ticket 016](tickets/016-assistant-br007-015-coverage.md).
+- [Prototype the assistant UI](tickets/003-prototype-workflow-assistant-ui.md) — closed as
+  overtaken: it lives in **both** Mirror and Logger via one shared component
+  (`src/shared/assistant-card.js`), stronger than a prototype decision.
+- [Does the assistant need BR-007–015 awareness?](tickets/016-assistant-br007-015-coverage.md) —
+  BR-007/008/009 (weekly overtime/rest) integrate into the assistant's suggested exit
+  ([issues/0010](../issues/0010-assistant-weekly-overtime-rest.md)); BR-010–012 (sobreaviso)
+  out of scope, not a real scenario; BR-013–015 (informational notices) get one research pass
+  before closing the door ([ticket 017](tickets/017-br013-015-data-source-research.md)).
+
 ## Not yet specified
 
-- **Webhook integration** — sending punch-schedule events (JSON) to an external system
-  (n8n/Zapier/etc.). User rated it nice-to-have; parked until the workflow assistant's behavior
-  is specced, which will fix what events exist to send.
-- **DESIGN.md extensions** — which new tokens/components the design guide needs; only visible
-  once the per-surface redesign tickets resolve.
-- **Reminder delivery mechanism research** — if the assistant spec calls for OS-level reminders
-  (GM_notification, Notification API) beyond in-page cues, a research ticket on Tampermonkey
-  notification support graduates here.
+- **DESIGN.md extensions** — the audit found no new tokens/components needed; stays empty
+  unless ticket 017 or issues/0010 introduce something the design guide should document.
+- **BR-013–015 data-source feasibility** — [ticket 017](tickets/017-br013-015-data-source-research.md),
+  open, no blockers.
 
 ## Out of scope
 

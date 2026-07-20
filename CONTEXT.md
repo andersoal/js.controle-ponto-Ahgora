@@ -37,3 +37,7 @@ Descanso mínimo de 11h entre a última batida de um dia e a primeira do seguint
 
 **Jornada / Plano**:
 O comprimento planejado do dia de trabalho (preset 8h ou 10h) que o assistente usa para sugerir saída, retorno e última saída.
+
+**Saída ideal (idealExit)**:
+O horário de última saída, projetado a partir da saída planejada da jornada, que compensa o saldo semanal acumulado (positivo empurra a saída mais cedo, negativo mais tarde). Nunca deveria apontar para antes do momento atual nem do início do turno aberto — piso decidido em 2026-07-19, correção pendente ([issues/0008](../issues/0008-ideal-exit-floor.md)).
+_Avoid_: saída sugerida (ambíguo com `next`/última batida do cronograma)

@@ -199,12 +199,12 @@ function renderLogger(vm) {
         vm,
         (time) => {
             const saved = savePunch(time);
-            showLoggerToast(saved ? `💾 Batida ${time} salva` : 'ℹ️ Batida já estava salva');
+            showLoggerToast(saved ? `Batida ${time} salva` : 'Batida já estava salva');
             if (saved) renderLogger(getLoggerVm());
         },
         () => {
             const removed = deleteLastSavedPunch();
-            showLoggerToast(removed ? '🗑️ Última batida local removida' : 'ℹ️ Nada para remover');
+            showLoggerToast(removed ? 'Última batida local removida' : 'Nada para remover');
             if (removed) renderLogger(getLoggerVm());
         }
     );

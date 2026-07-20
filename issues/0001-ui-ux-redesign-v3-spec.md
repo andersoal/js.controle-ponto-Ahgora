@@ -3,7 +3,8 @@ title: "Spec: Redesign UI/UX do Ahgora Panel + assistente de fluxo de batidas"
 labels: [ready-for-agent, spec]
 status: open
 created: 2026-07-12
-related: [../wayfinder/map.md]
+updated: 2026-07-20
+related: [../wayfinder/map.md, ../wayfinder/tickets/001-audit-current-ui-ux.md]
 ---
 
 # Spec: Redesign UI/UX do Ahgora Panel + assistente de fluxo de batidas
@@ -46,34 +47,41 @@ refinement adds.
 
 ## User Stories
 
-1. As an Ahgora user, I want the panel to lead with my next required punch and its time window, so that I don't have to compute it mentally.
-2. As an Ahgora user, I want to see the suggested first punch of my next journey/cycle for each day, so that I start days on time without checking rules.
-3. As an Ahgora user, I want the assistant to suggest exit, return, and last-exit times right after my first punch, so that my whole day is planned from one action.
-4. As an Ahgora user, I want a quick preset toggle to plan the day as 10h instead of the default 8h, so that extending a day is one tap rather than mental math.
-5. As an Ahgora user, I want punch suggestions to respect hard-block compliance rules (interjornada, intrajornada, max shift, max day), so that following the assistant never puts me in violation.
-6. As an Ahgora user, I want warning-level rules shown as visible risk highlights on suggestions rather than blocks, so that I can consciously accept edge cases.
-7. As an Ahgora user, I want each suggested punch to offer one-tap add-to-calendar (Google/Outlook per my configured provider), so that reminders reach me where I already live.
-8. As an Ahgora user, I want the assistant's ideal exit to keep compensating my weekly balance, so that the week converges to zero without my tracking it.
-9. As an Ahgora user, I want a week view showing planned vs. worked per day and the running weekly balance, so that I can plan the remaining days.
-10. As an Ahgora user, I want the Mirror panel to surface current balance and today's status at the top, so that a glance answers the common question.
-11. As an Ahgora user, I want dense historical tables kept out of the default view (in modals or expansions), so that the panel stays scannable.
-12. As an Ahgora user, I want tolerance-zone days (±10min) clearly but quietly marked, so that I understand my monthly balance without noise.
-13. As an Ahgora user, I want compliance alerts visually ranked by enforcement level (hard-block, warning, informational), so that severity is legible at a glance.
-14. As an Ahgora user, I want the CSV export reachable without hunting, so that month-end reporting stays quick.
-15. As an Ahgora user, I want the Logger to show whether it's using synced Mirror data or local cache, so that I know how much to trust its numbers.
-16. As an Ahgora user, I want the Logger's phase guidance (entry/interval/return/exit) to look and behave like the Mirror's guidance, so that the two pages feel like one product.
-17. As an Ahgora user, I want calendar day cells to show worked totals as unobtrusive badges, so that the month reads at a glance.
-18. As an Ahgora user, I want the per-day ✏️ punch simulator to remain one click away on each day cell, so that I can preview adjustments quickly.
-19. As an Ahgora user, I want inconsistency badges (odd punch counts) only on past/present days, so that future days don't cry wolf.
-20. As an Ahgora user, I want unapproved adjustments (manual, prevista, and future classes) visually distinct with tooltips, so that pending state is obvious.
-21. As an Ahgora user, I want the privacy toggle to mask all sensitive times (••:••) while keeping layout and health icons, so that I can screen-share safely.
-22. As an Ahgora user, I want the panel draggable and minimizable to a FAB with its position remembered, so that it never blocks the underlying page.
-23. As an Ahgora user, I want transient feedback (copies, deletions, saves) as consistent toasts, so that actions confirm themselves without dialogs.
-24. As an Ahgora user, I want all text, dates (DD/MM), and vocabulary in PT-BR, so that the tool matches its context.
-25. As an Ahgora user, I want my journey-length preset and assistant settings persisted across sessions and pages, so that I configure once.
-26. As a maintainer, I want every UI change delivered through the src/ modules and rebuilt into the single-file userscript, so that deployment stays one artifact.
-27. As a maintainer, I want new assistant logic as pure engine functions with unit tests, so that behavior is verifiable without a browser.
-28. As a maintainer, I want the smoke suite to remain green over the built artifact, so that refactors can't silently break the deployed script.
+Status legend (audited 2026-07-20 against v3.1.1, `90150e4`; full audit in
+[wayfinder/tickets/001](../wayfinder/tickets/001-audit-current-ui-ux.md)): ✅ fulfilled ·
+🟡 partial/gap tracked · — not yet audited.
+
+1. ✅ As an Ahgora user, I want the panel to lead with my next required punch and its time window, so that I don't have to compute it mentally. — `assistant-card.js` heads both panels' `.a-body`.
+2. ✅ As an Ahgora user, I want to see the suggested first punch of my next journey/cycle for each day, so that I start days on time without checking rules. — `buildAssistantPlan` count===0 branch.
+3. ✅ As an Ahgora user, I want the assistant to suggest exit, return, and last-exit times right after my first punch, so that my whole day is planned from one action. — `buildAssistantPlan` count 1–3 branches.
+4. ✅ As an Ahgora user, I want a quick preset toggle to plan the day as 10h instead of the default 8h, so that extending a day is one tap rather than mental math. — `JOURNEY_PRESETS`, `.ahg-as-preset`.
+5. ✅ As an Ahgora user, I want punch suggestions to respect hard-block compliance rules (interjornada, intrajornada, max shift, max day), so that following the assistant never puts me in violation. — BR-001/002/004/005 hard-block in `assistant-engine.js`.
+6. ✅ As an Ahgora user, I want warning-level rules shown as visible risk highlights on suggestions rather than blocks, so that I can consciously accept edge cases. — BR-003/006 warning-only, `ALERT_CLASSES`.
+7. ✅ As an Ahgora user, I want each suggested punch to offer one-tap add-to-calendar (Google/Outlook per my configured provider), so that reminders reach me where I already live. — `buildCalendarLinksHtml`.
+8. 🟡 As an Ahgora user, I want the assistant's ideal exit to keep compensating my weekly balance, so that the week converges to zero without my tracking it. — compensates, but can land in the past with a large balance: [issues/0008](0008-ideal-exit-floor.md). Weekly-overtime-cap awareness tracked separately: [issues/0010](0010-assistant-weekly-overtime-rest.md).
+9. ✅ As an Ahgora user, I want a week view showing planned vs. worked per day and the running weekly balance, so that I can plan the remaining days. — `buildWeekPlan`/`buildWeekViewHtml`.
+10. ✅ As an Ahgora user, I want the Mirror panel to surface current balance and today's status at the top, so that a glance answers the common question. — "Status atual" right after the assistant.
+11. ✅ As an Ahgora user, I want dense historical tables kept out of the default view (in modals or expansions), so that the panel stays scannable. — "Hoje em detalhe"/Mensal/Banco/Config `<details>`.
+12. ✅ As an Ahgora user, I want tolerance-zone days (±10min) clearly but quietly marked, so that I understand my monthly balance without noise. — `updateDayToleranceMark`.
+13. ✅ As an Ahgora user, I want compliance alerts visually ranked by enforcement level (hard-block, warning, informational), so that severity is legible at a glance. — `ALERT_CLASSES` in `assistant-card.js`.
+14. ✅ As an Ahgora user, I want the CSV export reachable without hunting, so that month-end reporting stays quick. — one expand + one click inside "Mensal".
+15. ✅ As an Ahgora user, I want the Logger to show whether it's using synced Mirror data or local cache, so that I know how much to trust its numbers. — `resolveDataSource`, "Fonte" row.
+16. ✅ As an Ahgora user, I want the Logger's phase guidance (entry/interval/return/exit) to look and behave like the Mirror's guidance, so that the two pages feel like one product. — same shared `assistant-card.js` component.
+17. ✅ As an Ahgora user, I want calendar day cells to show worked totals as unobtrusive badges, so that the month reads at a glance. — `updateDayTotalsDisplay`.
+18. ✅ As an Ahgora user, I want the per-day punch simulator to remain one click away on each day cell, so that I can preview adjustments quickly. — `updateDayEditButton` (now SVG pencil, not emoji).
+19. ✅ As an Ahgora user, I want inconsistency badges (odd punch counts) only on past/present days, so that future days don't cry wolf. — `updateDayInconsistencyBadge` gates on `!dia.isFuture`.
+20. ✅ As an Ahgora user, I want unapproved adjustments (manual, prevista, and future classes) visually distinct with tooltips, so that pending state is obvious. — `updateDayManualPunchHighlight`, `updateDayRequestBadge`.
+21. ✅ As an Ahgora user, I want the privacy toggle to mask all sensitive times (••:••) while keeping layout and health icons, so that I can screen-share safely. — improved beyond spec: `privacy-engine.js` masks times within text via regex, keeping structure/labels legible (not just icons).
+22. ✅ As an Ahgora user, I want the panel draggable and minimizable to a FAB with its position remembered, so that it never blocks the underlying page. — `makePanelDraggable`, `applySavedPanelPosition`, shared by both panels.
+23. ✅ As an Ahgora user, I want transient feedback (copies, deletions, saves) as consistent toasts, so that actions confirm themselves without dialogs. — `showLoggerToast`, one shared function; last emoji holdout (`main.js`) fixed 2026-07-20 (ticket 007).
+24. ✅ As an Ahgora user, I want all text, dates (DD/MM), and vocabulary in PT-BR, so that the tool matches its context. — consistent across all surfaces.
+25. ✅ As an Ahgora user, I want my journey-length preset and assistant settings persisted across sessions and pages, so that I configure once. — `journey-plan.js`, shared storage key.
+26. ✅ As a maintainer, I want every UI change delivered through the src/ modules and rebuilt into the single-file userscript, so that deployment stays one artifact. — build rule honored throughout.
+27. ✅ As a maintainer, I want new assistant logic as pure engine functions with unit tests, so that behavior is verifiable without a browser. — `assistant-engine.js` pure, extensively unit-tested.
+28. ✅ As a maintainer, I want the smoke suite to remain green over the built artifact, so that refactors can't silently break the deployed script. — 34/34 as of `90150e4`.
+
+**Net**: 27/28 fulfilled, 1 partial (story 8, two tracked issues). No story is an open gap
+with no owner.
 
 ## Implementation Decisions
 
@@ -126,8 +134,8 @@ refinement adds.
 
 ## Out of Scope
 
-- **Webhook integration** to external systems (n8n/Zapier/etc.) — rated nice-to-have; parked in
-  the wayfinder map's fog until the assistant's behavior spec fixes what events exist to send.
+- **Webhook integration** to external systems (n8n/Zapier/etc.) — graduated 2026-07-20 into its
+  own map: [wayfinder/map-webhook-integration.md](../wayfinder/map-webhook-integration.md).
 - **Build-architecture changes** — the src → single-file dist pipeline is a constraint, not a
   topic.
 - **External APIs for operational calculation** — all processing stays local to the browser
@@ -137,14 +145,11 @@ refinement adds.
 
 ## Further Notes
 
-- This spec synthesizes the decisions made while charting the wayfinder map
-  ([Redesign UI/UX do Ahgora Panel v3](../wayfinder/map.md)). Layout-level specifics
-  (assistant placement, Mirror hierarchy, Logger composition, calendar decoration changes,
-  chrome consistency) are still open design tickets on that map — resolved HITL with HTML
-  prototypes for layout/flow questions and ASCII mockups for structural ones. As those tickets
-  close, their resolutions refine this spec's corresponding sections.
-- The UI/UX audit ticket will rank the four pain axes per surface; its findings set the
-  implementation order.
-- OS-level reminder delivery (GM_notification / Notification API) graduates from the map's fog
-  into a research ticket only if the assistant behavior spec calls for reminders beyond in-page
-  cues and calendar events.
+- **Map closed 2026-07-20.** v3.1 shipped this spec's vision ahead of the wayfinder map's own
+  tickets running — the map re-scoped to auditing the shipped state instead of designing from
+  scratch (see [wayfinder/map.md](../wayfinder/map.md) Decisions, and the full audit at
+  [wayfinder/tickets/001](../wayfinder/tickets/001-audit-current-ui-ux.md)). This issue's
+  per-story checklist above is the audit's output — kept open as a living record rather than
+  closed, since it's cheaper to update than to write a second document.
+- OS-level reminder delivery (Notification API, `src/shared/notification-api.js`) is
+  implemented and wired through the alarm config's `desktop` channel — resolved, not fog.

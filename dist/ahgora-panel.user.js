@@ -4156,12 +4156,12 @@
       vm,
       (time) => {
         const saved = savePunch(time);
-        showLoggerToast(saved ? `\u{1F4BE} Batida ${time} salva` : "\u2139\uFE0F Batida j\xE1 estava salva");
+        showLoggerToast(saved ? `Batida ${time} salva` : "Batida j\xE1 estava salva");
         if (saved) renderLogger(getLoggerVm());
       },
       () => {
         const removed = deleteLastSavedPunch();
-        showLoggerToast(removed ? "\u{1F5D1}\uFE0F \xDAltima batida local removida" : "\u2139\uFE0F Nada para remover");
+        showLoggerToast(removed ? "\xDAltima batida local removida" : "Nada para remover");
         if (removed) renderLogger(getLoggerVm());
       }
     );
