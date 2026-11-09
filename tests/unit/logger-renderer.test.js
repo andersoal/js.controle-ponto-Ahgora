@@ -56,6 +56,13 @@ describe('LoggerRenderer', () => {
         expect(html).toContain('08:00');
     });
 
+    it('buildLoggerHtml inclui atalho para abrir o espelho', () => {
+        const html = buildLoggerHtml(makeVm(), false, { mirrorUrl: 'https://app.ahgora.com.br/externo/index/a935336' });
+        expect(html).toContain('id="ahg-logger-open-mirror"');
+        expect(html).toContain('href="https://app.ahgora.com.br/externo/index/a935336"');
+        expect(html).toContain('target="_blank"');
+    });
+
     it('buildLoggerHtml distingue fonte sincronizada, cache e sem dados', () => {
         expect(buildLoggerHtml(makeVm())).toContain('Mirror sincronizado');
         expect(buildLoggerHtml(makeVm({ mirrorSource: 'cache' }))).toContain('Cache local do Mirror');

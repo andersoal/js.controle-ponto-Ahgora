@@ -31,6 +31,7 @@
     PREV_DAY_LAST_PUNCH: "ahgora_prev_day_last_punch_v1",
     JOURNEY_PLAN: "ahgora_journey_plan_v1",
     PANEL_POSITIONS: "ahgora_panel_positions_v1",
+    BANK_GOAL: "ahgora_bank_goal_v1",
     LOCAL_DAY_PUNCHES: "ahgora_local_day_punches_v1",
     PUNCH_HISTORY: "ahgora_history_v6",
     MIRROR_TODAY: "ahgora_mirror_today",
@@ -169,7 +170,10 @@
     QUICK_CALENDAR_OFFSET_OPTIONS: [5, 10, 15],
     // Auto-refresh
     AUTO_REFRESH_MINUTES: 15,
-    URL_REFRESH: "https://app.ahgora.com.br/externo/mirror"
+    URL_REFRESH: "https://app.ahgora.com.br/externo/mirror",
+    // Atalho Logger -> Mirror: /externo/index/<defaultDevice> quando a URL da batida traz o código
+    URL_MIRROR_FALLBACK: "https://app.ahgora.com.br/externo/mirror",
+    URL_MIRROR_DEVICE_BASE: "https://app.ahgora.com.br/externo/index/"
   });
   function parseJson(text, fallback) {
     try {
@@ -198,10 +202,7 @@
         cardsAtivos: ["interjornada", "intrajornada", "alarme", "saldo", "historico"],
         modoZen: false,
         modoMinimalista: false,
-        webhookUrl: "",
-        webhookEventos: ["limite_10h", "ilegalidade_12h"],
         gcalUserPath: CONFIG.GCAL_USER_PATH,
-        logLevel: "INFO",
         flags: {},
         _migrated: false
       };
@@ -361,19 +362,136 @@
     date.setHours(Math.floor(n / 60), n % 60, 0, 0);
     return date;
   }
+  function dateParts(date) {
+    return {
+      yyyy: date.getFullYear(),
+      mm: pad2(date.getMonth() + 1),
+      dd: pad2(date.getDate()),
+      hh: pad2(date.getHours()),
+      min: pad2(date.getMinutes()),
+      ss: pad2(date.getSeconds())
+    };
+  }
   function fmtGoogleCalendarDate(date) {
-    const yyyy = date.getFullYear();
-    const mm = pad2(date.getMonth() + 1);
-    const dd = pad2(date.getDate());
-    const hh = pad2(date.getHours());
-    const min = pad2(date.getMinutes());
-    const ss = pad2(date.getSeconds());
+    const { yyyy, mm, dd, hh, min, ss } = dateParts(date);
     return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
   }
 
+  // src/core/privacy-engine.js
+  var PRIVACY_MASK = "\u2022\u2022:\u2022\u2022";
+  function isPrivacyHidden() {
+    return gmGetValue(STORAGE_KEYS.PRIVACY_HIDE, "false") === "true";
+  }
+  function setPrivacyHidden(hidden) {
+    gmSetValue(STORAGE_KEYS.PRIVACY_HIDE, hidden ? "true" : "false");
+    applyPrivacyState();
+    bus.emit("privacy:changed", hidden);
+  }
+  function togglePrivacyHidden() {
+    const next = !isPrivacyHidden();
+    setPrivacyHidden(next);
+    return next;
+  }
+  function applyPrivacyState() {
+    document.body.classList.toggle("ahg-hide-times", isPrivacyHidden());
+  }
+  function privacyButtonState() {
+    const hidden = isPrivacyHidden();
+    return {
+      title: hidden ? "Privacidade ativa \u2014 clique para desativar" : "Privacidade inativa \u2014 clique para ativar",
+      pressed: hidden,
+      iconName: hidden ? "eye-off" : "eye"
+    };
+  }
+  function renderClock(m) {
+    if (m === null || m === void 0) return "--:--";
+    return isPrivacyHidden() ? PRIVACY_MASK : fmtHour(m);
+  }
+  function renderMinutes(m) {
+    if (m === null || m === void 0) return "--:--";
+    return isPrivacyHidden() ? PRIVACY_MASK : fmtMin(m);
+  }
+  function renderText(text) {
+    if (text === null || text === void 0) return "";
+    const safe = escapeHtml(String(text));
+    return isPrivacyHidden() ? safe.replace(/\b\d{1,2}:\d{2}\b/g, PRIVACY_MASK) : safe;
+  }
+
+  // src/shared/icons.js
+  var PATHS = {
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    "eye-off": '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
+    minus: '<line x1="5" y1="12" x2="19" y2="12"/>',
+    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    "chevron-right": '<polyline points="9 18 15 12 9 6"/>',
+    dot: '<circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>',
+    circle: '<circle cx="12" cy="12" r="7"/>',
+    "circle-check": '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    "octagon-alert": '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
+    "bar-chart": '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    hourglass: '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 18.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
+    pencil: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+    lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    "map-pin": '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0Z"/><circle cx="12" cy="10" r="3"/>',
+    save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+    "rotate-ccw": '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
+    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    calendar: '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    move: '<polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/>'
+  };
+  function icon(name, { size = 12, className = "", label = null } = {}) {
+    const paths = PATHS[name];
+    if (!paths) return "";
+    const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
+    return `<svg class="ahg-icon${className ? ` ${className}` : ""}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${a11y} focusable="false">${paths}</svg>`;
+  }
+
   // src/shared/ui-components.js
+  var DOCK_EDGES = ["top", "right", "left", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"];
+  var DOCK_LABELS = {
+    top: "Topo",
+    right: "Direita",
+    left: "Esquerda",
+    bottom: "Baixo",
+    "top-left": "Topo-esquerda",
+    "top-right": "Topo-direita",
+    "bottom-left": "Baixo-esquerda",
+    "bottom-right": "Baixo-direita"
+  };
+  var DOCK_CLASSES = DOCK_EDGES.map((e) => `ahg-dock-${e}`);
+  var EDGE_AXES = {
+    top: ["top"],
+    bottom: ["bottom"],
+    left: ["left"],
+    right: ["right"],
+    "top-left": ["top", "left"],
+    "top-right": ["top", "right"],
+    "bottom-left": ["bottom", "left"],
+    "bottom-right": ["bottom", "right"]
+  };
+  var DOCK_MARGIN_PROP = { top: "marginTop", bottom: "marginBottom", left: "marginLeft", right: "marginRight" };
+  var DOCK_GAP = 8;
   function readPanelPositions() {
     return gmGetJson(STORAGE_KEYS.PANEL_POSITIONS, {});
+  }
+  function applyDockReflow(axes, barW, barH) {
+    Object.values(DOCK_MARGIN_PROP).forEach((prop) => {
+      document.body.style[prop] = "";
+    });
+    if (!axes) return;
+    axes.forEach((axis) => {
+      const size = axis === "top" || axis === "bottom" ? barH : barW;
+      document.body.style[DOCK_MARGIN_PROP[axis]] = `${size + DOCK_GAP}px`;
+    });
   }
   function savePanelPosition(key, position) {
     if (!key) return;
@@ -399,17 +517,20 @@
     if (panel._ahgDragCleanup) {
       panel._ahgDragCleanup();
     }
-    const handle = panel.querySelector(handleSelector) || panel;
+    const handle = (typeof handleSelector === "string" ? panel.querySelector(handleSelector) : null) || panel.querySelector(".ahg-panel-title") || panel.querySelector(".a-tit") || panel.querySelector(".ahg-pe-hdr") || panel;
     handle.style.cursor = "move";
     let dragging = false;
+    let moved = false;
     let startX = 0;
     let startY = 0;
     let initialLeft = 0;
     let initialTop = 0;
+    const DRAG_THRESHOLD = 4;
     function onMouseDown(e) {
-      if (e.target.closest("button, input, select, a, summary")) return;
+      if (e.target.closest("button, input, select, a, summary, .a-x")) return;
       e.preventDefault();
       dragging = true;
+      moved = false;
       startX = e.clientX;
       startY = e.clientY;
       const rect = panel.getBoundingClientRect();
@@ -423,16 +544,21 @@
     }
     function onMouseMove(e) {
       if (!dragging) return;
+      if (!moved && (Math.abs(e.clientX - startX) > DRAG_THRESHOLD || Math.abs(e.clientY - startY) > DRAG_THRESHOLD)) {
+        moved = true;
+      }
       let left = initialLeft + (e.clientX - startX);
       let top = initialTop + (e.clientY - startY);
       if (clampToViewport) {
         left = Math.max(0, left);
         top = Math.max(0, top);
-        const maxLeft = window.innerWidth - panel.offsetWidth;
-        const maxTop = window.innerHeight - panel.offsetHeight;
+        const maxLeft = window.innerWidth - (panel.offsetWidth || 280);
+        const maxTop = window.innerHeight - (panel.offsetHeight || 100);
         left = Math.min(maxLeft, left);
         top = Math.min(maxTop, top);
       }
+      panel.style.bottom = "auto";
+      panel.style.right = "auto";
       panel.style.left = `${left}px`;
       panel.style.top = `${top}px`;
     }
@@ -441,6 +567,7 @@
         const rect = panel.getBoundingClientRect();
         savePanelPosition(persistKey, { left: rect.left, top: rect.top });
       }
+      if (dragging && moved) panel._ahgJustDragged = true;
       dragging = false;
     }
     handle.addEventListener("mousedown", onMouseDown);
@@ -453,6 +580,194 @@
     };
     panel._ahgDragCleanup = cleanup;
     return cleanup;
+  }
+  function makeDraggable(element, handleSelector = null) {
+    return makePanelDraggable(element, handleSelector, { clampToViewport: true });
+  }
+  function getDockEdge(key) {
+    if (!key) return null;
+    const edge = readPanelPositions()[key]?.dockEdge;
+    return DOCK_EDGES.includes(edge) ? edge : null;
+  }
+  function setDockEdge(key, edge) {
+    if (!key) return;
+    const all = readPanelPositions();
+    all[key] = { ...all[key], dockEdge: DOCK_EDGES.includes(edge) ? edge : null };
+    gmSetJson(STORAGE_KEYS.PANEL_POSITIONS, all);
+  }
+  function getDockMini(key) {
+    if (!key) return false;
+    return !!readPanelPositions()[key]?.mini;
+  }
+  function setDockMini(key, mini) {
+    if (!key) return;
+    const all = readPanelPositions();
+    all[key] = { ...all[key], mini: !!mini };
+    gmSetJson(STORAGE_KEYS.PANEL_POSITIONS, all);
+  }
+  function applyPanelDock(panel, key) {
+    if (!panel || !key) return false;
+    const edge = getDockEdge(key);
+    const mini = getDockMini(key);
+    panel.classList.remove(...DOCK_CLASSES);
+    if (!edge) {
+      panel.classList.remove("ahg-docked");
+      applyDockReflow(null);
+      if (mini) {
+        if (!panel.classList.contains("ahg-dock-collapsed") && !panel.classList.contains("ahg-dock-expanded")) {
+          panel.classList.add("ahg-dock-collapsed");
+        }
+      } else {
+        panel.classList.remove("ahg-dock-collapsed", "ahg-dock-expanded");
+      }
+      return false;
+    }
+    if (panel._ahgDragCleanup) panel._ahgDragCleanup();
+    panel.classList.add("ahg-docked", `ahg-dock-${edge}`);
+    const wasCollapsed = panel.classList.contains("ahg-dock-collapsed");
+    const hadState = wasCollapsed || panel.classList.contains("ahg-dock-expanded");
+    panel.classList.add("ahg-dock-collapsed");
+    const bar = panel.querySelector(".ahg-dock-bar");
+    const barW = bar?.offsetWidth || 170;
+    const barH = bar?.offsetHeight || 60;
+    panel.classList.remove("ahg-dock-collapsed");
+    applyDockReflow(EDGE_AXES[edge], barW, barH);
+    if (hadState) {
+      panel.classList.toggle("ahg-dock-collapsed", wasCollapsed);
+      panel.classList.toggle("ahg-dock-expanded", !wasCollapsed);
+    } else {
+      panel.classList.add("ahg-dock-expanded");
+    }
+    panel.style.transform = "none";
+    panel.style.left = panel.style.right = panel.style.top = panel.style.bottom = "auto";
+    const axes = EDGE_AXES[edge];
+    axes.forEach((axis) => {
+      panel.style[axis] = "0px";
+    });
+    if (axes.length === 1) {
+      const axis = axes[0];
+      const pos = readPanelPositions()[key] || {};
+      if (axis === "top" || axis === "bottom") {
+        const maxLeft = Math.max(0, window.innerWidth - (panel.offsetWidth || 280));
+        const freeLeft = typeof pos.left === "number" ? pos.left : 20;
+        panel.style.left = `${Math.min(Math.max(0, freeLeft), maxLeft)}px`;
+      } else {
+        const maxTop = Math.max(0, window.innerHeight - (panel.offsetHeight || 48));
+        const freeTop = typeof pos.top === "number" ? pos.top : 20;
+        panel.style.top = `${Math.min(Math.max(0, freeTop), maxTop)}px`;
+      }
+    }
+    return true;
+  }
+  function buildDockMenuHtml(currentEdge, currentMini = false) {
+    const options = DOCK_EDGES.map((edge) => {
+      const active = currentEdge === edge;
+      return `<button type="button" class="ahg-dock-option${active ? " active" : ""}" data-dock-edge="${edge}"${active ? ' aria-current="true"' : ""}>${active ? icon("check", { size: 12 }) : ""}${DOCK_LABELS[edge]}</button>`;
+    }).join("");
+    const livreActive = !currentEdge && !currentMini;
+    const miniActive = !currentEdge && currentMini;
+    return `
+    <div class="ahg-dock-menu-wrap">
+        <button type="button" class="a-x ahg-dock-trigger" data-dock-trigger title="Ancorar o painel numa borda" aria-label="Ancorar o painel numa borda" aria-haspopup="true" aria-expanded="false" aria-controls="ahg-dock-menu">${icon("map-pin", { size: 14 })}</button>
+        <div class="ahg-dock-menu" id="ahg-dock-menu" hidden>
+            <button type="button" class="ahg-dock-option${livreActive ? " active" : ""}" data-dock-edge=""${livreActive ? ' aria-current="true"' : ""}>${icon("move", { size: 12 })} Livre</button>
+            <button type="button" class="ahg-dock-option${miniActive ? " active" : ""}" data-dock-edge="" data-dock-mini="1"${miniActive ? ' aria-current="true"' : ""}>${icon("dot", { size: 12 })} Minimalista</button>
+            ${options}
+        </div>
+    </div>`;
+  }
+  function positionDockMenu(trigger, menu) {
+    const t = trigger.getBoundingClientRect();
+    const m = menu.getBoundingClientRect();
+    const left = Math.max(4, Math.min(t.right - m.width, window.innerWidth - m.width - 4));
+    const belowTop = t.bottom + 4;
+    const fitsBelow = belowTop + m.height <= window.innerHeight - 4;
+    const top = fitsBelow ? belowTop : Math.max(4, t.top - m.height - 4);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+  function bindDockMenu(panel, key, onChange) {
+    const trigger = panel.querySelector("[data-dock-trigger]");
+    const menu = panel.querySelector(".ahg-dock-menu");
+    if (!trigger || !menu) return;
+    const onResize = () => positionDockMenu(trigger, menu);
+    const closeMenu = () => {
+      menu.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+      document.removeEventListener("click", onDocClick);
+      window.removeEventListener("resize", onResize);
+    };
+    const onDocClick = (e) => {
+      if (menu.contains(e.target) || e.target === trigger) return;
+      closeMenu();
+    };
+    trigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!menu.hidden) {
+        closeMenu();
+        return;
+      }
+      menu.hidden = false;
+      trigger.setAttribute("aria-expanded", "true");
+      positionDockMenu(trigger, menu);
+      document.addEventListener("click", onDocClick);
+      window.addEventListener("resize", onResize);
+    });
+    menu.querySelectorAll("[data-dock-edge]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const edge = btn.dataset.dockEdge || null;
+        const mini = btn.dataset.dockMini === "1";
+        setDockEdge(key, edge);
+        setDockMini(key, mini);
+        if (mini) panel.classList.remove("ahg-dock-collapsed", "ahg-dock-expanded");
+        closeMenu();
+        onChange?.(edge);
+      });
+    });
+  }
+  function toggleDockExpanded(panel) {
+    if (!panel) return;
+    const expand = panel.classList.contains("ahg-dock-collapsed");
+    panel.classList.toggle("ahg-dock-collapsed", !expand);
+    panel.classList.toggle("ahg-dock-expanded", expand);
+  }
+  function setFloatingPanelVisible(panel, fab, visible) {
+    const pinned = panel?.classList.contains("ahg-docked") || panel?.classList.contains("ahg-dock-collapsed") || panel?.classList.contains("ahg-dock-expanded");
+    const effectiveVisible = pinned || visible;
+    if (panel) panel.classList.toggle("active", effectiveVisible);
+    if (fab) {
+      fab.classList.toggle("hidden", effectiveVisible);
+    }
+  }
+  function bindDockBarExpand(panel) {
+    const dockBar = panel.querySelector("#ahg-dock-bar");
+    if (!dockBar) return;
+    const expand = () => toggleDockExpanded(panel);
+    dockBar.addEventListener("click", () => {
+      if (panel._ahgJustDragged) {
+        delete panel._ahgJustDragged;
+        return;
+      }
+      expand();
+    });
+    dockBar.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        expand();
+      }
+    });
+  }
+  function bindDockMinimizeButton(panel, fab, minBtnSelector) {
+    const minBtn = panel.querySelector(minBtnSelector);
+    if (!minBtn) return;
+    minBtn.addEventListener("click", () => {
+      if (panel.classList.contains("ahg-docked") || panel.classList.contains("ahg-dock-expanded")) {
+        panel.classList.add("ahg-dock-collapsed");
+        panel.classList.remove("ahg-dock-expanded");
+      } else {
+        setFloatingPanelVisible(panel, fab, false);
+      }
+    });
   }
   function createFab({ id, icon: icon2, bottom = "20px", left, right, onClick, title = "" }) {
     if (document.getElementById(id)) return document.getElementById(id);
@@ -525,43 +840,6 @@
     return child;
   }
 
-  // src/shared/icons.js
-  var PATHS = {
-    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
-    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
-    "eye-off": '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
-    minus: '<line x1="5" y1="12" x2="19" y2="12"/>',
-    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
-    check: '<polyline points="20 6 9 17 4 12"/>',
-    "chevron-right": '<polyline points="9 18 15 12 9 6"/>',
-    dot: '<circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>',
-    circle: '<circle cx="12" cy="12" r="7"/>',
-    "circle-check": '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
-    "triangle-alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
-    "octagon-alert": '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
-    pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
-    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
-    flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
-    "bar-chart": '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
-    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
-    hourglass: '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 18.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
-    pencil: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
-    lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
-    "map-pin": '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0Z"/><circle cx="12" cy="10" r="3"/>',
-    save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
-    "rotate-ccw": '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
-    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-    calendar: '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
-    target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'
-  };
-  function icon(name, { size = 12, className = "", label = null } = {}) {
-    const paths = PATHS[name];
-    if (!paths) return "";
-    const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
-    return `<svg class="ahg-icon${className ? ` ${className}` : ""}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${a11y} focusable="false">${paths}</svg>`;
-  }
-
   // src/mirror/calendar-decorator.js
   function removeDayChild(dayEl, className) {
     const child = dayEl.querySelector(`.${className}`);
@@ -571,7 +849,7 @@
     if (!dayEl) return;
     if (trabalhado > 0) {
       const totalEl = ensureDayChild(dayEl, "ahg-day-total");
-      totalEl.textContent = fmtMin(trabalhado);
+      totalEl.textContent = renderMinutes(trabalhado);
       totalEl.title = "Total trabalhado no dia";
     } else {
       removeDayChild(dayEl, "ahg-day-total");
@@ -853,6 +1131,11 @@
   function getMaxShiftViolations(batidas) {
     return findPunchPairViolations(batidas, 0, CONFIG.MAX_HORAS_TURNO);
   }
+  function classifyShiftDuration(duration) {
+    if (duration > CONFIG.MAX_HORAS_TURNO) return "danger";
+    if (duration > CONFIG.MAX_HORAS_TURNO - 30) return "warn";
+    return "ok";
+  }
   function getDayRuleViolations({ batidas, trabalhado }) {
     const violations = [];
     const intMax = getIntrajornadaMaxViolations(batidas);
@@ -958,7 +1241,7 @@
     const currentYear = hoje.getFullYear();
     const sundays = dias.filter((d) => {
       const date = d.data;
-      return date.getMonth() === currentMonth && date.getFullYear() === currentYear && date.getDay() === 0;
+      return !d.isFuture && date.getMonth() === currentMonth && date.getFullYear() === currentYear && date.getDay() === 0;
     });
     if (sundays.length === 0) return null;
     const hasRestSunday = sundays.some((d) => d.batidas.length === 0 || d.isHoliday);
@@ -1184,7 +1467,8 @@
     const s = saida ? toMin(saida) : now;
     if (e === null || s === null) return null;
     const total = s - e;
-    const classe = total >= CONFIG.MAX_HORAS_TURNO ? "danger" : total >= CONFIG.MAX_HORAS_TURNO - 30 ? "warn" : "infos";
+    const severity = classifyShiftDuration(total);
+    const classe = severity === "ok" ? "infos" : severity;
     return { entrada, saida: saida || "agora", aberto: !saida, total, limite: CONFIG.MAX_HORAS_TURNO, classe };
   }
   function buildStatus(batidas) {
@@ -1261,7 +1545,7 @@
   }
 
   // src/shared/css-injector.js
-  var CSS_ID = "ahg-css-v7";
+  var CSS_ID = "ahg-css-v8";
   var CSS_TOKENS = `
 :root {
     --ahg-primary: #7a6cff;
@@ -1292,8 +1576,13 @@
     --ahg-danger-strong: #b91c1c;
     --ahg-neutral-strong: #475569;
 
+    --z-panel-base: 99990;
     --z-fab: 99990;
     --z-panel: 99990;
+    /* Dropdown que escapa do painel via position:fixed (ex.: menu de ancoragem) \u2014 acima do painel, abaixo de modais. */
+    --z-dropdown: 100000;
+    --z-modal-overlay: 100010;
+    --z-modal-content: 100020;
     --z-detail-modal: 100010;
     --z-punch-editor: 100020;
     /* Editor em foco entre m\xFAltiplos abertos \u2014 sempre abaixo do toast */
@@ -1345,6 +1634,7 @@
 .ahg-pe-add-row input:focus-visible,
 .ahg-details summary.a-sec:focus-visible,
 .a-row.clickable:focus-visible,
+#ahg-dock-bar:focus-visible,
 .ahg-punch-editor .ahg-pe-punch-time.ahg-pe-edit-time:focus-visible {
     outline: 2px solid var(--ahg-primary);
     outline-offset: 2px;
@@ -1356,6 +1646,7 @@
     outline-offset: -2px;
 }
 
+.ahg-v3-batida-panel,
 .ahg-floating-panel {
     position: fixed;
     display: flex; flex-direction: column;
@@ -1364,6 +1655,7 @@
     pointer-events: none;
     transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.ahg-v3-batida-panel.active,
 .ahg-floating-panel.active {
     opacity: 1;
     transform: translateY(0);
@@ -1434,7 +1726,7 @@
 }
 .ahg-btn:hover { background: color-mix(in srgb, var(--ahg-primary) 18%, transparent); }
 .ahg-btn:active { transform: translateY(1px); }
-.ahg-btn-sm { padding: 2px 7px; font-size: 11px; min-width: 26px; min-height: 24px; line-height: 1; }
+.ahg-btn-sm { padding: 2px 7px; font-size: 11px; min-width: 28px; min-height: 28px; line-height: 1; }
 
 .ahg-day-total {
     position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
@@ -1442,15 +1734,20 @@
     font-size: 10px; font-weight: 700; box-shadow: 0 2px 4px rgba(0,0,0,.2);
     z-index: 10; pointer-events: none; white-space: nowrap;
 }
+/* A m\xE1scara real \xE9 a substitui\xE7\xE3o de texto (privacy-engine.js: renderText/
+   renderMinutes) \u2014 o \xFAnico mecanismo vis\xEDvel a leitor de tela e c\xF3pia de
+   texto. O blur abaixo \xE9 s\xF3 refor\xE7o visual instant\xE2neo pro intervalo entre
+   o toggle e o pr\xF3ximo re-render daquela superf\xEDcie (ex.: badge do
+   calend\xE1rio host, que n\xE3o reage ao toggle sozinho). Viola\xE7\xF5es nunca
+   carregam hor\xE1rio (labels fixos do compliance-engine) \u2014 nada a mascarar. */
 .ahg-hide-times .ahg-day-total { opacity: .3; filter: blur(1px); }
 .ahg-hide-times .ahg-pe-punch-time,
-.ahg-hide-times .ahg-pe-total-val,
-.ahg-hide-times .ahg-pe-violations { filter: blur(4px); user-select: none; }
+.ahg-hide-times .ahg-pe-total-val { filter: blur(4px); user-select: none; }
 
 .ahg-privacy-btn {
     margin-left: auto;
     display: inline-flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px; border-radius: 50%;
+    width: 32px; height: 32px; border-radius: 50%;
     border: 1px solid var(--ahg-border); background: transparent;
     color: var(--ahg-text); cursor: pointer; opacity: .6;
     font-size: 16px; transition: opacity .15s, background .15s;
@@ -1460,7 +1757,7 @@
 .a-x {
     margin-left: 6px;
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 24px; min-height: 24px;
+    min-width: 32px; min-height: 32px;
     background: transparent; border: none; padding: 0; color: inherit;
     cursor: pointer; opacity: .6; font-size: 16px; transition: opacity .15s;
 }
@@ -1671,14 +1968,18 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 24px;
-    min-width: 24px;
+    min-height: 28px;
+    min-width: 28px;
     padding: 3px 6px;
     line-height: 1;
     border-radius: 3px;
     transition: opacity .15s;
     pointer-events: auto;
     white-space: nowrap;
+}
+/* Sem :hover em touch \u2014 mant\xE9m o bot\xE3o leg\xEDvel por padr\xE3o em vez de s\xF3 no mouseover. */
+@media (hover: none) {
+    .ahg-day-edit-btn { opacity: .6; }
 }
 
 .v-calendar-weekly__day:hover .ahg-day-edit-btn {
@@ -1879,12 +2180,86 @@
 .ahg-modal-hint--error { color: var(--ahg-danger); }
 .ahg-modal-hint--ok { color: var(--ahg-ok); }
 
+/* Ancoragem em borda \u2014 "importante para quando est\xE1 com janela reduzida":
+   o painel fica colado numa borda e nunca cai fora da tela. Vira uma barra
+   compacta por padr\xE3o; expande por clique como overlay na mesma borda. */
+.ahg-dock-menu-wrap { position: relative; display: inline-flex; }
+.ahg-dock-trigger { opacity: .6; }
+.ahg-dock-trigger:hover { opacity: 1; }
+.ahg-dock-menu {
+    /* position: fixed (n\xE3o absolute) \u2014 escapa do overflow:hidden do painel,
+       que sen\xE3o corta as op\xE7\xF5es de baixo quando o conte\xFAdo acima \xE9 curto.
+       top/left s\xE3o calculados em JS a partir do gatilho (bindDockMenu). */
+    position: fixed;
+    display: flex; flex-direction: column; min-width: 120px;
+    background: var(--ahg-bg-card); border: 1px solid var(--ahg-border);
+    border-radius: var(--ahg-radius); box-shadow: 0 8px 32px var(--ahg-shadow);
+    padding: 4px; z-index: var(--z-dropdown);
+}
+.ahg-dock-menu[hidden] { display: none; }
+.ahg-dock-option {
+    display: flex; align-items: center; gap: 6px;
+    border: none; background: transparent; color: var(--ahg-text);
+    font-size: 11px; font-weight: 600; text-align: left;
+    padding: 6px 8px; border-radius: var(--ahg-radius); cursor: pointer;
+    min-height: 28px; font-family: inherit;
+}
+.ahg-dock-option:hover { background: var(--ahg-hover-bg); }
+.ahg-dock-option.active { color: var(--ahg-primary); font-weight: 800; }
+
+.ahg-dock-bar {
+    display: none; align-items: center; gap: 8px; cursor: pointer;
+    padding: 10px 14px; border-radius: var(--ahg-radius-lg);
+    font-size: 11px; font-weight: 700; color: var(--ahg-text);
+    background: var(--ahg-bg); border: 1px solid var(--ahg-border);
+    box-shadow: 0 8px 32px var(--ahg-shadow); white-space: nowrap;
+    transition: background .15s;
+}
+.ahg-dock-bar:hover { background: var(--ahg-hover-bg); }
+.ahg-dock-bar-time { font-size: 16px; font-weight: 800; color: var(--ahg-primary); }
+.ahg-dock-bar-label { color: var(--ahg-text-label); font-size: 9px; text-transform: uppercase; letter-spacing: .4px; }
+
+/* .ahg-dock-collapsed funciona ancorado (borda/canto) OU livre (variante
+   minimalista flutuante) \u2014 o pino/reflow \xE9 s\xF3 do modo ancorado. */
+.ahg-panel.ahg-dock-collapsed .ahg-dock-bar { display: flex; }
+#ahg-panel.ahg-dock-collapsed,
+#ahg-batida-panel.ahg-dock-collapsed {
+    background: transparent; border: none; box-shadow: none;
+    min-width: 0; max-width: none; max-height: none; overflow: visible;
+}
+.ahg-panel.ahg-dock-collapsed > .a-tit,
+.ahg-panel.ahg-dock-collapsed > .a-body,
+.ahg-panel.ahg-dock-collapsed > .a-foot { display: none; }
+
+#ahg-panel.ahg-docked.ahg-dock-expanded,
+#ahg-batida-panel.ahg-docked.ahg-dock-expanded { max-height: calc(100vh - 16px); }
+
+/* Prazo/piso do planejador de banco de horas */
+.ahg-bank-goal-form, .ahg-bank-plan, .ahg-bank-manual { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.ahg-bank-form-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+.ahg-bank-input {
+    background: var(--ahg-bg-card); color: var(--ahg-text);
+    border: 1px solid var(--ahg-border); border-radius: var(--ahg-radius);
+    padding: 4px 8px; font-size: 11px; font-family: inherit;
+}
+.ahg-bank-input-sm { width: 56px; }
+.ahg-bank-hint { font-size: 10px; color: var(--ahg-text-label); display: flex; align-items: center; gap: 4px; }
+.ahg-bank-hint--warn { color: var(--ahg-warn); }
+.ahg-bank-hint--ok { color: var(--ahg-ok); }
+.ahg-bank-days { display: flex; flex-direction: column; gap: 3px; }
+.ahg-bank-day { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; padding: 4px 6px; border-radius: var(--ahg-radius); }
+.ahg-bank-day.today { background: color-mix(in srgb, var(--ahg-primary) 10%, transparent); font-weight: 700; }
+.ahg-bank-day-lbl { color: var(--ahg-text-label); }
+.ahg-bank-day-val b { color: var(--ahg-primary); }
+
 @media (max-width: 480px) {
     #ahg-panel { min-width: auto; width: calc(100vw - 40px); right: 10px; left: 10px; }
     #ahg-batida-panel { min-width: auto; max-width: none; left: 10px; right: 10px; }
     #ahg-detail-modal { min-width: auto; width: calc(100vw - 20px); max-width: none; }
     .ahg-punch-editor { min-width: auto; width: calc(100vw - 20px); max-width: none; }
     #ahg-fab { right: 10px !important; bottom: 10px !important; }
+    /* R\xF3tulos longos n\xE3o cabem numa linha ao lado do valor em telas estreitas. */
+    .a-lbl { white-space: normal; }
 }
 
 /* Movimento reduzido \u2014 respeitado em todos os elementos do painel (convidado discreto: n\xE3o afeta a p\xE1gina host) */
@@ -1915,45 +2290,6 @@
     } else {
       root.setAttribute("data-theme", "dark");
     }
-  }
-
-  // src/core/privacy-engine.js
-  var PRIVACY_MASK = "\u2022\u2022:\u2022\u2022";
-  function isPrivacyHidden() {
-    return gmGetValue(STORAGE_KEYS.PRIVACY_HIDE, "false") === "true";
-  }
-  function setPrivacyHidden(hidden) {
-    gmSetValue(STORAGE_KEYS.PRIVACY_HIDE, hidden ? "true" : "false");
-    applyPrivacyState();
-  }
-  function togglePrivacyHidden() {
-    const next = !isPrivacyHidden();
-    setPrivacyHidden(next);
-    return next;
-  }
-  function applyPrivacyState() {
-    document.body.classList.toggle("ahg-hide-times", isPrivacyHidden());
-  }
-  function privacyButtonState() {
-    const hidden = isPrivacyHidden();
-    return {
-      title: hidden ? "Privacidade ativa \u2014 clique para desativar" : "Privacidade inativa \u2014 clique para ativar",
-      pressed: hidden,
-      iconName: hidden ? "eye-off" : "eye"
-    };
-  }
-  function renderClock(m) {
-    if (m === null || m === void 0) return "--:--";
-    return isPrivacyHidden() ? PRIVACY_MASK : fmtHour(m);
-  }
-  function renderMinutes(m) {
-    if (m === null || m === void 0) return "--:--";
-    return isPrivacyHidden() ? PRIVACY_MASK : fmtMin(m);
-  }
-  function renderText(text) {
-    if (text === null || text === void 0) return "";
-    const safe = escapeHtml(String(text));
-    return isPrivacyHidden() ? safe.replace(/\b\d{1,2}:\d{2}\b/g, PRIVACY_MASK) : safe;
   }
 
   // src/shared/dom-builder.js
@@ -2027,7 +2363,9 @@
     }
     const modal = el("div", {
       id: "ahg-detail-modal",
-      className: "ahg-panel"
+      className: "ahg-panel",
+      // region (não dialog): sem backdrop nem focus trap, mesmo raciocínio do Punch Editor.
+      attrs: { tabindex: "-1", role: "region", "aria-label": "Detalhes do m\xEAs" }
     });
     const registros = dias.filter((x) => !x.isFuture && x.data.getMonth() === (/* @__PURE__ */ new Date()).getMonth()).sort((a, b) => a.data - b.data);
     const bodyChildren = [];
@@ -2056,25 +2394,28 @@
           }),
           el("span", {
             className: `a-val ${d.saldo >= 0 ? "pos" : "neg"}`,
-            text: `${d.batidas.join(" ") || "-"} ${dentroTolerancia ? "\u26AA" : ""} `,
+            // html (não text): renderText já escapa — exportação CSV
+            // continua com os valores reais de propósito (ver exportarCsvMensal).
+            html: `${renderText(d.batidas.join(" ") || "-")} ${dentroTolerancia ? "\u26AA" : ""} `,
             children: [
-              el("small", { text: `${fmtMin(d.trabalhado)} / saldo ${fmtMin(d.saldo)} / sem ${fmtMin(saldoSemAcum)}` })
+              el("small", { text: `${renderMinutes(d.trabalhado)} / saldo ${renderMinutes(d.saldo)} / sem ${renderMinutes(saldoSemAcum)}` })
             ]
           })
         ]
       });
       bodyChildren.push(row);
     });
-    const closeBtn = el("span", {
+    const closeBtn = el("button", {
       id: "ahg-detail-close",
       className: "a-x",
-      text: "\u2715"
+      attrs: { type: "button", title: "Fechar", "aria-label": "Fechar detalhes do m\xEAs" },
+      html: icon("x", { size: 14 })
     });
     closeBtn.addEventListener("click", () => modal.remove());
     const header = el("div", {
       className: "a-tit",
       children: [
-        el("span", { text: "\u{1F4CB} Detalhes do M\xEAs" }),
+        el("span", { html: `${icon("calendar", { size: 14 })} Detalhes do M\xEAs` }),
         closeBtn
       ]
     });
@@ -2084,9 +2425,14 @@
     });
     modal.append(header, body);
     document.body.appendChild(modal);
+    makeDraggable(modal, ".a-tit");
     modal.addEventListener("click", (e) => {
       if (e.target === modal) modal.remove();
     });
+    modal.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") modal.remove();
+    });
+    modal.focus();
   }
   function exportarCsvMensal(dias) {
     const hoje = /* @__PURE__ */ new Date();
@@ -2177,6 +2523,10 @@
   }
 
   // src/mirror/punch-editor.js
+  var openEditors = /* @__PURE__ */ new Map();
+  bus.on("privacy:changed", () => {
+    openEditors.forEach((render) => render());
+  });
   function getLocalDayPunches() {
     return gmGetJson(STORAGE_KEYS.LOCAL_DAY_PUNCHES, {});
   }
@@ -2211,7 +2561,10 @@
     const editor = el("div", {
       id: editorId,
       className: "ahg-panel ahg-punch-editor",
-      attrs: { "data-date-key": dateKey, tabindex: "-1" }
+      // region (não dialog): não há backdrop nem focus trap, e vários
+      // editores ficam abertos ao mesmo tempo — o rótulo é o que diferencia
+      // um do outro pro leitor de tela.
+      attrs: { "data-date-key": dateKey, tabindex: "-1", role: "region", "aria-label": `Editor de batidas \u2014 ${dateLabel || dateKey}` }
     });
     editor.style.top = "80px";
     editor.style.left = "50%";
@@ -2234,6 +2587,15 @@
       return saved.length > 0 ? saved : mirrorPunches;
     };
     const isDirty = () => JSON.stringify(working) !== JSON.stringify(baselinePunches());
+    function clampEditorToViewport() {
+      const rect = editor.getBoundingClientRect();
+      const maxLeft = Math.max(0, window.innerWidth - rect.width);
+      const maxTop = Math.max(0, window.innerHeight - rect.height);
+      editor.style.transform = "none";
+      editor.style.left = `${Math.min(Math.max(0, rect.left), maxLeft)}px`;
+      editor.style.top = `${Math.min(Math.max(0, rect.top), maxTop)}px`;
+    }
+    window.addEventListener("resize", clampEditorToViewport);
     function closeEditor({ force = false } = {}) {
       if (!force && isDirty()) {
         confirmingClose = true;
@@ -2241,6 +2603,8 @@
         return;
       }
       if (editor._ahgDragCleanup) editor._ahgDragCleanup();
+      window.removeEventListener("resize", clampEditorToViewport);
+      openEditors.delete(dateKey);
       editor.remove();
     }
     function getPunchHint(batidas, idx) {
@@ -2256,13 +2620,11 @@
       const saida = toMin(batidas[idx]);
       if (entrada === null || saida === null) return null;
       const duracao = saida - entrada;
-      if (duracao > CONFIG.MAX_HORAS_TURNO) {
+      const severity = classifyShiftDuration(duracao);
+      if (severity === "danger") {
         return { level: "error", text: `turno ${fmtMin(duracao)} > 6h` };
       }
-      if (duracao > CONFIG.MAX_HORAS_TURNO - 30) {
-        return { level: "warn", text: `turno ${fmtMin(duracao)}` };
-      }
-      return { level: "ok", text: `turno ${fmtMin(duracao)}` };
+      return { level: severity, text: `turno ${fmtMin(duracao)}` };
     }
     function renderHint(hint) {
       if (!hint) return null;
@@ -2283,7 +2645,7 @@
       if (isEditing) {
         const input = el("input", {
           className: "ahg-pe-inline-input",
-          attrs: { type: "text", value: time, maxlength: "5", placeholder: "HH:MM" },
+          attrs: { type: "text", value: time, maxlength: "5", placeholder: "HH:MM", "aria-label": "Hor\xE1rio (HH:MM)" },
           dataset: { idx: String(idx) }
         });
         const confirmBtn = el("button", {
@@ -2319,7 +2681,7 @@
           className: isMirror ? "ahg-pe-punch-time" : "ahg-pe-punch-time ahg-pe-edit-time",
           dataset: isMirror ? {} : { idx: String(idx) },
           attrs: isMirror ? {} : { title: "Clique para editar" },
-          text: time
+          html: renderText(time)
         });
         if (!isMirror) {
           timeSpan.addEventListener("click", () => startInlineEdit(idx));
@@ -2329,10 +2691,11 @@
           html: `${isMirror ? icon("lock", { size: 9 }) : icon("map-pin", { size: 9 })} ${isMirror ? "mirror" : "local"}`
         });
         row.append(timeSpan, srcSpan);
+        const maskedTime = renderText(time);
         if (!isMirror) {
           const editBtn = el("button", {
             className: "ahg-btn ahg-btn-sm ahg-pe-edit-inline",
-            attrs: { type: "button", title: "Editar", "aria-label": `Editar batida ${time}` },
+            attrs: { type: "button", title: "Editar", "aria-label": `Editar batida ${maskedTime}` },
             dataset: { idx: String(idx) },
             html: icon("pencil", { size: 11 })
           });
@@ -2341,7 +2704,7 @@
         }
         const removeBtn = el("button", {
           className: "ahg-btn ahg-btn-sm ahg-btn-danger ahg-pe-remove",
-          attrs: { type: "button", title: "Remover", "aria-label": `Remover batida ${time}` },
+          attrs: { type: "button", title: "Remover", "aria-label": `Remover batida ${maskedTime}` },
           dataset: { idx: String(idx) },
           html: icon("trash", { size: 11 })
         });
@@ -2364,14 +2727,14 @@
             className: "ahg-pe-total-item",
             children: [
               el("div", { className: "ahg-pe-total-lbl", text: "Trabalhado" }),
-              el("div", { className: `ahg-pe-total-val ${colorClass}`, text: fmtMin(trabalhado) })
+              el("div", { className: `ahg-pe-total-val ${colorClass}`, text: renderMinutes(trabalhado) })
             ]
           }),
           el("div", {
             className: "ahg-pe-total-item",
             children: [
               el("div", { className: "ahg-pe-total-lbl", text: "Saldo" }),
-              el("div", { className: `ahg-pe-total-val ${colorClass}`, text: fmtMin(saldo) })
+              el("div", { className: `ahg-pe-total-val ${colorClass}`, text: renderMinutes(saldo) })
             ]
           })
         ]
@@ -2493,7 +2856,7 @@
       const punchRows = working.length ? working.flatMap((t, i) => renderPunchRow(t, i, { hasOverrides, mirrorSet })) : [el("div", { className: "ahg-pe-empty", text: "Nenhuma batida" })];
       const addInput = el("input", {
         id: `ahg-pe-add-input-${dateKey}`,
-        attrs: { type: "text", placeholder: "HH:MM", maxlength: "5" }
+        attrs: { type: "text", placeholder: "HH:MM", maxlength: "5", "aria-label": "Adicionar hor\xE1rio (HH:MM)" }
       });
       addInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") addBtn.click();
@@ -2580,6 +2943,7 @@
     document.body.appendChild(editor);
     bringEditorToFront(editor);
     makePanelDraggable(editor, ".ahg-pe-hdr", { clampToViewport: true });
+    openEditors.set(dateKey, render);
     render();
     editor.focus();
   }
@@ -2786,12 +3150,7 @@
     return `https://calendar.google.com/calendar/u/${path}/event?${params.toString()}`;
   }
   function fmtOutlookCalendarDate(date) {
-    const yyyy = date.getFullYear();
-    const mm = pad2(date.getMonth() + 1);
-    const dd = pad2(date.getDate());
-    const hh = pad2(date.getHours());
-    const min = pad2(date.getMinutes());
-    const ss = pad2(date.getSeconds());
+    const { yyyy, mm, dd, hh, min, ss } = dateParts(date);
     return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
   }
   function buildOutlookCalendarUrl({ title, details, startMinute, endMinute, baseDate }) {
@@ -2811,6 +3170,21 @@
 
   // src/logger/quick-actions.js
   var LOGGER_GCAL_AUTOPEN_MAX_ENTRIES = 120;
+  var DEFAULT_DEVICE_PATTERN = /^[A-Za-z0-9_-]+$/;
+  function readDefaultDevice(href) {
+    if (!href) return null;
+    try {
+      const value = new URL(href).searchParams.get("defaultDevice");
+      const code = (value || "").trim();
+      return DEFAULT_DEVICE_PATTERN.test(code) ? code : null;
+    } catch {
+      return null;
+    }
+  }
+  function buildMirrorUrl(href = typeof window !== "undefined" ? window.location.href : "") {
+    const code = readDefaultDevice(href);
+    return code ? `${CONFIG.URL_MIRROR_DEVICE_BASE}${code}` : CONFIG.URL_MIRROR_FALLBACK;
+  }
   function readLoggerGcalAutoOpenState() {
     return gmGetJson(STORAGE_KEYS.LOGGER_GCAL_AUTOPEN, {});
   }
@@ -2898,7 +3272,7 @@
   }
   function maybeAutoOpenQuickCalendar(vm, autoLink) {
     if (!canAutoOpenQuickGcal(autoLink, vm?.alarmConfig)) return false;
-    const todayKey = formatDateKey2();
+    const todayKey = formatDateKey();
     const token = `${todayKey}:${autoLink.stage}:${vm.alarmConfig.quickGcalAutoOpenStage}:${autoLink.maxMinute}:${autoLink.leadMinutes}`;
     if (hasLoggerGcalAutoOpenToken(token)) return false;
     const message = `Abrir Google Calendar para "${autoLink.maxLabel}" (${fmtHour(autoLink.startMinute)}\u2013${fmtHour(autoLink.maxMinute)})?`;
@@ -2909,11 +3283,6 @@
     }
     markLoggerGcalAutoOpenToken(token, "dismissed");
     return false;
-  }
-  function formatDateKey2(date = /* @__PURE__ */ new Date()) {
-    const d = new Date(date);
-    const pad22 = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad22(d.getMonth() + 1)}-${pad22(d.getDate())}`;
   }
 
   // src/core/journey-plan.js
@@ -3302,6 +3671,16 @@
         ${ideal}
     </div>`;
   }
+  function buildDockBarHtml(assistant, fallbackLabel = "") {
+    const label = assistant?.next?.label || fallbackLabel || "Painel";
+    const time = assistant?.next ? renderClock(assistant.next.time) : "--:--";
+    return `
+    <div class="ahg-dock-bar" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+        ${icon("clock", { size: 14 })}
+        <span class="ahg-dock-bar-time">${time}</span>
+        <span class="ahg-dock-bar-label">${escapeHtml(label)}</span>
+    </div>`;
+  }
   function bindAssistantCard(rootEl, { onPresetSelect } = {}) {
     if (!rootEl || typeof onPresetSelect !== "function") return;
     rootEl.querySelectorAll(".ahg-as-preset").forEach((btn) => {
@@ -3317,7 +3696,7 @@
       return `
         <div class="ahg-week-day ${cls}" data-date="${escapeHtml(day.dateKey)}">
             <span class="ahg-week-lbl">${escapeHtml(day.weekdayLabel)}</span>
-            <div class="ahg-week-bar" title="${fmtHour(day.worked)} de ${fmtHour(day.target)}"><div class="ahg-week-fill" style="width:${pct}%"></div></div>
+            <div class="ahg-week-bar" title="${renderMinutes(day.worked)} de ${renderMinutes(day.target)}"><div class="ahg-week-fill" style="width:${pct}%"></div></div>
             <span class="ahg-week-val">${renderMinutes(day.worked)}</span>
             ${deltaHtml}
         </div>`;
@@ -3329,11 +3708,220 @@
     </div>`;
   }
 
-  // src/mirror/panel-renderer.js
-  function setFloatingPanelVisible(panel, fab, visible) {
-    panel.classList.toggle("active", visible);
-    fab?.classList.toggle("hidden", visible);
+  // src/mirror/bank-plan.js
+  var DEFAULT_FLOOR_MINUTES = CONFIG.CARGA_DIARIA / 2;
+  var WEEKDAY_LABELS2 = ["dom", "seg", "ter", "qua", "qui", "sex", "s\xE1b"];
+  function isWeekdayBusiness(date) {
+    const day = date.getDay();
+    return day !== 0 && day !== 6;
   }
+  function readStore() {
+    return gmGetJson(STORAGE_KEYS.BANK_GOAL, null) || { manualBalance: null, goal: null };
+  }
+  function writeStore(store) {
+    gmSetJson(STORAGE_KEYS.BANK_GOAL, store);
+  }
+  function getManualBalance() {
+    return readStore().manualBalance || null;
+  }
+  function setManualBalance(valueMinutes) {
+    const store = readStore();
+    store.manualBalance = { value: Number(valueMinutes), updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    writeStore(store);
+    return store.manualBalance;
+  }
+  function normalizeBankGoal(raw) {
+    if (!raw) return null;
+    const mode = raw.mode === "amount" ? "amount" : "zero";
+    const deadlineType = raw.deadlineType === "date" ? "date" : "days";
+    return {
+      mode,
+      amountMinutes: mode === "amount" ? Math.max(0, Number(raw.amountMinutes) || 0) : null,
+      deadlineType,
+      deadlineDays: deadlineType === "days" ? Math.max(1, Math.round(Number(raw.deadlineDays) || 1)) : null,
+      deadlineDate: deadlineType === "date" ? raw.deadlineDate || null : null,
+      floorMinutes: Math.max(0, Number(raw.floorMinutes) || DEFAULT_FLOOR_MINUTES),
+      startBalance: raw.startBalance ?? null,
+      createdAt: raw.createdAt || (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  function getBankGoal() {
+    const raw = readStore().goal;
+    return raw ? normalizeBankGoal(raw) : null;
+  }
+  function setBankGoal(goalInput, startBalance) {
+    const store = readStore();
+    store.goal = normalizeBankGoal({ ...goalInput, startBalance });
+    writeStore(store);
+    return store.goal;
+  }
+  function clearBankGoal() {
+    const store = readStore();
+    store.goal = null;
+    writeStore(store);
+  }
+  function effectiveBalance({ officialBalance = null, manualBalance = null, dias = [], hoje = /* @__PURE__ */ new Date() } = {}) {
+    if (officialBalance !== null && officialBalance !== void 0) {
+      return { value: officialBalance, source: "oficial" };
+    }
+    if (!manualBalance) return { value: null, source: "indisponivel" };
+    const sinceKey = formatDateKey(new Date(manualBalance.updatedAt));
+    const accrued = (dias || []).filter((d) => d.isBusinessDay && !d.isFuture && d.dateKey > sinceKey && d.data <= hoje).reduce((acc, d) => acc + saldoComTolerancia(d), 0);
+    return { value: manualBalance.value + accrued, source: "manual" };
+  }
+  function businessDaysWindow(goal, dias, hoje) {
+    const scraped = new Map((dias || []).map((d) => [d.dateKey, d]));
+    const days = [];
+    const cursor = new Date(hoje);
+    cursor.setHours(0, 0, 0, 0);
+    const deadlineDate = goal.deadlineType === "date" && goal.deadlineDate ? new Date(goal.deadlineDate) : null;
+    const maxIterations = 365;
+    for (let i = 0; i < maxIterations; i++) {
+      const dateKey = formatDateKey(cursor);
+      const scrapedDay = scraped.get(dateKey);
+      const isBusiness = scrapedDay ? scrapedDay.isBusinessDay : isWeekdayBusiness(cursor);
+      if (isBusiness) {
+        days.push({
+          dateKey,
+          weekdayLabel: WEEKDAY_LABELS2[cursor.getDay()],
+          isToday: dateKey === formatDateKey(hoje)
+        });
+      }
+      if (goal.deadlineType === "days" && days.length >= goal.deadlineDays) break;
+      if (deadlineDate && cursor >= deadlineDate && days.length > 0) break;
+      cursor.setDate(cursor.getDate() + 1);
+      if (deadlineDate && cursor > deadlineDate) break;
+    }
+    return days;
+  }
+  function buildBankPlan({
+    officialBalance = null,
+    manualBalance = null,
+    goal = null,
+    dias = [],
+    hoje = /* @__PURE__ */ new Date(),
+    planMinutes = CONFIG.CARGA_DIARIA,
+    now = nowMin(),
+    todayPlannedExit = null
+  } = {}) {
+    const balanceInfo = effectiveBalance({ officialBalance, manualBalance, dias, hoje });
+    if (!goal) return { active: false, balanceInfo };
+    if (balanceInfo.value === null) return { active: true, feasible: false, balanceInfo, noBalance: true };
+    const balance = balanceInfo.value;
+    const targetReduction = goal.mode === "zero" ? Math.abs(balance) : Math.min(goal.amountMinutes, Math.abs(balance));
+    if (targetReduction <= CONFIG.TOLERANCIA) {
+      return { active: true, completed: true, balanceInfo, remaining: 0, targetReduction: 0 };
+    }
+    const direction = balance > 0 ? "early" : "late";
+    const window2 = businessDaysWindow(goal, dias, hoje);
+    const capacity = direction === "early" ? Math.max(0, planMinutes - goal.floorMinutes) : Math.max(0, CONFIG.MAX_HORAS_DIA - planMinutes);
+    const numDays = window2.length;
+    const totalCapacity = capacity * numDays;
+    const achievableMinutes = Math.min(targetReduction, totalCapacity);
+    const base = numDays > 0 ? Math.floor(achievableMinutes / numDays) : 0;
+    let remainder = numDays > 0 ? Math.round(achievableMinutes - base * numDays) : 0;
+    const days = window2.map((day) => {
+      const allocation = Math.min(capacity, base + (remainder > 0 ? 1 : 0));
+      if (remainder > 0) remainder--;
+      let suggestedExit = null;
+      if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== void 0) {
+        suggestedExit = direction === "early" ? Math.max(now, todayPlannedExit - allocation) : todayPlannedExit + allocation;
+      }
+      return { ...day, adjustmentMinutes: allocation, suggestedExit };
+    });
+    return {
+      active: true,
+      completed: false,
+      balanceInfo,
+      direction,
+      targetReduction,
+      achievableMinutes,
+      shortfallMinutes: Math.max(0, targetReduction - achievableMinutes),
+      feasible: achievableMinutes >= targetReduction,
+      days
+    };
+  }
+  function buildBankSummaryLabel(balanceInfo, bankPlan) {
+    if (!bankPlan?.active || !bankPlan.days) {
+      return renderMinutes(balanceInfo?.value ?? null);
+    }
+    const verbo = bankPlan.direction === "early" ? "reduzindo" : "compensando";
+    return `${verbo} ${renderMinutes(bankPlan.achievableMinutes)} em ${bankPlan.days.length} dia${bankPlan.days.length > 1 ? "s" : ""}`;
+  }
+  function buildManualBalanceFormHtml() {
+    return `
+    <div class="ahg-bank-manual">
+        <span class="ahg-bank-hint">${icon("triangle-alert", { size: 11 })} Sem leitura oficial do Ahgora \u2014 informe o saldo para usar o planejador.</span>
+        <div class="ahg-bank-form-row">
+            <input type="text" id="ahg-bank-manual-input" class="ahg-bank-input" placeholder="ex.: 5:30 ou -2:00" aria-label="Saldo do banco de horas">
+            <button type="button" class="ahg-btn ahg-btn-sm" id="ahg-bank-manual-save">Salvar</button>
+        </div>
+    </div>`;
+  }
+  function buildGoalFormHtml() {
+    return `
+    <div class="ahg-bank-goal-form">
+        <div class="ahg-bank-form-row">
+            <label class="ahg-toggle"><input type="radio" name="ahg-bank-mode" value="zero" checked> Zerar</label>
+            <label class="ahg-toggle"><input type="radio" name="ahg-bank-mode" value="amount"> Reduzir em
+                <input type="text" id="ahg-bank-amount" class="ahg-bank-input ahg-bank-input-sm" placeholder="2:00" aria-label="Quantidade a reduzir">
+            </label>
+        </div>
+        <div class="ahg-bank-form-row">
+            <div class="ahg-as-presets" id="ahg-bank-deadline-toggle" role="group" aria-label="Formato do prazo">
+                <button type="button" class="ahg-as-preset active" data-deadline-type="days">Dias \xFAteis</button>
+                <button type="button" class="ahg-as-preset" data-deadline-type="date">Data</button>
+            </div>
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-deadline-days">
+            <span class="ahg-config-label">Em</span>
+            <input type="number" id="ahg-bank-days" class="ahg-bank-input ahg-bank-input-sm" min="1" value="5">
+            <span class="ahg-config-label">dias \xFAteis</span>
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-deadline-date" hidden>
+            <span class="ahg-config-label">At\xE9</span>
+            <input type="date" id="ahg-bank-date" class="ahg-bank-input">
+        </div>
+        <div class="ahg-bank-form-row">
+            <span class="ahg-config-label">Piso m\xEDnimo por dia</span>
+            <input type="text" id="ahg-bank-floor" class="ahg-bank-input ahg-bank-input-sm" placeholder="4:00" value="4:00">
+        </div>
+        <button type="button" class="ahg-btn ahg-btn-sm" id="ahg-bank-goal-create">${icon("target", { size: 11 })} Criar meta</button>
+    </div>`;
+  }
+  function buildDayRowHtml(day) {
+    const label = day.suggestedExit !== null ? `Saia at\xE9 <b>${renderClock(day.suggestedExit)}</b>` : `${day.adjustmentMinutes > 0 ? "\u2212" : ""}${renderMinutes(day.adjustmentMinutes)} no dia`;
+    return `
+    <div class="ahg-bank-day ${day.isToday ? "today" : ""}">
+        <span class="ahg-bank-day-lbl">${day.isToday ? "Hoje" : `${escapeHtml(day.weekdayLabel)} ${escapeHtml(day.dateKey.slice(8, 10))}/${escapeHtml(day.dateKey.slice(5, 7))}`}</span>
+        <span class="ahg-bank-day-val">${label}</span>
+    </div>`;
+  }
+  function buildActivePlanHtml(bankPlan) {
+    const rows = bankPlan.days.map(buildDayRowHtml).join("");
+    const shortfall = !bankPlan.feasible ? `<div class="ahg-bank-hint ahg-bank-hint--warn">${icon("triangle-alert", { size: 11 })} Dentro do prazo e do piso informados, chega a reduzir ${renderMinutes(bankPlan.achievableMinutes)} de ${renderMinutes(bankPlan.targetReduction)} \u2014 faltam ${renderMinutes(bankPlan.shortfallMinutes)}.</div>` : "";
+    return `
+    <div class="ahg-bank-plan">
+        ${shortfall}
+        <div class="ahg-bank-days">${rows}</div>
+        <button type="button" class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-bank-goal-cancel">Cancelar meta</button>
+    </div>`;
+  }
+  function buildBankPlanHtml(bankPlan) {
+    if (bankPlan.completed) {
+      return `<div class="ahg-bank-hint ahg-bank-hint--ok">${icon("circle-check", { size: 11 })} Meta de banco de horas conclu\xEDda.</div>`;
+    }
+    if (!bankPlan.active) {
+      return buildGoalFormHtml();
+    }
+    if (bankPlan.noBalance) {
+      return buildManualBalanceFormHtml();
+    }
+    return buildActivePlanHtml(bankPlan);
+  }
+
+  // src/mirror/panel-renderer.js
+  var PERSIST_KEY = "mirror-panel";
   function ensurePanelContainer() {
     let panel = document.getElementById("ahg-panel");
     let fab = document.getElementById("ahg-fab");
@@ -3370,9 +3958,11 @@
     };
     const health = HEALTH_STYLES[r.hojePunchHealth?.level] || { icon: "circle-check", row: "ok", val: "pos" };
     let html = `
+    ${view.dockBarHtml || ""}
     <div class="a-tit">
         ${icon("clock")} Painel Inteligente v${CONFIG.VERSAO}
         <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-label="${state.title}" aria-pressed="${state.pressed}">${icon(state.iconName, { size: 14 })}</button>
+        ${view.dockMenuHtml || ""}
         <button class="a-x" id="ahg-min" title="Minimizar" aria-label="Minimizar painel">${icon("minus", { size: 14 })}</button>
     </div>
     <div class="a-body">
@@ -3432,10 +4022,14 @@
         <div class="a-row infos clickable" id="ahg-open-details" role="button" tabindex="0"><span class="a-lbl">${icon("bar-chart")} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
         <div class="a-row infos clickable" id="ahg-export-csv" role="button" tabindex="0"><span class="a-lbl">${icon("download")} Exportar CSV</span><span class="a-val neu"><small>relat\xF3rio do m\xEAs</small></span></div>
     </details>`;
-    if (cfg.flags?.F009_banco_horas && r.bancoHoras !== null && r.bancoHoras !== void 0) {
-      html += `<hr class="a-div"><details class="ahg-details" id="ahg-bank-details"><summary class="a-sec">Banco de Horas \xB7 <span class="${r.bancoHoras >= 0 ? "ahg-color-pos" : "ahg-color-neg"}">${renderMinutes(r.bancoHoras)}</span></summary>
-            <div class="a-row ${r.bancoHoras >= 0 ? "ok" : "warn"}"><span class="a-lbl">${icon("hourglass")} Saldo acumulado</span>
-            <span class="a-val ${r.bancoHoras >= 0 ? "pos" : "neg"}">${renderMinutes(r.bancoHoras)}</span></div>
+    if (cfg.flags?.F009_banco_horas) {
+      const bankPlan = view.bankPlan || buildBankPlan({ officialBalance: r.bancoHoras ?? null });
+      const balanceValue = bankPlan.balanceInfo?.value ?? null;
+      const summaryLabel = buildBankSummaryLabel(bankPlan.balanceInfo, bankPlan);
+      html += `<hr class="a-div"><details class="ahg-details" id="ahg-bank-details"><summary class="a-sec">Banco de Horas \xB7 <span class="${balanceValue === null || balanceValue >= 0 ? "ahg-color-pos" : "ahg-color-neg"}">${summaryLabel}</span></summary>
+            ${balanceValue !== null ? `<div class="a-row ${balanceValue >= 0 ? "ok" : "warn"}"><span class="a-lbl">${icon("hourglass")} Saldo ${bankPlan.balanceInfo?.source === "manual" ? "informado" : "acumulado"}</span>
+            <span class="a-val ${balanceValue >= 0 ? "pos" : "neg"}">${renderMinutes(balanceValue)}</span></div>` : ""}
+            ${buildBankPlanHtml(bankPlan)}
         </details>`;
     }
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-config-details"><summary class="a-sec">Configura\xE7\xF5es</summary>
@@ -3470,9 +4064,25 @@
       yesterdayLastPunch: resumo.yesterdayLastPunch || null
     });
     const weekPlan = buildWeekPlan({ dias: resumo.dias, planMinutes: plan.minutes });
+    const exitFinalStep = assistant.schedule?.find((s) => s.id === "exitFinal");
+    const todayPlannedExit = exitFinalStep && exitFinalStep.status !== "done" ? exitFinalStep.time : null;
+    const bankPlan = buildBankPlan({
+      officialBalance: resumo.bancoHoras ?? null,
+      manualBalance: getManualBalance(),
+      goal: getBankGoal(),
+      dias: resumo.dias,
+      hoje: /* @__PURE__ */ new Date(),
+      planMinutes: plan.minutes,
+      now: nowMin(),
+      todayPlannedExit
+    });
+    if (bankPlan.completed) clearBankGoal();
     const view = {
       assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
-      weekHtml: buildWeekViewHtml(weekPlan)
+      weekHtml: buildWeekViewHtml(weekPlan),
+      dockBarHtml: buildDockBarHtml(assistant, resumo.status),
+      dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY)),
+      bankPlan
     };
     const keepMinimized = panel.dataset.ahgRendered === "true" && !panel.classList.contains("active");
     panel.dataset.ahgRendered = "true";
@@ -3504,18 +4114,74 @@
       if (calendarRow) calendarRow.appendChild(calendarButtons);
     }
     applyTheme(cfg.tema);
-    makePanelDraggable(panel, ".a-tit", { persistKey: "mirror-panel" });
-    applySavedPanelPosition(panel, "mirror-panel");
+    const dragHandle = getDockMini(PERSIST_KEY) ? "#ahg-dock-bar" : ".a-tit";
+    makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY });
+    applySavedPanelPosition(panel, PERSIST_KEY);
+    applyPanelDock(panel, PERSIST_KEY);
     applyPrivacyState();
-    const minBtn = panel.querySelector("#ahg-min");
-    if (minBtn) {
-      minBtn.addEventListener("click", () => setFloatingPanelVisible(panel, fab, false));
+    bindDockMenu(panel, PERSIST_KEY, () => renderMirrorPanel(resumo));
+    bindDockBarExpand(panel);
+    bindDockMinimizeButton(panel, fab, "#ahg-min");
+    const bankManualSave = panel.querySelector("#ahg-bank-manual-save");
+    if (bankManualSave) {
+      bankManualSave.addEventListener("click", () => {
+        const value = toMin(panel.querySelector("#ahg-bank-manual-input")?.value);
+        if (value === null) {
+          showLoggerToast("Informe um saldo v\xE1lido (ex.: 5:30 ou -2:00)");
+          return;
+        }
+        setManualBalance(value);
+        renderMirrorPanel(resumo);
+      });
+    }
+    const bankDeadlineToggle = panel.querySelector("#ahg-bank-deadline-toggle");
+    if (bankDeadlineToggle) {
+      bankDeadlineToggle.querySelectorAll("[data-deadline-type]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          bankDeadlineToggle.querySelectorAll("[data-deadline-type]").forEach((b) => b.classList.toggle("active", b === btn));
+          const isDays = btn.dataset.deadlineType === "days";
+          const daysRow = panel.querySelector("#ahg-bank-deadline-days");
+          const dateRow = panel.querySelector("#ahg-bank-deadline-date");
+          if (daysRow) daysRow.hidden = !isDays;
+          if (dateRow) dateRow.hidden = isDays;
+        });
+      });
+    }
+    const bankGoalCreate = panel.querySelector("#ahg-bank-goal-create");
+    if (bankGoalCreate) {
+      bankGoalCreate.addEventListener("click", () => {
+        const mode = panel.querySelector('input[name="ahg-bank-mode"]:checked')?.value || "zero";
+        const amountMinutes = mode === "amount" ? toMin(panel.querySelector("#ahg-bank-amount")?.value) : null;
+        const deadlineType = panel.querySelector("#ahg-bank-deadline-toggle [data-deadline-type].active")?.dataset.deadlineType || "days";
+        const deadlineDays = Number(panel.querySelector("#ahg-bank-days")?.value) || 5;
+        const deadlineDate = panel.querySelector("#ahg-bank-date")?.value || null;
+        const floorMinutes = toMin(panel.querySelector("#ahg-bank-floor")?.value) ?? DEFAULT_FLOOR_MINUTES;
+        if (mode === "amount" && (amountMinutes === null || amountMinutes <= 0)) {
+          showLoggerToast("Informe quanto reduzir (ex.: 2:00)");
+          return;
+        }
+        if (deadlineType === "date" && !deadlineDate) {
+          showLoggerToast("Informe a data do prazo");
+          return;
+        }
+        setBankGoal(
+          { mode, amountMinutes, deadlineType, deadlineDays, deadlineDate, floorMinutes },
+          bankPlan.balanceInfo?.value ?? resumo.bancoHoras ?? 0
+        );
+        renderMirrorPanel(resumo);
+      });
+    }
+    const bankGoalCancel = panel.querySelector("#ahg-bank-goal-cancel");
+    if (bankGoalCancel) {
+      bankGoalCancel.addEventListener("click", () => {
+        clearBankGoal();
+        renderMirrorPanel(resumo);
+      });
     }
     const privacyBtn = panel.querySelector("#ahg-privacy-toggle");
     if (privacyBtn) {
       privacyBtn.addEventListener("click", () => {
         togglePrivacyHidden();
-        renderMirrorPanel(resumo);
       });
     }
     const bindActivate = (el2, fn) => {
@@ -3663,7 +4329,6 @@
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);
     const mirrorSet = new Set(mirrorPunches || []);
     const reconciled = todayHistory.filter((entry) => !mirrorSet.has(entry.time));
-    const effectiveHistory = reconciled;
     const localOnlyPunches = reconciled.map((entry) => entry.time);
     const combined = [
       ...mirrorPunches || [],
@@ -3676,8 +4341,6 @@
       isToday: entry.timestamp >= startMs && entry.timestamp <= endMs
     }));
     return {
-      reconciled,
-      effectiveHistory,
       localOnlyPunches,
       combinedPunches: combined,
       combinedLastPunch,
@@ -3707,6 +4370,12 @@
   }
 
   // src/logger/logger-vm.js
+  function getLoggerGuidance() {
+    const bounds = getTodayBounds();
+    const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
+    const isTruthFresh = sharedTruth?.todayKey === bounds.todayKey;
+    return isTruthFresh && sharedTruth?.guidance || null;
+  }
   function getLoggerVm() {
     const bounds = getTodayBounds();
     const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
@@ -3732,17 +4401,14 @@
   }
 
   // src/logger/logger-renderer.js
-  function setFloatingPanelVisible2(panel, fab, visible) {
-    panel.classList.toggle("active", visible);
-    fab?.classList.toggle("hidden", visible);
-  }
+  var PERSIST_KEY2 = "logger-panel";
   function ensureLoggerContainer() {
     let panel = document.getElementById("ahg-batida-panel");
-    let fab = document.getElementById("ahg-batida-fab");
+    let fab = document.getElementById("ahg-batida-fab") || document.getElementById("ahg-v3-batida-fab");
     if (!panel) {
       panel = document.createElement("div");
       panel.id = "ahg-batida-panel";
-      panel.className = "ahg-panel ahg-floating-panel";
+      panel.className = "ahg-panel ahg-floating-panel ahg-v3-batida-panel";
       document.body.appendChild(panel);
     }
     if (!fab) {
@@ -3752,7 +4418,7 @@
         bottom: "20px",
         right: "20px",
         title: "Abrir logger Ahgora",
-        onClick: () => setFloatingPanelVisible2(panel, fab, true)
+        onClick: () => setFloatingPanelVisible(panel, fab, true)
       });
     }
     return { panel, fab };
@@ -3776,9 +4442,11 @@
     const privacyState = privacyButtonState();
     const source = resolveDataSource(state);
     let html = `
+    ${view.dockBarHtml || ""}
     <div class="a-tit">
         ${icon("clock")} Logger v${CONFIG.VERSAO}
         <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${icon(privacyState.iconName, { size: 14 })}</button>
+        ${view.dockMenuHtml || ""}
         <button class="a-x" id="ahg-logger-min" title="Minimizar" aria-label="Minimizar painel">${icon("minus", { size: 14 })}</button>
     </div>
     <div class="a-body">
@@ -3816,6 +4484,7 @@
         <div class="a-row infos ahg-flex-wrap ahg-gap-4">
             <button class="ahg-btn ahg-btn-sm" id="ahg-logger-save" ${lastPunch ? "" : "disabled"}>${icon("save", { size: 11 })} Salvar \xFAltima</button>
             <button class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-delete">${icon("trash", { size: 11 })} Desfazer</button>
+            <a class="ahg-btn ahg-btn-sm" id="ahg-logger-open-mirror" href="${escapeHtml(view.mirrorUrl || buildMirrorUrl())}" target="_blank" rel="noopener noreferrer" title="Abrir espelho de ponto em nova aba">${icon("bar-chart", { size: 11 })} Abrir espelho</a>
         </div>`;
     html += `</div><div class="a-foot">Atualizado ${fmtHour((/* @__PURE__ */ new Date()).getHours() * 60 + (/* @__PURE__ */ new Date()).getMinutes())}</div>`;
     return html;
@@ -3832,11 +4501,15 @@
       saldoSemana: vm.weekBalance || 0,
       yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
-    const view = { assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }) };
+    const view = {
+      assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
+      dockBarHtml: buildDockBarHtml(assistant),
+      dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY2), getDockMini(PERSIST_KEY2))
+    };
     const keepMinimized = panel.dataset.ahgRendered === "true" && !panel.classList.contains("active");
     panel.dataset.ahgRendered = "true";
     panel.innerHTML = buildLoggerHtml(vm, !!calendarButtons, view);
-    setFloatingPanelVisible2(panel, fab, !keepMinimized);
+    setFloatingPanelVisible(panel, fab, !keepMinimized);
     bindAssistantCard(panel, {
       onPresetSelect: (presetId) => {
         setJourneyPlan(presetId);
@@ -3847,12 +4520,13 @@
       const calendarRow = panel.querySelector("#ahg-logger-calendar-row");
       if (calendarRow) calendarRow.appendChild(calendarButtons);
     }
-    makePanelDraggable(panel, ".a-tit", { persistKey: "logger-panel" });
-    applySavedPanelPosition(panel, "logger-panel");
-    const minBtn = panel.querySelector("#ahg-logger-min");
-    if (minBtn) {
-      minBtn.addEventListener("click", () => setFloatingPanelVisible2(panel, fab, false));
-    }
+    const dragHandle = getDockMini(PERSIST_KEY2) ? "#ahg-dock-bar" : ".a-tit";
+    makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY2 });
+    applySavedPanelPosition(panel, PERSIST_KEY2);
+    applyPanelDock(panel, PERSIST_KEY2);
+    bindDockMenu(panel, PERSIST_KEY2, () => renderLoggerContainer(vm, onSave, onDelete));
+    bindDockBarExpand(panel);
+    bindDockMinimizeButton(panel, fab, "#ahg-logger-min");
     const saveBtn = panel.querySelector("#ahg-logger-save");
     if (saveBtn && vm.combinedLastPunch) {
       saveBtn.addEventListener("click", () => onSave?.(vm.combinedLastPunch));
@@ -3933,7 +4607,7 @@
     const direct = root.querySelector('[role="dialog"], .v-dialog--active');
     if (direct) return direct;
     for (const el2 of root.querySelectorAll('[role="presentation"]')) {
-      const text = el2.innerText || el2.textContent || "";
+      const text = el2.textContent || "";
       if (PUNCH_MODAL_TEXT_RE.test(text) && el2.querySelector("button")) return el2;
     }
     return null;
@@ -3979,7 +4653,7 @@
       }
     }
     const container = modal || document.querySelector('[role="dialog"], .v-dialog--active');
-    return parsePunchTimeFromText(container ? container.innerText || container.textContent : null);
+    return parsePunchTimeFromText(container ? container.textContent : null);
   }
   function removeHint() {
     document.querySelectorAll(".ahg-modal-hint").forEach((el2) => el2.remove());
@@ -4150,6 +4824,7 @@
         }, { timeoutMs: 15e3 });
       }
     });
+    bus.on("privacy:changed", () => tryRenderMirror());
   }
   function renderLogger(vm) {
     renderLoggerContainer(
@@ -4176,8 +4851,7 @@
     monitorModal(() => getLoggerVm());
     startLoggerLiveRefresh(() => renderLogger(getLoggerVm()));
     setInterval(() => {
-      const currentVm = getLoggerVm();
-      evaluateLoggerAlarms(currentVm.guidance, getAlarmConfig());
+      evaluateLoggerAlarms(getLoggerGuidance(), getAlarmConfig());
     }, LOGGER_ALARM_CHECK_MS);
     bus.emit("logger:ready", vm);
     bus.emit("app:ready", { page: "logger", version: AHG_PANEL_VERSION });

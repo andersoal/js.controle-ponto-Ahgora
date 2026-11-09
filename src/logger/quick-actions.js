@@ -13,6 +13,31 @@ import { el } from '../shared/dom-builder.js';
 import { icon } from '../shared/icons.js';
 
 const LOGGER_GCAL_AUTOPEN_MAX_ENTRIES = 120;
+const DEFAULT_DEVICE_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Lê o código do dispositivo (?defaultDevice=...) da URL da batida online.
+ * Aceita só caracteres seguros para compor o caminho; qualquer outro valor é ignorado.
+ */
+export function readDefaultDevice(href) {
+    if (!href) return null;
+    try {
+        const value = new URL(href).searchParams.get('defaultDevice');
+        const code = (value || '').trim();
+        return DEFAULT_DEVICE_PATTERN.test(code) ? code : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * URL do espelho a partir da página de batida:
+ * com defaultDevice → /externo/index/<code>; sem → /externo/mirror.
+ */
+export function buildMirrorUrl(href = typeof window !== 'undefined' ? window.location.href : '') {
+    const code = readDefaultDevice(href);
+    return code ? `${CONFIG.URL_MIRROR_DEVICE_BASE}${code}` : CONFIG.URL_MIRROR_FALLBACK;
+}
 
 export function readLoggerGcalAutoOpenState() {
     return gmGetJson(STORAGE_KEYS.LOGGER_GCAL_AUTOPEN, {});

@@ -5,7 +5,7 @@
 
 import { CONFIG } from '../core/config.js';
 import { bus } from '../core/event-bus.js';
-import { fmtHour, toMin } from '../core/time-utils.js';
+import { escapeHtml, fmtHour, toMin } from '../core/time-utils.js';
 import {
     applyPanelDock,
     applySavedPanelPosition,
@@ -31,7 +31,7 @@ import {
     togglePrivacyHidden
 } from '../core/privacy-engine.js';
 import { getAlarmConfig, setAlarmConfig } from './alarm-engine.js';
-import { buildAutoGcalMaxMinusLink, buildQuickCalendarButtons } from './quick-actions.js';
+import { buildAutoGcalMaxMinusLink, buildMirrorUrl, buildQuickCalendarButtons } from './quick-actions.js';
 import { icon } from '../shared/icons.js';
 
 const PERSIST_KEY = 'logger-panel';
@@ -130,6 +130,7 @@ export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
         <div class="a-row infos ahg-flex-wrap ahg-gap-4">
             <button class="ahg-btn ahg-btn-sm" id="ahg-logger-save" ${lastPunch ? '' : 'disabled'}>${icon('save', { size: 11 })} Salvar última</button>
             <button class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-delete">${icon('trash', { size: 11 })} Desfazer</button>
+            <a class="ahg-btn ahg-btn-sm" id="ahg-logger-open-mirror" href="${escapeHtml(view.mirrorUrl || buildMirrorUrl())}" target="_blank" rel="noopener noreferrer" title="Abrir espelho de ponto em nova aba">${icon('bar-chart', { size: 11 })} Abrir espelho</a>
         </div>`;
 
     html += `</div><div class="a-foot">Atualizado ${fmtHour(new Date().getHours() * 60 + new Date().getMinutes())}</div>`;

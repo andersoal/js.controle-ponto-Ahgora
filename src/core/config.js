@@ -47,7 +47,11 @@ export const CONFIG = Object.freeze({
 
     // Auto-refresh
     AUTO_REFRESH_MINUTES: 15,
-    URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror'
+    URL_REFRESH: 'https://app.ahgora.com.br/externo/mirror',
+
+    // Atalho Logger -> Mirror: /externo/index/<defaultDevice> quando a URL da batida traz o código
+    URL_MIRROR_FALLBACK: 'https://app.ahgora.com.br/externo/mirror',
+    URL_MIRROR_DEVICE_BASE: 'https://app.ahgora.com.br/externo/index/'
 });
 
 function parseJson(text, fallback) {

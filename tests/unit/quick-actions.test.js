@@ -7,7 +7,9 @@ import {
     buildQuickCalendarButtons,
     buildStageActionRows,
     canAutoOpenQuickGcal,
-    maybeAutoOpenQuickCalendar
+    maybeAutoOpenQuickCalendar,
+    readDefaultDevice,
+    buildMirrorUrl
 } from '../../src/logger/quick-actions.js';
 
 describe('QuickActions', () => {
@@ -132,5 +134,24 @@ describe('QuickActions', () => {
 
         confirmSpy.mockRestore();
         openSpy.mockRestore();
+    });
+    it('buildMirrorUrl usa /externo/index/<defaultDevice> quando presente', () => {
+        expect(buildMirrorUrl('https://app.ahgora.com.br/novabatidaonline/?defaultDevice=a935336'))
+            .toBe('https://app.ahgora.com.br/externo/index/a935336');
+    });
+
+    it('buildMirrorUrl cai para /externo/mirror sem defaultDevice', () => {
+        expect(buildMirrorUrl('https://app.ahgora.com.br/novabatidaonline/'))
+            .toBe('https://app.ahgora.com.br/externo/mirror');
+        expect(buildMirrorUrl('https://app.ahgora.com.br/novabatidaonline/?defaultDevice='))
+            .toBe('https://app.ahgora.com.br/externo/mirror');
+        expect(buildMirrorUrl('')).toBe('https://app.ahgora.com.br/externo/mirror');
+    });
+
+    it('readDefaultDevice rejeita valores com caracteres inseguros', () => {
+        expect(readDefaultDevice('https://x.test/?defaultDevice=../admin')).toBeNull();
+        expect(readDefaultDevice('https://x.test/?defaultDevice=a%22%3E%3Cscript%3E')).toBeNull();
+        expect(readDefaultDevice('nao-e-url')).toBeNull();
+        expect(readDefaultDevice('https://x.test/?defaultDevice=%20a935336%20')).toBe('a935336');
     });
 });
