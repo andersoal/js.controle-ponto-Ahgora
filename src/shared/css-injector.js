@@ -3,7 +3,7 @@
  * Injeção idempotente de stylesheet com design system minimalista.
  */
 
-const CSS_ID = 'ahg-css-v7';
+const CSS_ID = 'ahg-css-v8';
 
 export const CSS_TOKENS = `
 :root {
@@ -35,8 +35,13 @@ export const CSS_TOKENS = `
     --ahg-danger-strong: #b91c1c;
     --ahg-neutral-strong: #475569;
 
+    --z-panel-base: 99990;
     --z-fab: 99990;
     --z-panel: 99990;
+    /* Dropdown que escapa do painel via position:fixed (ex.: menu de ancoragem) — acima do painel, abaixo de modais. */
+    --z-dropdown: 100000;
+    --z-modal-overlay: 100010;
+    --z-modal-content: 100020;
     --z-detail-modal: 100010;
     --z-punch-editor: 100020;
     /* Editor em foco entre múltiplos abertos — sempre abaixo do toast */
@@ -89,6 +94,7 @@ export const CSS_COMPONENTS = `
 .ahg-pe-add-row input:focus-visible,
 .ahg-details summary.a-sec:focus-visible,
 .a-row.clickable:focus-visible,
+#ahg-dock-bar:focus-visible,
 .ahg-punch-editor .ahg-pe-punch-time.ahg-pe-edit-time:focus-visible {
     outline: 2px solid var(--ahg-primary);
     outline-offset: 2px;
@@ -100,6 +106,7 @@ export const CSS_COMPONENTS = `
     outline-offset: -2px;
 }
 
+.ahg-v3-batida-panel,
 .ahg-floating-panel {
     position: fixed;
     display: flex; flex-direction: column;
@@ -108,6 +115,7 @@ export const CSS_COMPONENTS = `
     pointer-events: none;
     transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.ahg-v3-batida-panel.active,
 .ahg-floating-panel.active {
     opacity: 1;
     transform: translateY(0);
@@ -178,7 +186,7 @@ export const CSS_COMPONENTS = `
 }
 .ahg-btn:hover { background: color-mix(in srgb, var(--ahg-primary) 18%, transparent); }
 .ahg-btn:active { transform: translateY(1px); }
-.ahg-btn-sm { padding: 2px 7px; font-size: 11px; min-width: 26px; min-height: 24px; line-height: 1; }
+.ahg-btn-sm { padding: 2px 7px; font-size: 11px; min-width: 28px; min-height: 28px; line-height: 1; }
 
 .ahg-day-total {
     position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
@@ -186,15 +194,20 @@ export const CSS_COMPONENTS = `
     font-size: 10px; font-weight: 700; box-shadow: 0 2px 4px rgba(0,0,0,.2);
     z-index: 10; pointer-events: none; white-space: nowrap;
 }
+/* A máscara real é a substituição de texto (privacy-engine.js: renderText/
+   renderMinutes) — o único mecanismo visível a leitor de tela e cópia de
+   texto. O blur abaixo é só reforço visual instantâneo pro intervalo entre
+   o toggle e o próximo re-render daquela superfície (ex.: badge do
+   calendário host, que não reage ao toggle sozinho). Violações nunca
+   carregam horário (labels fixos do compliance-engine) — nada a mascarar. */
 .ahg-hide-times .ahg-day-total { opacity: .3; filter: blur(1px); }
 .ahg-hide-times .ahg-pe-punch-time,
-.ahg-hide-times .ahg-pe-total-val,
-.ahg-hide-times .ahg-pe-violations { filter: blur(4px); user-select: none; }
+.ahg-hide-times .ahg-pe-total-val { filter: blur(4px); user-select: none; }
 
 .ahg-privacy-btn {
     margin-left: auto;
     display: inline-flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px; border-radius: 50%;
+    width: 32px; height: 32px; border-radius: 50%;
     border: 1px solid var(--ahg-border); background: transparent;
     color: var(--ahg-text); cursor: pointer; opacity: .6;
     font-size: 16px; transition: opacity .15s, background .15s;
@@ -204,7 +217,7 @@ export const CSS_COMPONENTS = `
 .a-x {
     margin-left: 6px;
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 24px; min-height: 24px;
+    min-width: 32px; min-height: 32px;
     background: transparent; border: none; padding: 0; color: inherit;
     cursor: pointer; opacity: .6; font-size: 16px; transition: opacity .15s;
 }
@@ -415,14 +428,18 @@ export const CSS_COMPONENTS = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 24px;
-    min-width: 24px;
+    min-height: 28px;
+    min-width: 28px;
     padding: 3px 6px;
     line-height: 1;
     border-radius: 3px;
     transition: opacity .15s;
     pointer-events: auto;
     white-space: nowrap;
+}
+/* Sem :hover em touch — mantém o botão legível por padrão em vez de só no mouseover. */
+@media (hover: none) {
+    .ahg-day-edit-btn { opacity: .6; }
 }
 
 .v-calendar-weekly__day:hover .ahg-day-edit-btn {
@@ -623,12 +640,86 @@ export const CSS_COMPONENTS = `
 .ahg-modal-hint--error { color: var(--ahg-danger); }
 .ahg-modal-hint--ok { color: var(--ahg-ok); }
 
+/* Ancoragem em borda — "importante para quando está com janela reduzida":
+   o painel fica colado numa borda e nunca cai fora da tela. Vira uma barra
+   compacta por padrão; expande por clique como overlay na mesma borda. */
+.ahg-dock-menu-wrap { position: relative; display: inline-flex; }
+.ahg-dock-trigger { opacity: .6; }
+.ahg-dock-trigger:hover { opacity: 1; }
+.ahg-dock-menu {
+    /* position: fixed (não absolute) — escapa do overflow:hidden do painel,
+       que senão corta as opções de baixo quando o conteúdo acima é curto.
+       top/left são calculados em JS a partir do gatilho (bindDockMenu). */
+    position: fixed;
+    display: flex; flex-direction: column; min-width: 120px;
+    background: var(--ahg-bg-card); border: 1px solid var(--ahg-border);
+    border-radius: var(--ahg-radius); box-shadow: 0 8px 32px var(--ahg-shadow);
+    padding: 4px; z-index: var(--z-dropdown);
+}
+.ahg-dock-menu[hidden] { display: none; }
+.ahg-dock-option {
+    display: flex; align-items: center; gap: 6px;
+    border: none; background: transparent; color: var(--ahg-text);
+    font-size: 11px; font-weight: 600; text-align: left;
+    padding: 6px 8px; border-radius: var(--ahg-radius); cursor: pointer;
+    min-height: 28px; font-family: inherit;
+}
+.ahg-dock-option:hover { background: var(--ahg-hover-bg); }
+.ahg-dock-option.active { color: var(--ahg-primary); font-weight: 800; }
+
+.ahg-dock-bar {
+    display: none; align-items: center; gap: 8px; cursor: pointer;
+    padding: 10px 14px; border-radius: var(--ahg-radius-lg);
+    font-size: 11px; font-weight: 700; color: var(--ahg-text);
+    background: var(--ahg-bg); border: 1px solid var(--ahg-border);
+    box-shadow: 0 8px 32px var(--ahg-shadow); white-space: nowrap;
+    transition: background .15s;
+}
+.ahg-dock-bar:hover { background: var(--ahg-hover-bg); }
+.ahg-dock-bar-time { font-size: 16px; font-weight: 800; color: var(--ahg-primary); }
+.ahg-dock-bar-label { color: var(--ahg-text-label); font-size: 9px; text-transform: uppercase; letter-spacing: .4px; }
+
+/* .ahg-dock-collapsed funciona ancorado (borda/canto) OU livre (variante
+   minimalista flutuante) — o pino/reflow é só do modo ancorado. */
+.ahg-panel.ahg-dock-collapsed .ahg-dock-bar { display: flex; }
+#ahg-panel.ahg-dock-collapsed,
+#ahg-batida-panel.ahg-dock-collapsed {
+    background: transparent; border: none; box-shadow: none;
+    min-width: 0; max-width: none; max-height: none; overflow: visible;
+}
+.ahg-panel.ahg-dock-collapsed > .a-tit,
+.ahg-panel.ahg-dock-collapsed > .a-body,
+.ahg-panel.ahg-dock-collapsed > .a-foot { display: none; }
+
+#ahg-panel.ahg-docked.ahg-dock-expanded,
+#ahg-batida-panel.ahg-docked.ahg-dock-expanded { max-height: calc(100vh - 16px); }
+
+/* Prazo/piso do planejador de banco de horas */
+.ahg-bank-goal-form, .ahg-bank-plan, .ahg-bank-manual { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.ahg-bank-form-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+.ahg-bank-input {
+    background: var(--ahg-bg-card); color: var(--ahg-text);
+    border: 1px solid var(--ahg-border); border-radius: var(--ahg-radius);
+    padding: 4px 8px; font-size: 11px; font-family: inherit;
+}
+.ahg-bank-input-sm { width: 56px; }
+.ahg-bank-hint { font-size: 10px; color: var(--ahg-text-label); display: flex; align-items: center; gap: 4px; }
+.ahg-bank-hint--warn { color: var(--ahg-warn); }
+.ahg-bank-hint--ok { color: var(--ahg-ok); }
+.ahg-bank-days { display: flex; flex-direction: column; gap: 3px; }
+.ahg-bank-day { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; padding: 4px 6px; border-radius: var(--ahg-radius); }
+.ahg-bank-day.today { background: color-mix(in srgb, var(--ahg-primary) 10%, transparent); font-weight: 700; }
+.ahg-bank-day-lbl { color: var(--ahg-text-label); }
+.ahg-bank-day-val b { color: var(--ahg-primary); }
+
 @media (max-width: 480px) {
     #ahg-panel { min-width: auto; width: calc(100vw - 40px); right: 10px; left: 10px; }
     #ahg-batida-panel { min-width: auto; max-width: none; left: 10px; right: 10px; }
     #ahg-detail-modal { min-width: auto; width: calc(100vw - 20px); max-width: none; }
     .ahg-punch-editor { min-width: auto; width: calc(100vw - 20px); max-width: none; }
     #ahg-fab { right: 10px !important; bottom: 10px !important; }
+    /* Rótulos longos não cabem numa linha ao lado do valor em telas estreitas. */
+    .a-lbl { white-space: normal; }
 }
 
 /* Movimento reduzido — respeitado em todos os elementos do painel (convidado discreto: não afeta a página host) */

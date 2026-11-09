@@ -5,8 +5,21 @@
 
 import { CONFIG, ConfigStore } from '../core/config.js';
 import { bus } from '../core/event-bus.js';
-import { fmtHour, fmtMin, getWeekNumber, nowMin } from '../core/time-utils.js';
-import { applySavedPanelPosition, createFab, makePanelDraggable } from '../shared/ui-components.js';
+import { fmtHour, fmtMin, getWeekNumber, nowMin, toMin } from '../core/time-utils.js';
+import {
+    applyPanelDock,
+    applySavedPanelPosition,
+    bindDockBarExpand,
+    bindDockMenu,
+    bindDockMinimizeButton,
+    buildDockMenuHtml,
+    createFab,
+    getDockEdge,
+    getDockMini,
+    makePanelDraggable,
+    setFloatingPanelVisible,
+    showLoggerToast
+} from '../shared/ui-components.js';
 import { applyTheme } from '../shared/css-injector.js';
 import {
     applyPrivacyState,
@@ -22,13 +35,21 @@ import { getAlarmConfig } from '../logger/alarm-engine.js';
 import { buildAutoGcalMaxMinusLink, buildQuickCalendarButtons } from '../logger/quick-actions.js';
 import { getJourneyPlan, setJourneyPlan } from '../core/journey-plan.js';
 import { buildAssistantPlan, buildWeekPlan } from './assistant-engine.js';
-import { bindAssistantCard, buildAssistantCardHtml, buildWeekViewHtml } from '../shared/assistant-card.js';
+import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml } from '../shared/assistant-card.js';
+import {
+    buildBankPlan,
+    buildBankPlanHtml,
+    buildBankSummaryLabel,
+    clearBankGoal,
+    DEFAULT_FLOOR_MINUTES,
+    getBankGoal,
+    getManualBalance,
+    setBankGoal,
+    setManualBalance
+} from './bank-plan.js';
 import { icon } from '../shared/icons.js';
 
-function setFloatingPanelVisible(panel, fab, visible) {
-    panel.classList.toggle('active', visible);
-    fab?.classList.toggle('hidden', visible);
-}
+const PERSIST_KEY = 'mirror-panel';
 
 export function ensurePanelContainer() {
     let panel = document.getElementById('ahg-panel');
@@ -75,9 +96,11 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
     const health = HEALTH_STYLES[r.hojePunchHealth?.level] || { icon: 'circle-check', row: 'ok', val: 'pos' };
 
     let html = `
+    ${view.dockBarHtml || ''}
     <div class="a-tit">
         ${icon('clock')} Painel Inteligente v${CONFIG.VERSAO}
         <button class="ahg-privacy-btn" id="ahg-privacy-toggle" title="${state.title}" aria-label="${state.title}" aria-pressed="${state.pressed}">${icon(state.iconName, { size: 14 })}</button>
+        ${view.dockMenuHtml || ''}
         <button class="a-x" id="ahg-min" title="Minimizar" aria-label="Minimizar painel">${icon('minus', { size: 14 })}</button>
     </div>
     <div class="a-body">
@@ -147,10 +170,14 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
         <div class="a-row infos clickable" id="ahg-export-csv" role="button" tabindex="0"><span class="a-lbl">${icon('download')} Exportar CSV</span><span class="a-val neu"><small>relatório do mês</small></span></div>
     </details>`;
 
-    if (cfg.flags?.F009_banco_horas && r.bancoHoras !== null && r.bancoHoras !== undefined) {
-        html += `<hr class="a-div"><details class="ahg-details" id="ahg-bank-details"><summary class="a-sec">Banco de Horas · <span class="${r.bancoHoras >= 0 ? 'ahg-color-pos' : 'ahg-color-neg'}">${renderMinutes(r.bancoHoras)}</span></summary>
-            <div class="a-row ${r.bancoHoras >= 0 ? 'ok' : 'warn'}"><span class="a-lbl">${icon('hourglass')} Saldo acumulado</span>
-            <span class="a-val ${r.bancoHoras >= 0 ? 'pos' : 'neg'}">${renderMinutes(r.bancoHoras)}</span></div>
+    if (cfg.flags?.F009_banco_horas) {
+        const bankPlan = view.bankPlan || buildBankPlan({ officialBalance: r.bancoHoras ?? null });
+        const balanceValue = bankPlan.balanceInfo?.value ?? null;
+        const summaryLabel = buildBankSummaryLabel(bankPlan.balanceInfo, bankPlan);
+        html += `<hr class="a-div"><details class="ahg-details" id="ahg-bank-details"><summary class="a-sec">Banco de Horas · <span class="${balanceValue === null || balanceValue >= 0 ? 'ahg-color-pos' : 'ahg-color-neg'}">${summaryLabel}</span></summary>
+            ${balanceValue !== null ? `<div class="a-row ${balanceValue >= 0 ? 'ok' : 'warn'}"><span class="a-lbl">${icon('hourglass')} Saldo ${bankPlan.balanceInfo?.source === 'manual' ? 'informado' : 'acumulado'}</span>
+            <span class="a-val ${balanceValue >= 0 ? 'pos' : 'neg'}">${renderMinutes(balanceValue)}</span></div>` : ''}
+            ${buildBankPlanHtml(bankPlan)}
         </details>`;
     }
 
@@ -191,9 +218,27 @@ export function renderMirrorPanel(resumo) {
         yesterdayLastPunch: resumo.yesterdayLastPunch || null
     });
     const weekPlan = buildWeekPlan({ dias: resumo.dias, planMinutes: plan.minutes });
+
+    const exitFinalStep = assistant.schedule?.find((s) => s.id === 'exitFinal');
+    const todayPlannedExit = exitFinalStep && exitFinalStep.status !== 'done' ? exitFinalStep.time : null;
+    const bankPlan = buildBankPlan({
+        officialBalance: resumo.bancoHoras ?? null,
+        manualBalance: getManualBalance(),
+        goal: getBankGoal(),
+        dias: resumo.dias,
+        hoje: new Date(),
+        planMinutes: plan.minutes,
+        now: nowMin(),
+        todayPlannedExit
+    });
+    if (bankPlan.completed) clearBankGoal();
+
     const view = {
         assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
-        weekHtml: buildWeekViewHtml(weekPlan)
+        weekHtml: buildWeekViewHtml(weekPlan),
+        dockBarHtml: buildDockBarHtml(assistant, resumo.status),
+        dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY)),
+        bankPlan
     };
 
     // Re-renders preservam a minimização escolhida pelo usuário.
@@ -235,21 +280,85 @@ export function renderMirrorPanel(resumo) {
     }
 
     applyTheme(cfg.tema);
-    makePanelDraggable(panel, '.a-tit', { persistKey: 'mirror-panel' });
-    applySavedPanelPosition(panel, 'mirror-panel');
+    const dragHandle = getDockMini(PERSIST_KEY) ? '#ahg-dock-bar' : '.a-tit';
+    makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY });
+    applySavedPanelPosition(panel, PERSIST_KEY);
+    applyPanelDock(panel, PERSIST_KEY);
     applyPrivacyState();
 
-    // Eventos
-    const minBtn = panel.querySelector('#ahg-min');
-    if (minBtn) {
-        minBtn.addEventListener('click', () => setFloatingPanelVisible(panel, fab, false));
+    bindDockMenu(panel, PERSIST_KEY, () => renderMirrorPanel(resumo));
+    bindDockBarExpand(panel);
+    bindDockMinimizeButton(panel, fab, '#ahg-min');
+
+    const bankManualSave = panel.querySelector('#ahg-bank-manual-save');
+    if (bankManualSave) {
+        bankManualSave.addEventListener('click', () => {
+            const value = toMin(panel.querySelector('#ahg-bank-manual-input')?.value);
+            if (value === null) {
+                showLoggerToast('Informe um saldo válido (ex.: 5:30 ou -2:00)');
+                return;
+            }
+            setManualBalance(value);
+            renderMirrorPanel(resumo);
+        });
+    }
+
+    const bankDeadlineToggle = panel.querySelector('#ahg-bank-deadline-toggle');
+    if (bankDeadlineToggle) {
+        bankDeadlineToggle.querySelectorAll('[data-deadline-type]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                bankDeadlineToggle.querySelectorAll('[data-deadline-type]').forEach((b) => b.classList.toggle('active', b === btn));
+                const isDays = btn.dataset.deadlineType === 'days';
+                const daysRow = panel.querySelector('#ahg-bank-deadline-days');
+                const dateRow = panel.querySelector('#ahg-bank-deadline-date');
+                if (daysRow) daysRow.hidden = !isDays;
+                if (dateRow) dateRow.hidden = isDays;
+            });
+        });
+    }
+
+    const bankGoalCreate = panel.querySelector('#ahg-bank-goal-create');
+    if (bankGoalCreate) {
+        bankGoalCreate.addEventListener('click', () => {
+            const mode = panel.querySelector('input[name="ahg-bank-mode"]:checked')?.value || 'zero';
+            const amountMinutes = mode === 'amount' ? toMin(panel.querySelector('#ahg-bank-amount')?.value) : null;
+            const deadlineType = panel.querySelector('#ahg-bank-deadline-toggle [data-deadline-type].active')?.dataset.deadlineType || 'days';
+            const deadlineDays = Number(panel.querySelector('#ahg-bank-days')?.value) || 5;
+            const deadlineDate = panel.querySelector('#ahg-bank-date')?.value || null;
+            const floorMinutes = toMin(panel.querySelector('#ahg-bank-floor')?.value) ?? DEFAULT_FLOOR_MINUTES;
+
+            if (mode === 'amount' && (amountMinutes === null || amountMinutes <= 0)) {
+                showLoggerToast('Informe quanto reduzir (ex.: 2:00)');
+                return;
+            }
+            if (deadlineType === 'date' && !deadlineDate) {
+                showLoggerToast('Informe a data do prazo');
+                return;
+            }
+
+            setBankGoal(
+                { mode, amountMinutes, deadlineType, deadlineDays, deadlineDate, floorMinutes },
+                bankPlan.balanceInfo?.value ?? resumo.bancoHoras ?? 0
+            );
+            renderMirrorPanel(resumo);
+        });
+    }
+
+    const bankGoalCancel = panel.querySelector('#ahg-bank-goal-cancel');
+    if (bankGoalCancel) {
+        bankGoalCancel.addEventListener('click', () => {
+            clearBankGoal();
+            renderMirrorPanel(resumo);
+        });
     }
 
     const privacyBtn = panel.querySelector('#ahg-privacy-toggle');
     if (privacyBtn) {
         privacyBtn.addEventListener('click', () => {
+            // Não renderiza aqui: togglePrivacyHidden emite 'privacy:changed',
+            // e main.js reage com tryRenderMirror() — reconstrói o calendário
+            // (badges de total) e o painel numa só passada, em vez de duas.
             togglePrivacyHidden();
-            renderMirrorPanel(resumo);
         });
     }
 
