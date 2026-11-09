@@ -5,7 +5,7 @@
  * alertas classificados pela matriz de enforcement.
  */
 
-import { escapeHtml, fmtHour } from '../core/time-utils.js';
+import { escapeHtml } from '../core/time-utils.js';
 import { renderClock, renderMinutes } from '../core/privacy-engine.js';
 import { JOURNEY_PRESETS } from '../core/journey-plan.js';
 import { buildGoogleCalendarUrl, buildOutlookCalendarUrl } from '../logger/calendar-links.js';
@@ -140,6 +140,18 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
     </div>`;
 }
 
+/** Barra compacta mostrada quando o painel está ancorado e colapsado. */
+export function buildDockBarHtml(assistant, fallbackLabel = '') {
+    const label = assistant?.next?.label || fallbackLabel || 'Painel';
+    const time = assistant?.next ? renderClock(assistant.next.time) : '--:--';
+    return `
+    <div class="ahg-dock-bar" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+        ${icon('clock', { size: 14 })}
+        <span class="ahg-dock-bar-time">${time}</span>
+        <span class="ahg-dock-bar-label">${escapeHtml(label)}</span>
+    </div>`;
+}
+
 /** Liga o toggle de preset do card. `onPresetSelect(presetId)` deve re-renderizar. */
 export function bindAssistantCard(rootEl, { onPresetSelect } = {}) {
     if (!rootEl || typeof onPresetSelect !== 'function') return;
@@ -160,7 +172,7 @@ export function buildWeekViewHtml(weekPlan) {
         return `
         <div class="ahg-week-day ${cls}" data-date="${escapeHtml(day.dateKey)}">
             <span class="ahg-week-lbl">${escapeHtml(day.weekdayLabel)}</span>
-            <div class="ahg-week-bar" title="${fmtHour(day.worked)} de ${fmtHour(day.target)}"><div class="ahg-week-fill" style="width:${pct}%"></div></div>
+            <div class="ahg-week-bar" title="${renderMinutes(day.worked)} de ${renderMinutes(day.target)}"><div class="ahg-week-fill" style="width:${pct}%"></div></div>
             <span class="ahg-week-val">${renderMinutes(day.worked)}</span>
             ${deltaHtml}
         </div>`;

@@ -16,7 +16,7 @@ Padrões visuais e de interação para as interfaces de painel (Mirror) e logger
 - **Controles Globais:** O toggle de privacidade vive no cabeçalho de cada painel (`.ahg-privacy-btn`); FABs ficam reservados à restauração dos painéis minimizados.
 - **Privacidade (Masking):** Toggle explícito que substitui valores sensíveis por `••:••` ou blur (via `.ahg-hide-times`), sem ocultar a estrutura de layouts ou os ícones de status de saúde da jornada.
 - **Feedback Transiente:** Uso de *Toasts* no canto inferior direito para interações rápidas (ex: cópias bem-sucedidas, deleções).
-- **Detalhamento:** Uso de Modais em tela cheia (overlay escuro) para tabelas densas e expansão de dados históricos.
+- **Detalhamento:** Painel flutuante draggable (`.ahg-panel`, `role="region"`, sem overlay nem focus trap) para tabelas densas e expansão de dados históricos — mesmo padrão do Punch Editor, que precisa manter vários editores abertos simultaneamente. Mantém o host interagível por trás, coerente com "convidado discreto".
 
 ## Integração de Regras e Estado Compartilhado
 - **Shared Truth:** O design assume o Mirror como a fonte da verdade. O Logger deve indicar visualmente ao usuário se está operando com dados sincronizados ou apenas em cache local.

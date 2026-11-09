@@ -4,7 +4,7 @@
  */
 
 import { CONFIG } from '../core/config.js';
-import { escapeHtml, fmtHour } from '../core/time-utils.js';
+import { escapeHtml, fmtHour, formatDateKey } from '../core/time-utils.js';
 import { STORAGE_KEYS, gmGetJson, gmSetJson } from '../core/storage-adapter.js';
 import { openInNewTab } from '../shared/ui-components.js';
 import { DEFAULT_ALARM_CONFIG } from './alarm-engine.js';
@@ -188,10 +188,4 @@ export function maybeAutoOpenQuickCalendar(vm, autoLink) {
 
     markLoggerGcalAutoOpenToken(token, 'dismissed');
     return false;
-}
-
-function formatDateKey(date = new Date()) {
-    const d = new Date(date);
-    const pad2 = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { getLoggerVm } from '../../src/logger/logger-vm.js';
+import { getLoggerGuidance, getLoggerVm } from '../../src/logger/logger-vm.js';
 import { renderLoggerContainer } from '../../src/logger/logger-renderer.js';
 import { buildAssistantPlan } from '../../src/mirror/assistant-engine.js';
 import { STORAGE_KEYS } from '../../src/core/storage-adapter.js';
@@ -78,6 +78,22 @@ describe('getLoggerVm (caracterização)', () => {
         seedTruth(STALE_TRUTH); // 2020-01-01
         const vm = getLoggerVm();
         expect(vm.yesterdayLastPunch).toBeNull();
+    });
+});
+
+describe('getLoggerGuidance (leitura leve pro tick do alarme)', () => {
+    it('sem SHARED_TRUTH: null', () => {
+        expect(getLoggerGuidance()).toBeNull();
+    });
+
+    it('SHARED_TRUTH de hoje: devolve a guidance', () => {
+        seedTruth({ ...STALE_TRUTH, todayKey: formatDateKey(new Date()) });
+        expect(getLoggerGuidance()).toEqual(STALE_TRUTH.guidance);
+    });
+
+    it('SHARED_TRUTH de outro dia: null (mesmo gating de getLoggerVm)', () => {
+        seedTruth(STALE_TRUTH);
+        expect(getLoggerGuidance()).toBeNull();
     });
 });
 

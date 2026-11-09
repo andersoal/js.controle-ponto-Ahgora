@@ -4,7 +4,7 @@
  */
 
 import { CONFIG } from '../core/config.js';
-import { fmtGoogleCalendarDate, minuteToDate, pad2 } from '../core/time-utils.js';
+import { dateParts, fmtGoogleCalendarDate, minuteToDate } from '../core/time-utils.js';
 
 export function normalizeGoogleCalendarUserPath(value) {
     if (value === null || value === undefined || value === '') return '0';
@@ -43,12 +43,7 @@ export function buildGoogleCalendarUrl({ title, details, startMinute, endMinute,
 }
 
 export function fmtOutlookCalendarDate(date) {
-    const yyyy = date.getFullYear();
-    const mm = pad2(date.getMonth() + 1);
-    const dd = pad2(date.getDate());
-    const hh = pad2(date.getHours());
-    const min = pad2(date.getMinutes());
-    const ss = pad2(date.getSeconds());
+    const { yyyy, mm, dd, hh, min, ss } = dateParts(date);
     return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
 }
 

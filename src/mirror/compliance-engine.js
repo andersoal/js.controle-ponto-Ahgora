@@ -57,6 +57,13 @@ export function getMaxShiftViolations(batidas) {
     return findPunchPairViolations(batidas, 0, CONFIG.MAX_HORAS_TURNO);
 }
 
+/** Classificação visual de um turno isolado: 'danger' acima de 6h, 'warn' a partir de 30min antes, 'ok' abaixo disso. */
+export function classifyShiftDuration(duration) {
+    if (duration > CONFIG.MAX_HORAS_TURNO) return 'danger';
+    if (duration > CONFIG.MAX_HORAS_TURNO - 30) return 'warn';
+    return 'ok';
+}
+
 export function getDayRuleViolations({ batidas, trabalhado }) {
     const violations = [];
     const intMax = getIntrajornadaMaxViolations(batidas);
@@ -171,7 +178,8 @@ export function getMonthlySundayRestWarning(dias, hoje = new Date()) {
     const currentYear = hoje.getFullYear();
     const sundays = dias.filter((d) => {
         const date = d.data;
-        return date.getMonth() === currentMonth &&
+        return !d.isFuture &&
+            date.getMonth() === currentMonth &&
             date.getFullYear() === currentYear &&
             date.getDay() === 0;
     });

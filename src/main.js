@@ -17,7 +17,7 @@ import { getLocalDayPunches, openPunchEditor } from './mirror/punch-editor.js';
 import { deleteLastSavedPunch, savePunch } from './logger/punch-history.js';
 import { startLoggerLiveRefresh } from './logger/live-refresh.js';
 import { buildSharedTruth, getYesterdayContext } from './logger/mirror-sync.js';
-import { getLoggerVm } from './logger/logger-vm.js';
+import { getLoggerGuidance, getLoggerVm } from './logger/logger-vm.js';
 import { renderLoggerContainer } from './logger/logger-renderer.js';
 import { getAlarmConfig, evaluateLoggerAlarms, LOGGER_ALARM_CHECK_MS, setAlarmConfig } from './logger/alarm-engine.js';
 import { monitorModal } from './logger/modal-guard.js';
@@ -192,6 +192,10 @@ function startMirror() {
             waitForMirrorCalendar(() => {}, { timeoutMs: 15000 });
         }
     });
+
+    // Privacidade muda em outro módulo (painel) — recalcula tudo pra levar o
+    // mascaramento real (não só blur) aos badges do calendário também.
+    bus.on('privacy:changed', () => tryRenderMirror());
 }
 
 function renderLogger(vm) {
@@ -227,8 +231,7 @@ function startLogger() {
     startLoggerLiveRefresh(() => renderLogger(getLoggerVm()));
 
     setInterval(() => {
-        const currentVm = getLoggerVm();
-        evaluateLoggerAlarms(currentVm.guidance, getAlarmConfig());
+        evaluateLoggerAlarms(getLoggerGuidance(), getAlarmConfig());
     }, LOGGER_ALARM_CHECK_MS);
 
     bus.emit('logger:ready', vm);

@@ -124,13 +124,20 @@ export function minuteToDate(baseDate, minute) {
     return date;
 }
 
+/** Componentes locais de uma data, cada um já com zero à esquerda. Base comum dos formatos de calendário. */
+export function dateParts(date) {
+    return {
+        yyyy: date.getFullYear(),
+        mm: pad2(date.getMonth() + 1),
+        dd: pad2(date.getDate()),
+        hh: pad2(date.getHours()),
+        min: pad2(date.getMinutes()),
+        ss: pad2(date.getSeconds())
+    };
+}
+
 export function fmtGoogleCalendarDate(date) {
-    const yyyy = date.getFullYear();
-    const mm = pad2(date.getMonth() + 1);
-    const dd = pad2(date.getDate());
-    const hh = pad2(date.getHours());
-    const min = pad2(date.getMinutes());
-    const ss = pad2(date.getSeconds());
+    const { yyyy, mm, dd, hh, min, ss } = dateParts(date);
     return `${yyyy}${mm}${dd}T${hh}${min}${ss}`;
 }
 

@@ -5,8 +5,11 @@
 
 import { CONFIG } from '../core/config.js';
 import { fmtMin, formatDateKey, getWeekNumber, toMin } from '../core/time-utils.js';
+import { renderMinutes, renderText } from '../core/privacy-engine.js';
 import { saldoComTolerancia } from './calculator.js';
 import { el } from '../shared/dom-builder.js';
+import { icon } from '../shared/icons.js';
+import { makeDraggable } from '../shared/ui-components.js';
 
 export function abrirDetalhes(dias) {
     const existing = document.getElementById('ahg-detail-modal');
@@ -17,7 +20,9 @@ export function abrirDetalhes(dias) {
 
     const modal = el('div', {
         id: 'ahg-detail-modal',
-        className: 'ahg-panel'
+        className: 'ahg-panel',
+        // region (não dialog): sem backdrop nem focus trap, mesmo raciocínio do Punch Editor.
+        attrs: { tabindex: '-1', role: 'region', 'aria-label': 'Detalhes do mês' }
     });
 
     const registros = dias
@@ -53,9 +58,11 @@ export function abrirDetalhes(dias) {
                 }),
                 el('span', {
                     className: `a-val ${d.saldo >= 0 ? 'pos' : 'neg'}`,
-                    text: `${d.batidas.join(' ') || '-'} ${dentroTolerancia ? '⚪' : ''} `,
+                    // html (não text): renderText já escapa — exportação CSV
+                    // continua com os valores reais de propósito (ver exportarCsvMensal).
+                    html: `${renderText(d.batidas.join(' ') || '-')} ${dentroTolerancia ? '⚪' : ''} `,
                     children: [
-                        el('small', { text: `${fmtMin(d.trabalhado)} / saldo ${fmtMin(d.saldo)} / sem ${fmtMin(saldoSemAcum)}` })
+                        el('small', { text: `${renderMinutes(d.trabalhado)} / saldo ${renderMinutes(d.saldo)} / sem ${renderMinutes(saldoSemAcum)}` })
                     ]
                 })
             ]
@@ -63,17 +70,18 @@ export function abrirDetalhes(dias) {
         bodyChildren.push(row);
     });
 
-    const closeBtn = el('span', {
+    const closeBtn = el('button', {
         id: 'ahg-detail-close',
         className: 'a-x',
-        text: '✕'
+        attrs: { type: 'button', title: 'Fechar', 'aria-label': 'Fechar detalhes do mês' },
+        html: icon('x', { size: 14 })
     });
     closeBtn.addEventListener('click', () => modal.remove());
 
     const header = el('div', {
         className: 'a-tit',
         children: [
-            el('span', { text: '📋 Detalhes do Mês' }),
+            el('span', { html: `${icon('calendar', { size: 14 })} Detalhes do Mês` }),
             closeBtn
         ]
     });
@@ -85,10 +93,15 @@ export function abrirDetalhes(dias) {
 
     modal.append(header, body);
     document.body.appendChild(modal);
+    makeDraggable(modal, '.a-tit');
 
     modal.addEventListener('click', (e) => {
         if (e.target === modal) modal.remove();
     });
+    modal.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') modal.remove();
+    });
+    modal.focus();
 }
 
 export function exportarCsvMensal(dias) {

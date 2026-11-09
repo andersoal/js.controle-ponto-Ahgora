@@ -6,10 +6,22 @@
 import { CONFIG } from '../core/config.js';
 import { bus } from '../core/event-bus.js';
 import { fmtHour, toMin } from '../core/time-utils.js';
-import { applySavedPanelPosition, createFab, makePanelDraggable } from '../shared/ui-components.js';
+import {
+    applyPanelDock,
+    applySavedPanelPosition,
+    bindDockBarExpand,
+    bindDockMenu,
+    bindDockMinimizeButton,
+    buildDockMenuHtml,
+    createFab,
+    getDockEdge,
+    getDockMini,
+    makePanelDraggable,
+    setFloatingPanelVisible
+} from '../shared/ui-components.js';
 import { getJourneyPlan, setJourneyPlan } from '../core/journey-plan.js';
 import { buildAssistantPlan } from '../mirror/assistant-engine.js';
-import { bindAssistantCard, buildAssistantCardHtml } from '../shared/assistant-card.js';
+import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml } from '../shared/assistant-card.js';
 import {
     applyPrivacyState,
     privacyButtonState,
@@ -22,19 +34,16 @@ import { getAlarmConfig, setAlarmConfig } from './alarm-engine.js';
 import { buildAutoGcalMaxMinusLink, buildQuickCalendarButtons } from './quick-actions.js';
 import { icon } from '../shared/icons.js';
 
-function setFloatingPanelVisible(panel, fab, visible) {
-    panel.classList.toggle('active', visible);
-    fab?.classList.toggle('hidden', visible);
-}
+const PERSIST_KEY = 'logger-panel';
 
 export function ensureLoggerContainer() {
     let panel = document.getElementById('ahg-batida-panel');
-    let fab = document.getElementById('ahg-batida-fab');
+    let fab = document.getElementById('ahg-batida-fab') || document.getElementById('ahg-v3-batida-fab');
 
     if (!panel) {
         panel = document.createElement('div');
         panel.id = 'ahg-batida-panel';
-        panel.className = 'ahg-panel ahg-floating-panel';
+        panel.className = 'ahg-panel ahg-floating-panel ahg-v3-batida-panel';
         document.body.appendChild(panel);
     }
 
@@ -73,9 +82,11 @@ export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
     const source = resolveDataSource(state);
 
     let html = `
+    ${view.dockBarHtml || ''}
     <div class="a-tit">
         ${icon('clock')} Logger v${CONFIG.VERSAO}
         <button class="ahg-privacy-btn" id="ahg-logger-privacy-toggle" title="${privacyState.title}" aria-label="${privacyState.title}" aria-pressed="${privacyState.pressed}">${icon(privacyState.iconName, { size: 14 })}</button>
+        ${view.dockMenuHtml || ''}
         <button class="a-x" id="ahg-logger-min" title="Minimizar" aria-label="Minimizar painel">${icon('minus', { size: 14 })}</button>
     </div>
     <div class="a-body">
@@ -139,7 +150,11 @@ export function renderLoggerContainer(vm, onSave, onDelete) {
         saldoSemana: vm.weekBalance || 0,
         yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
-    const view = { assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }) };
+    const view = {
+        assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
+        dockBarHtml: buildDockBarHtml(assistant),
+        dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY))
+    };
 
     // Re-renders preservam a minimização escolhida pelo usuário.
     const keepMinimized = panel.dataset.ahgRendered === 'true' && !panel.classList.contains('active');
@@ -160,13 +175,14 @@ export function renderLoggerContainer(vm, onSave, onDelete) {
         if (calendarRow) calendarRow.appendChild(calendarButtons);
     }
 
-    makePanelDraggable(panel, '.a-tit', { persistKey: 'logger-panel' });
-    applySavedPanelPosition(panel, 'logger-panel');
+    const dragHandle = getDockMini(PERSIST_KEY) ? '#ahg-dock-bar' : '.a-tit';
+    makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY });
+    applySavedPanelPosition(panel, PERSIST_KEY);
+    applyPanelDock(panel, PERSIST_KEY);
 
-    const minBtn = panel.querySelector('#ahg-logger-min');
-    if (minBtn) {
-        minBtn.addEventListener('click', () => setFloatingPanelVisible(panel, fab, false));
-    }
+    bindDockMenu(panel, PERSIST_KEY, () => renderLoggerContainer(vm, onSave, onDelete));
+    bindDockBarExpand(panel);
+    bindDockMinimizeButton(panel, fab, '#ahg-logger-min');
 
     const saveBtn = panel.querySelector('#ahg-logger-save');
     if (saveBtn && vm.combinedLastPunch) {

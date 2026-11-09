@@ -4,14 +4,23 @@
  * Permite abrir vários dias simultaneamente, cada um com seu próprio editor.
  */
 
-import { CONFIG } from '../core/config.js';
+import { bus } from '../core/event-bus.js';
 import { STORAGE_KEYS, gmGetJson, gmSetJson } from '../core/storage-adapter.js';
 import { escapeHtml, fmtMin, normalizePunchTime, toMin } from '../core/time-utils.js';
+import { renderMinutes, renderText } from '../core/privacy-engine.js';
 import { computeDayBalance } from './calculator.js';
-import { getDayRuleViolations } from './compliance-engine.js';
+import { classifyShiftDuration, getDayRuleViolations } from './compliance-engine.js';
 import { showLoggerToast, makePanelDraggable } from '../shared/ui-components.js';
 import { el } from '../shared/dom-builder.js';
 import { icon } from '../shared/icons.js';
+
+// Editores abertos (multi-instância, uma entrada por dateKey) — reaplicados
+// quando a privacidade muda, pra não ficar exibindo horário real até o
+// usuário interagir de novo com aquele editor específico.
+const openEditors = new Map();
+bus.on('privacy:changed', () => {
+    openEditors.forEach((render) => render());
+});
 
 export function getLocalDayPunches() {
     return gmGetJson(STORAGE_KEYS.LOCAL_DAY_PUNCHES, {});
@@ -52,7 +61,10 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
     const editor = el('div', {
         id: editorId,
         className: 'ahg-panel ahg-punch-editor',
-        attrs: { 'data-date-key': dateKey, tabindex: '-1' }
+        // region (não dialog): não há backdrop nem focus trap, e vários
+        // editores ficam abertos ao mesmo tempo — o rótulo é o que diferencia
+        // um do outro pro leitor de tela.
+        attrs: { 'data-date-key': dateKey, tabindex: '-1', role: 'region', 'aria-label': `Editor de batidas — ${dateLabel || dateKey}` }
     });
 
     // Posição inicial: centralizado, ou próximo à célula clicada se informada.
@@ -84,6 +96,19 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
     };
     const isDirty = () => JSON.stringify(working) !== JSON.stringify(baselinePunches());
 
+    // Redimensionar a janela não move o editor (posição é left/top fixos) —
+    // sem isto ele pode ficar inacessível fora da viewport nova. Só clampa
+    // (não re-ancora na célula original, que pode ter rolado/mudado também).
+    function clampEditorToViewport() {
+        const rect = editor.getBoundingClientRect();
+        const maxLeft = Math.max(0, window.innerWidth - rect.width);
+        const maxTop = Math.max(0, window.innerHeight - rect.height);
+        editor.style.transform = 'none';
+        editor.style.left = `${Math.min(Math.max(0, rect.left), maxLeft)}px`;
+        editor.style.top = `${Math.min(Math.max(0, rect.top), maxTop)}px`;
+    }
+    window.addEventListener('resize', clampEditorToViewport);
+
     function closeEditor({ force = false } = {}) {
         if (!force && isDirty()) {
             confirmingClose = true;
@@ -91,6 +116,8 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
             return;
         }
         if (editor._ahgDragCleanup) editor._ahgDragCleanup();
+        window.removeEventListener('resize', clampEditorToViewport);
+        openEditors.delete(dateKey);
         editor.remove();
     }
 
@@ -110,13 +137,11 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
         const saida = toMin(batidas[idx]);
         if (entrada === null || saida === null) return null;
         const duracao = saida - entrada;
-        if (duracao > CONFIG.MAX_HORAS_TURNO) {
+        const severity = classifyShiftDuration(duracao);
+        if (severity === 'danger') {
             return { level: 'error', text: `turno ${fmtMin(duracao)} > 6h` };
         }
-        if (duracao > CONFIG.MAX_HORAS_TURNO - 30) {
-            return { level: 'warn', text: `turno ${fmtMin(duracao)}` };
-        }
-        return { level: 'ok', text: `turno ${fmtMin(duracao)}` };
+        return { level: severity, text: `turno ${fmtMin(duracao)}` };
     }
 
     function renderHint(hint) {
@@ -141,7 +166,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
         if (isEditing) {
             const input = el('input', {
                 className: 'ahg-pe-inline-input',
-                attrs: { type: 'text', value: time, maxlength: '5', placeholder: 'HH:MM' },
+                attrs: { type: 'text', value: time, maxlength: '5', placeholder: 'HH:MM', 'aria-label': 'Horário (HH:MM)' },
                 dataset: { idx: String(idx) }
             });
             const confirmBtn = el('button', {
@@ -168,7 +193,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
                 className: isMirror ? 'ahg-pe-punch-time' : 'ahg-pe-punch-time ahg-pe-edit-time',
                 dataset: isMirror ? {} : { idx: String(idx) },
                 attrs: isMirror ? {} : { title: 'Clique para editar' },
-                text: time
+                html: renderText(time)
             });
             if (!isMirror) {
                 timeSpan.addEventListener('click', () => startInlineEdit(idx));
@@ -181,10 +206,13 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
             row.append(timeSpan, srcSpan);
 
+            // renderText(time) no aria-label: a privacidade esconde o valor visível
+            // (••:••) e não pode vazar de volta pelo nome acessível do botão.
+            const maskedTime = renderText(time);
             if (!isMirror) {
                 const editBtn = el('button', {
                     className: 'ahg-btn ahg-btn-sm ahg-pe-edit-inline',
-                    attrs: { type: 'button', title: 'Editar', 'aria-label': `Editar batida ${time}` },
+                    attrs: { type: 'button', title: 'Editar', 'aria-label': `Editar batida ${maskedTime}` },
                     dataset: { idx: String(idx) },
                     html: icon('pencil', { size: 11 })
                 });
@@ -194,7 +222,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
             const removeBtn = el('button', {
                 className: 'ahg-btn ahg-btn-sm ahg-btn-danger ahg-pe-remove',
-                attrs: { type: 'button', title: 'Remover', 'aria-label': `Remover batida ${time}` },
+                attrs: { type: 'button', title: 'Remover', 'aria-label': `Remover batida ${maskedTime}` },
                 dataset: { idx: String(idx) },
                 html: icon('trash', { size: 11 })
             });
@@ -219,14 +247,14 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
                     className: 'ahg-pe-total-item',
                     children: [
                         el('div', { className: 'ahg-pe-total-lbl', text: 'Trabalhado' }),
-                        el('div', { className: `ahg-pe-total-val ${colorClass}`, text: fmtMin(trabalhado) })
+                        el('div', { className: `ahg-pe-total-val ${colorClass}`, text: renderMinutes(trabalhado) })
                     ]
                 }),
                 el('div', {
                     className: 'ahg-pe-total-item',
                     children: [
                         el('div', { className: 'ahg-pe-total-lbl', text: 'Saldo' }),
-                        el('div', { className: `ahg-pe-total-val ${colorClass}`, text: fmtMin(saldo) })
+                        el('div', { className: `ahg-pe-total-val ${colorClass}`, text: renderMinutes(saldo) })
                     ]
                 })
             ]
@@ -355,7 +383,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
 
         const addInput = el('input', {
             id: `ahg-pe-add-input-${dateKey}`,
-            attrs: { type: 'text', placeholder: 'HH:MM', maxlength: '5' }
+            attrs: { type: 'text', placeholder: 'HH:MM', maxlength: '5', 'aria-label': 'Adicionar horário (HH:MM)' }
         });
         addInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') addBtn.click();
@@ -443,6 +471,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
     document.body.appendChild(editor);
     bringEditorToFront(editor);
     makePanelDraggable(editor, '.ahg-pe-hdr', { clampToViewport: true });
+    openEditors.set(dateKey, render);
     render();
     editor.focus();
 }

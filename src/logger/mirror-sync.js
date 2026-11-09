@@ -85,7 +85,6 @@ export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs)
     const mirrorSet = new Set(mirrorPunches || []);
 
     const reconciled = todayHistory.filter((entry) => !mirrorSet.has(entry.time));
-    const effectiveHistory = reconciled;
 
     const localOnlyPunches = reconciled.map((entry) => entry.time);
 
@@ -104,8 +103,6 @@ export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs)
     }));
 
     return {
-        reconciled,
-        effectiveHistory,
         localOnlyPunches,
         combinedPunches: combined,
         combinedLastPunch,

@@ -7,6 +7,7 @@
 
 import { CONFIG } from '../core/config.js';
 import { fmtMin } from '../core/time-utils.js';
+import { renderMinutes } from '../core/privacy-engine.js';
 import { ensureDayChild } from '../shared/ui-components.js';
 import { icon } from '../shared/icons.js';
 
@@ -19,7 +20,7 @@ export function updateDayTotalsDisplay(dayEl, trabalhado, violations = []) {
     if (!dayEl) return;
     if (trabalhado > 0) {
         const totalEl = ensureDayChild(dayEl, 'ahg-day-total');
-        totalEl.textContent = fmtMin(trabalhado);
+        totalEl.textContent = renderMinutes(trabalhado);
         totalEl.title = 'Total trabalhado no dia';
     } else {
         removeDayChild(dayEl, 'ahg-day-total');

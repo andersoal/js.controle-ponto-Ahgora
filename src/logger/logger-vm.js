@@ -9,6 +9,14 @@ import { getAlarmConfig } from './alarm-engine.js';
 import { buildLoggerPunchTimeline, getMirrorTodayContext, getTodayBounds, getYesterdayContext } from './mirror-sync.js';
 import { getPunchHistory } from './punch-history.js';
 
+/** Só a guidance atual, sem montar o VM completo (linha do tempo, histórico) — usado pelo tick do alarme. */
+export function getLoggerGuidance() {
+    const bounds = getTodayBounds();
+    const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
+    const isTruthFresh = sharedTruth?.todayKey === bounds.todayKey;
+    return (isTruthFresh && sharedTruth?.guidance) || null;
+}
+
 export function getLoggerVm() {
     const bounds = getTodayBounds();
     const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildAssistantPlan, buildWeekPlan } from '../../src/mirror/assistant-engine.js';
 import { buildAssistantCardHtml, buildWeekViewHtml } from '../../src/shared/assistant-card.js';
+import { setPrivacyHidden } from '../../src/core/privacy-engine.js';
 
 // Simula o storage do Tampermonkey (privacidade lê GM_getValue).
 const gmStore = new Map();
@@ -124,5 +125,18 @@ describe('WeekView', () => {
         expect(el.querySelectorAll('.ahg-week-day').length).toBe(5);
         expect(el.querySelectorAll('.ahg-week-day.today').length).toBe(1);
         expect(el.querySelector('.ahg-week-balance')).toBeTruthy();
+    });
+
+    it('com privacidade ativa, o tooltip da barra semanal também mascara (não só o texto visível)', () => {
+        const hoje = '2026-07-08';
+        const dias = [makeDia('2026-07-06', 480, hoje)];
+        const week = buildWeekPlan({ dias, hoje: new Date('2026-07-08T12:00:00'), planMinutes: 480 });
+
+        setPrivacyHidden(true);
+        const el = render(buildWeekViewHtml(week));
+        const title = el.querySelector('.ahg-week-bar').getAttribute('title');
+        expect(title).not.toMatch(/\d{1,2}:\d{2}/);
+        expect(title).toContain('••:••');
+        setPrivacyHidden(false);
     });
 });

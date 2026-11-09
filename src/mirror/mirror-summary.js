@@ -15,6 +15,7 @@ import {
     computeReturnWindow
 } from './calculator.js';
 import {
+    classifyShiftDuration,
     collectComplianceDays,
     getDayRuleViolations,
     getMonthlySundayRestWarning,
@@ -30,9 +31,8 @@ function buildTurno(entrada, saida, now) {
     const s = saida ? toMin(saida) : now;
     if (e === null || s === null) return null;
     const total = s - e;
-    const classe =
-        total >= CONFIG.MAX_HORAS_TURNO ? 'danger' :
-        total >= CONFIG.MAX_HORAS_TURNO - 30 ? 'warn' : 'infos';
+    const severity = classifyShiftDuration(total);
+    const classe = severity === 'ok' ? 'infos' : severity;
     return { entrada, saida: saida || 'agora', aberto: !saida, total, limite: CONFIG.MAX_HORAS_TURNO, classe };
 }
 

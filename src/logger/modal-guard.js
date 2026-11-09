@@ -78,7 +78,7 @@ export function findPunchModal(root = document) {
 
     // 2) App real (MUI): overlay `role="presentation"` com texto de batida e botão de ação.
     for (const el of root.querySelectorAll('[role="presentation"]')) {
-        const text = el.innerText || el.textContent || '';
+        const text = el.textContent || '';
         if (PUNCH_MODAL_TEXT_RE.test(text) && el.querySelector('button')) return el;
     }
     return null;
@@ -136,7 +136,7 @@ export function findModalTime(modal = null) {
     }
     // Fallback: parse do texto completo do modal (cobre o MUI real "14 h 23 m").
     const container = modal || document.querySelector('[role="dialog"], .v-dialog--active');
-    return parsePunchTimeFromText(container ? container.innerText || container.textContent : null);
+    return parsePunchTimeFromText(container ? container.textContent : null);
 }
 
 function removeHint() {

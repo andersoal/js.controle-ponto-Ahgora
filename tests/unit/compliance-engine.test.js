@@ -146,6 +146,14 @@ describe('ComplianceEngine', () => {
             ];
             expect(getMonthlySundayRestWarning(dias, new Date(2026, 6, 8))).toContain('domingo');
         });
+
+        it('alerta mesmo com domingo futuro ainda sem batidas no mês', () => {
+            const dias = [
+                day({ data: new Date(2026, 6, 5), batidas: ['08:00', '12:00'], isFuture: false }),
+                day({ data: new Date(2026, 6, 12), batidas: [], isFuture: true })
+            ];
+            expect(getMonthlySundayRestWarning(dias, new Date(2026, 6, 8))).toContain('domingo');
+        });
     });
 
     describe('getWeeklyRestWarning', () => {

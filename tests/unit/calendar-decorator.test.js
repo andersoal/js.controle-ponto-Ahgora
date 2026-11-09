@@ -1,11 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
     updateDayRequestBadge,
     updateDayManualPunchHighlight,
     updateDayToleranceMark,
     updateDayInconsistencyBadge,
+    updateDayTotalsDisplay,
     decorateCalendarDays
 } from '../../src/mirror/calendar-decorator.js';
+import { setPrivacyHidden } from '../../src/core/privacy-engine.js';
 
 function createDayCell(html = '') {
     const el = document.createElement('div');
@@ -15,6 +17,33 @@ function createDayCell(html = '') {
 }
 
 describe('CalendarDecorator', () => {
+    beforeEach(() => {
+        global.localStorage = {
+            _data: new Map(),
+            getItem(key) { return this._data.has(key) ? this._data.get(key) : null; },
+            setItem(key, value) { this._data.set(key, String(value)); },
+            removeItem(key) { this._data.delete(key); },
+            clear() { this._data.clear(); }
+        };
+        global.GM_getValue = undefined;
+        global.GM_setValue = undefined;
+        document.body.className = '';
+    });
+
+    it('updateDayTotalsDisplay mascara o total quando a privacidade está ativa (não só blur)', () => {
+        setPrivacyHidden(true);
+        const el = createDayCell();
+        updateDayTotalsDisplay(el, 480, []);
+        expect(el.querySelector('.ahg-day-total').textContent).toBe('••:••');
+    });
+
+    it('updateDayTotalsDisplay mostra o total real com privacidade desativada', () => {
+        setPrivacyHidden(false);
+        const el = createDayCell();
+        updateDayTotalsDisplay(el, 480, []);
+        expect(el.querySelector('.ahg-day-total').textContent).toBe('08:00');
+    });
+
     it('updateDayRequestBadge adiciona badge de inclusão', () => {
         const el = createDayCell();
         updateDayRequestBadge(el, 'inclusao', ['13:00']);

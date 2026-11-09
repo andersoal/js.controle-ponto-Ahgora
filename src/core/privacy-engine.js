@@ -3,6 +3,7 @@
  * Gerencia o estado de privacidade (ocultar horários) e helpers de renderização.
  */
 
+import { bus } from './event-bus.js';
 import { STORAGE_KEYS, gmGetValue, gmSetValue } from './storage-adapter.js';
 import { escapeHtml, fmtHour, fmtMin } from './time-utils.js';
 
@@ -15,6 +16,9 @@ export function isPrivacyHidden() {
 export function setPrivacyHidden(hidden) {
     gmSetValue(STORAGE_KEYS.PRIVACY_HIDE, hidden ? 'true' : 'false');
     applyPrivacyState();
+    // Só aqui (troca deliberada), nunca em applyPrivacyState — essa é
+    // reaplicada a cada render dos painéis e emitiria em loop.
+    bus.emit('privacy:changed', hidden);
 }
 
 export function togglePrivacyHidden() {

@@ -79,10 +79,7 @@ export const ConfigStore = {
             cardsAtivos: ['interjornada', 'intrajornada', 'alarme', 'saldo', 'historico'],
             modoZen: false,
             modoMinimalista: false,
-            webhookUrl: '',
-            webhookEventos: ['limite_10h', 'ilegalidade_12h'],
             gcalUserPath: CONFIG.GCAL_USER_PATH,
-            logLevel: 'INFO',
             flags: {},
             _migrated: false
         };
