@@ -1,3 +1,11 @@
 .venv
 
-node_modulestests/e2e/qa-evidence/
+node_modules
+tests/e2e/qa-evidence/
+
+*.pem
+*.log
+
+.claude/settings.local.json
+.codex/
+.impeccable/live/

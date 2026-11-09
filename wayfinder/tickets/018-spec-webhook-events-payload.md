@@ -34,3 +34,29 @@ Grill to pin down (one question at a time, via /grilling + /domain-modeling):
 
 Deliverable: a behavior spec (events, payload, delivery, failure mode, config UI) recorded in
 the Resolution.
+
+## Additional input (2026-11-07)
+
+User framing, to fold into the grilling above when this ticket is picked up:
+
+- **Trigger**: send on punch registered online (batida confirmada), not on every stage change —
+  narrows the "Which events fire?" bullet toward `punch confirmed` over `punch suggested`.
+- **Payload content**: the suggestion for the *next punch(es) of the same cycle/journey*, plus
+  the *first punch of the next cycle/journey* — i.e. not just the single next target, a short
+  run of upcoming suggested punches spanning into tomorrow's first entry.
+- **Configurable granularity (new)**: how many of those to include should be user-configurable —
+  candidates: only the immediate next; the next two; all remaining punches of the current
+  journey; or the above plus tomorrow's first punch. This is a new axis the existing "Which
+  events fire?" bullet doesn't cover (that bullet is about *which event types*, this is about
+  *how many future punches per event*) — add it as its own grilling question.
+- **Calendar-day awareness (new)**: when projecting "next cycle's first punch" across a day
+  boundary, account for weekends/holidays (don't suggest a next-day entry on a non-business
+  day) — ties into the business-day logic already used by `bank-plan.js`'s
+  `businessDaysWindow`/`isWeekdayBusiness`, worth reusing rather than re-deriving.
+- **Zero-PII framing (reinforces the map's binding privacy constraint)**: payload should carry
+  no personal data — times/labels only, nothing identifying the person — since the intended
+  consumers are generic automation targets: Google Calendar, Outlook, or a custom service (e.g.
+  one that just sets alarms), via create-or-update semantics on the destination's own event
+  concept.
+
+No resolution yet — this is still open, unscoped future-idea material, not a committed spec.
