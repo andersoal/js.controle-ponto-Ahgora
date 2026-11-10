@@ -63,6 +63,17 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 ## Versionamento
 - O workflow `.github/workflows/bump-version.yml` incrementa automaticamente o patch de `@version` a cada push na branch `master`.
 
+## Sincronizacao com upstream (master)
+- `master` (upstream, jonathanfiss/js.controle-ponto-Ahgora) e `dev` (este fork) reescreveram `ahgora-panel.user.js` de forma independente a partir do mesmo commit-base (`44476a4`): `dev` manteve o estilo funcional e ganhou punch editor, exportacao de calendario/CSV, logger alarm e validacao de intervalo de bater ponto; `master` migrou para um padrao de modulos (`WorkdayStore`, `NotifScheduler`, `RuleEngine`, `SessionGuard`, eleicao de aba lider) e adicionou lembretes de entrada/almoco via `GM_notification`.
+- Merge de 2026-11-10: conflito resolvido mantendo a versao de `dev` integralmente (sem perda de funcionalidades existentes), conforme decisao do usuario. Regras novas do upstream **nao foram portadas**.
+- Backlog de regras do upstream ainda nao presentes em `dev` (nenhuma tem flag/config/teste no catalogo acima — portar exige implementacao propria, nao so copia de codigo, dado o estilo diferente):
+  - Maximo de 6 dias consecutivos de trabalho.
+  - Regras de sobreaviso (on-call: janela maxima 24h, descanso pos-acionamento).
+  - Lembrete de entrada e lembrete de almoco configuraveis via notificacao do sistema (`GM_notification`), que funcionam mesmo com a aba em segundo plano.
+  - Eleicao de aba lider para evitar notificacoes duplicadas com multiplas abas abertas.
+
+> ATENCAO (achado nao relacionado ao merge, verificado em 2026-11-10): nenhuma das 15 flags de `ENFORCE_*`/`ENABLE_*`/`SHOW_*` do catalogo acima (BR-001 a BR-015) existe hoje em `ahgora-panel.user.js`. O catalogo documenta regras/flags/casos de teste que ainda nao foram implementados no codigo deste fork, o que quebra o gate de "rastreabilidade Regra -> Config -> Teste" exigido pelo AGENTS.md. Nao implementado aqui por estar fora do escopo deste merge; precisa de decisao explicita antes do proximo merge que dependa desse gate.
+
 ## Calendario rapido (Google e Outlook)
 - No painel do logger, os botoes rapidos criam evento com inicio em `horario maximo - offset` e fim no horario maximo calculado para a fase atual.
 - Em `Detalhes > Alarmes > Configurar`, voce pode:
