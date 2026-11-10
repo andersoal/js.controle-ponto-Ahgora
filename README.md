@@ -12,6 +12,16 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 - Design e UX: DESIGN.md
 - Fluxo de contribuicao: AGENTS.md
 
+## Arquitetura
+- Codigo-fonte em modulos ES em `src/` (nao editar `dist/` a mao):
+  - `src/core/` — config persistida, tema, storage cross-origin (Mirror ↔ Logger), plano de jornada, privacidade.
+  - `src/mirror/` — tudo que roda em `mirror.app.ahgora.com.br` (calendario, editor de batidas, banco de horas, assistente, modal de detalhes).
+  - `src/logger/` — tudo que roda em `app.ahgora.com.br/novabatidaonline` (painel do logger, alarmes, guarda do modal de confirmacao, historico de 2 meses, atalhos de calendario).
+  - `src/shared/` — UI reutilizada pelos dois painéis (icones, toasts, paineis arrastaveis/dockaveis, cartao do assistente).
+  - `src/main.js` — detecta a pagina e inicializa o modulo certo; `src/meta.js` — cabecalho `@grant`/`@match` do userscript.
+- Build: `npm run build` (esbuild, `scripts/build.js`) empacota `src/main.js` num unico IIFE e gera `dist/ahgora-panel.user.js` — esse e o arquivo a instalar no Tampermonkey, nunca o `src/` direto.
+- Testes unitarios em `tests/unit/` cobrem a maioria dos modulos de `src/` 1:1 (`npm test`, vitest).
+
 ## Catalogo unificado de regras (Negocio + CLT/Politica)
 
 ### Matriz de enforcement
@@ -88,12 +98,58 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 - Dados processados localmente no navegador.
 - Sem APIs externas para cálculo operacional.
 
-## Funcionalidades do espelho (v3.0.1)
-- **Total do dia**: badge com horas trabalhadas injetado em cada dia do calendário.
-- **Botão de edição por dia**: ✏️ no canto inferior direito do dia; abre simulador de batidas para prever o total.
-- **Ajustes não aprovados**: batidas `.manual` (inclusão), `.prevista` e classes futuras (`remocao`, `bonus`) são destacadas com cores/ícones e tooltip.
-- **Inconsistências**: badge ⚠️ apenas em dias passados/presentes com batidas ímpares; dias futuros e fins de semana são ignorados.
-- **Banco de horas**: lido do seletor `.espelho-saldo .value` do DOM real.
+## Funcionalidades
+Catalogo completo, verificado em 2026-11-10 lendo integralmente o monolito antigo (branch `dev`, 5.976 linhas) e todos os 36 arquivos de `src/` (~7.458 linhas), mais `npm run build` comparado byte-a-byte com o `dist/ahgora-panel.user.js` versionado (identico, exceto fim-de-linha). Agrupado pela arquitetura em `src/`.
+
+### Core (`src/core/`)
+- Constantes de jornada/CLT, tolerancia e alarmes configuraveis, com camada de config persistida (tema, alarmes, cards ativos, modo Zen, multiplicador de feriado, horario habitual de entrada) — `config.js`.
+- Tema Claro / Escuro / Automatico (segue preferencia do sistema) — `css-injector.js`.
+- Estado compartilhado entre a aba do Espelho (`mirror.app.ahgora.com.br`) e a aba do Logger (`app.ahgora.com.br`), que sao origens diferentes, via GM storage + ponte de cookie — `storage-adapter.js`.
+- Atualizacao entre abas sem polling quando o navegador/Tampermonkey suporta — `storage-adapter.js`.
+- Plano de jornada (8h ou 10h) escolhido pelo usuario e compartilhado entre Espelho e Logger — `journey-plan.js`.
+- Modo privacidade: mascara todos os horarios visiveis nos dois paineis com um clique — `privacy-engine.js`.
+
+### Espelho / calendario (`src/mirror/`)
+- Badge de total trabalhado e de violacao (intervalo longo, turno longo, dia longo, limite absoluto de 12h) em cada dia do calendario — `calendar-decorator.js`, `compliance-engine.js`.
+- Marca ⚪ em dias cujo saldo fica dentro da tolerancia configurada (nao conta nos totais semanal/mensal) — `calendar-decorator.js`.
+- Badge de contagem de batidas impar, e badge +/−/± quando o Ahgora mostra uma solicitacao de ajuste manual pendente para o dia — `calendar-decorator.js`, `dom-scraper.js`.
+- Lapis de edicao em qualquer dia util passado/presente, abrindo um editor flutuante para adicionar, editar, remover e salvar/restaurar batidas daquele dia — varios editores podem ficar abertos ao mesmo tempo para dias diferentes — `punch-editor.js`.
+- Turnos que cruzam a meia-noite (ex.: 22:00→02:00) sao calculados corretamente e creditados ao dia em que comecaram — `shift-pairs.js`, `calculator.js`.
+- Cartao "assistente" com a proxima batida sugerida, janela de contagem, e o planejamento completo do dia (entrada/intervalo/retorno/saida), cada etapa com botao de um clique para Google Calendar ou Outlook — `assistant-engine.js`, `shared/assistant-card.js`.
+- Mini grafico de barras semanal (trabalhado vs. meta por dia) e saldo semanal corrente — `assistant-engine.js`, `shared/assistant-card.js`.
+- Planejador de banco de horas: define uma meta (zerar, reduzir em X, ou atingir um saldo especifico) com prazo (dias ou data) e piso diario, e sugere o horario de saida dia a dia para atingi-la — `bank-plan.js`.
+- Feriados trabalhados sao creditados ao banco de horas com multiplicador configuravel (padrao ×1,4), com preview — `calculator.js`, `bank-plan.js`.
+- Secoes colapsaveis: "Hoje em detalhe" (pares de turno, contagem de interjornada, marcos de 6h/8h/10h/saida ideal), "Mensal" (totais + exportacao CSV), "Banco de Horas" e "Configuracoes" (tema, horario habitual, multiplicador de feriado) — `panel-renderer.js`.
+- Modal de detalhes mensais com tabela por semana — `details-modal.js`.
+- Duas exportacoes CSV: resumo mensal, e "uma linha por batida" para importar em outra ferramenta — `details-modal.js`.
+- Avisos de descanso semanal, hora-extra semanal e descanso dominical mensal — `compliance-engine.js`.
+- Painel flutuante arrastavel, dockavel em qualquer borda/canto (reflow da pagina para abrir espaco), ou colapsavel a uma pílula minima — `shared/ui-components.js`.
+- Modo Zen: painel reduzido mostrando so o assistente e o status do dia — `panel-renderer.js`, `shared/assistant-card.js`.
+
+### Pagina de batida / Logger (`src/logger/`)
+- Painel flutuante do Logger espelha o mesmo cartao assistente, toggle de plano de jornada, modos dock/Zen do painel do Espelho — `logger-renderer.js`.
+- Atalho "Abrir espelho" que aponta automaticamente para a URL do espelho do dispositivo correto quando a URL da pagina de batida traz o codigo do dispositivo — `quick-actions.js`.
+- Painel reativo sem refresh manual: atualiza com batidas locais, com o Espelho (via storage entre abas ou polling leve) e a cada minuto — `live-refresh.js`.
+- Alarmes configuraveis (notificacao + som) para os proximos marcos, com 3 modos (so-10h / intervalo / completo), antecedencia ajustavel e botao de teste — `alarm-engine.js`, `sound-engine.js`.
+- Intercepta o dialogo de confirmacao de batida do proprio Ahgora para mostrar a conformidade do intervalo minimo de 30 minutos em tempo real e bloquear a confirmacao se o intervalo nao tiver passado — funciona tanto no dialogo Vuetify classico quanto no dialogo MUI real de producao (texto PT/EN) — `modal-guard.js`.
+- Historico de 2 meses (mes atual + anterior) unificando batidas do Espelho, capturas locais e ajustes manuais, com lapis para abrir o mesmo editor multi-instancia usado no Espelho — `month-history.js`, `logger-renderer.js`.
+- Mostra a meta de banco de horas (definida no Espelho) incluindo o horario de saida sugerido para hoje — `logger-renderer.js`.
+- Botoes rapidos de calendario (Google/Outlook) para o marco da fase atual, com autoabertura opcional (com confirmacao) numa antecedencia configuravel — `quick-actions.js`.
+
+### Compartilhado (`src/shared/`)
+- Conjunto unico de icones SVG inline (substitui emojis) usado nos dois paineis — `icons.js`.
+- Toasts ancorados perto do botao de bater ponto do Ahgora, com botao de acao opcional (ex.: "Desfazer") — `ui-components.js`.
+- Paineis flutuantes acessiveis por teclado (ARIA, Enter/Espaco, foco preservado entre re-renders) — em todo `mirror/`, `logger/`, `shared/`.
+- Helper de console `window.ahgDiagnostico()` com versao, pagina detectada e timestamp — `main.js`.
+
+## Diferencas conhecidas desde a reescrita modular (dev → src/)
+Verificado em 2026-11-10 lendo o monolito antigo e o `src/` atual na integra (nao apenas grep). Tres diferencas de comportamento reais, as tres parecendo decisao deliberada de arquitetura e nao esquecimento — mas sem migracao explicita registrada antes desta nota, o que o AGENTS.md pede ("nao quebrar comportamento atual sem migracao explicita"):
+
+1. **Reload automatico da pagina a cada 15 min foi removido.** O monolito antigo forcava `location.reload()`/navegacao a cada `CONFIG.AUTO_REFRESH_MINUTES` (15) incondicionalmente. O `src/` substitui isso por refresh reativo (`MutationObserver`/`hashchange`/eventos — `logger/live-refresh.js`), o que resolve staleness de dados sem recarregar a pagina. Se o reload antigo tambem renovava uma sessao/cookie do Ahgora numa aba aberta por muitas horas, esse efeito colateral some. Vale confirmar em uso real de sessao longa.
+2. **Notificacoes de desktop dos marcos 6h/8h/10h/saida-ideal direto do Espelho foram removidas.** Antes, o Espelho disparava `Notification` sozinho, independente do Logger, e pedia permissao de notificacao assim que a pagina carregava. Hoje essas notificacoes so saem do alarme do Logger (`logger/alarm-engine.js`), e a permissao e pedida so quando um alarme de fato dispara. Quem mantem so a aba do Espelho aberta (sem abrir a pagina de bater ponto) deixa de receber esses avisos.
+3. **Badge de total arredondado para o quarto de hora (ex.: "8.25") no calendario foi removido**, sem substituto — hoje so resta o badge `HH:MM` simples.
+
+Nenhuma exportacao CSV, calculo, badge de calendario/alarme/privacidade ou funcionalidade do editor de batidas alem dessas tres foi encontrada faltando.
 
 ## Singleton e remoção de versões antigas
 - A v3.0.1 inclui um canário (`window.__ahgPanelV3`) e uma guarda ativa para evitar múltiplas instâncias.
