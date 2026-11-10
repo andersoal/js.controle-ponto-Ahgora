@@ -274,3 +274,37 @@ describe('AssistantEngine — buildWeekPlan', () => {
         expect(week.balance).toBe(-40);
     });
 });
+
+describe('entrada de amanhã com horário configurado', () => {
+    const min = (h, m = 0) => h * 60 + m;
+    it('descanso libera 03:00 e entrada configurada 08:00 → sugere 08:00', () => {
+        const plan = buildAssistantPlan({ batidas: ['08:00', '12:00', '13:00', '16:00'], now: min(17), entryTime: '08:00' });
+        expect(plan.nextEntryForecast).toEqual({ time: min(24 + 8), reason: 'configured' });
+    });
+    it('descanso termina depois da entrada configurada → vale o descanso', () => {
+        const plan = buildAssistantPlan({ batidas: ['14:00', '18:00', '19:00', '23:00'], now: min(23, 30), entryTime: '08:00' });
+        expect(plan.nextEntryForecast).toEqual({ time: min(34), reason: 'rest' });
+    });
+    it('sem horário configurado → rotina (entrada de hoje)', () => {
+        const plan = buildAssistantPlan({ batidas: ['09:00', '12:00', '13:00', '18:00'], now: min(19), entryTime: '' });
+        expect(plan.nextEntryForecast).toEqual({ time: min(33), reason: 'routine' });
+    });
+});
+
+describe('entrada no próprio dia com horário configurado', () => {
+    const min = (h, m = 0) => h * 60 + m;
+    it('antes do horário configurado sugere ele e projeta o dia a partir dele', () => {
+        const plan = buildAssistantPlan({ batidas: [], now: min(6, 30), entryTime: '08:00', planMinutes: 480 });
+        expect(plan.next.time).toBe(min(8));
+        expect(plan.schedule.find((s) => s.id === 'exit1').time).toBeGreaterThan(min(8));
+    });
+    it('depois do horário configurado sugere agora', () => {
+        const plan = buildAssistantPlan({ batidas: [], now: min(9, 10), entryTime: '08:00' });
+        expect(plan.next.time).toBe(min(9, 10));
+    });
+    it('descanso de 11h prevalece sobre o horário configurado', () => {
+        const plan = buildAssistantPlan({ batidas: [], now: min(6), entryTime: '08:00', yesterdayLastPunch: '23:30' });
+        expect(plan.next.time).toBe(min(10, 30));
+        expect(plan.enforcement.some((e) => e.ruleId === 'BR-001')).toBe(true);
+    });
+});

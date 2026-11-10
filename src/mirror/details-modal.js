@@ -4,9 +4,10 @@
  */
 
 import { CONFIG } from '../core/config.js';
-import { fmtMin, formatDateKey, getWeekNumber, toMin } from '../core/time-utils.js';
+import { fmtMin, formatDateKey, getWeekNumber, nowMin, toMin } from '../core/time-utils.js';
+import { buildShiftPairs } from './shift-pairs.js';
 import { renderMinutes, renderText } from '../core/privacy-engine.js';
-import { saldoComTolerancia } from './calculator.js';
+import { holidayMultiplier, saldoComTolerancia } from './calculator.js';
 import { el } from '../shared/dom-builder.js';
 import { icon } from '../shared/icons.js';
 import { makeDraggable } from '../shared/ui-components.js';
@@ -104,6 +105,28 @@ export function abrirDetalhes(dias) {
     modal.focus();
 }
 
+/**
+ * Todos os turnos do dia numa célula ("08:00→12:00 (04:00) | 13:00→17:00
+ * (04:00)") e o intervalo total entre eles. Usa os mesmos pares do "Hoje em
+ * detalhe": virada de meia-noite marcada com "+1d"; o turno de ontem que
+ * fechou neste dia fica de fora (conta no dia em que começou).
+ */
+export function describeShifts(dia, now = dia?.isToday ? nowMin() : 1440) {
+    const pairs = buildShiftPairs(dia, now).filter((p) => !p.countsForPrevDay);
+    const turnos = pairs.map((p) => {
+        const saida = p.aberto ? 'aberto' : `${p.saida}${p.saidaNextDay ? ' +1d' : ''}`;
+        return `${p.entrada}→${saida} (${fmtMin(p.total)})`;
+    }).join(' | ');
+    let intervalo = null;
+    for (let i = 1; i < pairs.length; i++) {
+        const prev = pairs[i - 1];
+        if (prev.aberto) break;
+        const gap = (toMin(pairs[i].entrada) - toMin(prev.saida) + 1440) % 1440;
+        intervalo = (intervalo || 0) + gap;
+    }
+    return { turnos, intervalo };
+}
+
 export function exportarCsvMensal(dias) {
     const hoje = new Date();
     const diasSemana = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -133,8 +156,8 @@ export function exportarCsvMensal(dias) {
 
     const cabecalhoDados = [
         'Data', 'Dia', 'Semana', 'Útil', 'Feriado',
-        'Batida 1', 'Batida 2', 'Batida 3', 'Batida 4',
-        '1º Turno', '2º Turno', 'Intervalo',
+        'Qtd. batidas',
+        'Turnos', 'Intervalo',
         'Trabalhado', 'Saldo dia', 'Saldo semana', 'Saldo mês'
     ].map((v) => `"${v}"`).join(sep);
 
@@ -149,9 +172,7 @@ export function exportarCsvMensal(dias) {
             semanaAnterior = semana;
         }
         const b = d.batidas;
-        const turno1Min = b[0] && b[1] ? toMin(b[1]) - toMin(b[0]) : null;
-        const turno2Min = b[2] && b[3] ? toMin(b[3]) - toMin(b[2]) : null;
-        const intervMin = b[1] && b[2] ? toMin(b[2]) - toMin(b[1]) : null;
+        const { turnos, intervalo } = describeShifts(d);
         const saldoEfetivo = saldoComTolerancia(d);
         saldoMesAcum += saldoEfetivo;
         saldoSemAcum += saldoEfetivo;
@@ -161,11 +182,10 @@ export function exportarCsvMensal(dias) {
             diasSemana[d.data.getDay()],
             semana,
             d.isBusinessDay ? 'Sim' : 'Não',
-            d.isHoliday ? 'Sim' : 'Não',
-            b[0] || '', b[1] || '', b[2] || '', b[3] || '',
-            turno1Min !== null ? fmtMin(turno1Min) : '',
-            turno2Min !== null ? fmtMin(turno2Min) : '',
-            intervMin !== null ? fmtMin(intervMin) : '',
+            d.isHoliday ? `Sim (×${String(holidayMultiplier()).replace('.', ',')})` : 'Não',
+            b.length,
+            turnos,
+            intervalo !== null ? fmtMin(intervalo) : '',
             b.length > 0 ? fmtMin(d.trabalhado) : '',
             d.isBusinessDay ? fmtMin(d.saldo) : '',
             fmtMin(saldoSemAcum),
@@ -173,12 +193,59 @@ export function exportarCsvMensal(dias) {
         ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(sep);
     });
 
-    const conteudo = [...cabecalhoResumo, '', cabecalhoDados, ...linhas].join('\r\n');
+    // Batidas no mesmo formato vertical do "Exportar batidas": uma linha por
+    // batida, sem limite de 4 por dia.
+    const secaoBatidas = ['"Batidas"', buildCsvBatidasVertical(dias, hoje)];
+    const conteudo = [...cabecalhoResumo, '', cabecalhoDados, ...linhas, '', ...secaoBatidas].join('\r\n');
+    downloadCsv(conteudo, `Ahgora_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}.csv`);
+}
+
+const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+
+/**
+ * Batidas na vertical: uma linha por batida (Num.Batida = ordem no dia).
+ * Dia sem batida sai numa linha s\u00F3, com Batida/Num.Batida vazios, para o
+ * calend\u00E1rio do m\u00EAs ficar completo. Sem bloco de resumo \u2014 pronto para importar.
+ */
+export function buildCsvBatidasVertical(dias, hoje = new Date()) {
+    const diasSemana = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'S\u00E1b'];
+    const header = ['Data', 'Dia', 'Semana', '\u00DAtil', 'Feriado', 'Batida', 'Num.Batida'].map(csvCell).join(';');
+    const linhas = [];
+    (dias || [])
+        .filter((x) => !x.isFuture && x.data.getMonth() === hoje.getMonth())
+        .sort((a, b) => a.data - b.data)
+        .forEach((d) => {
+            const base = [
+                d.data.toLocaleDateString('pt-BR'),
+                diasSemana[d.data.getDay()],
+                getWeekNumber(d.data),
+                d.isBusinessDay ? 'Sim' : 'N\u00E3o',
+                d.isHoliday ? 'Sim' : 'N\u00E3o'
+            ];
+            const batidas = d.batidas || [];
+            if (!batidas.length) {
+                linhas.push([...base, '', ''].map(csvCell).join(';'));
+                return;
+            }
+            batidas.forEach((b, i) => linhas.push([...base, b, i + 1].map(csvCell).join(';')));
+        });
+    return [header, ...linhas].join('\r\n');
+}
+
+export function exportarCsvBatidas(dias) {
+    const hoje = new Date();
+    downloadCsv(
+        buildCsvBatidasVertical(dias, hoje),
+        `Ahgora_batidas_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}.csv`
+    );
+}
+
+function downloadCsv(conteudo, filename) {
     const blob = new Blob(['\uFEFF' + conteudo], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Ahgora_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}.csv`;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

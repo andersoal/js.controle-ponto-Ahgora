@@ -34,6 +34,9 @@
     BANK_GOAL: "ahgora_bank_goal_v1",
     LOCAL_DAY_PUNCHES: "ahgora_local_day_punches_v1",
     PUNCH_HISTORY: "ahgora_history_v6",
+    MIRROR_DAYS: "ahgora_mirror_days_v1",
+    // Resumo do plano da meta de banco de horas (Mirror → Logger).
+    BANK_PLAN_SNAPSHOT: "ahgora_bank_plan_snapshot_v1",
     MIRROR_TODAY: "ahgora_mirror_today",
     MIRROR_TODAY_REF: "ahgora_mirror_today_ref",
     WEEK_BALANCE_CACHE: "ahgora_saldo_semana_anterior",
@@ -202,6 +205,10 @@
         cardsAtivos: ["interjornada", "intrajornada", "alarme", "saldo", "historico"],
         modoZen: false,
         modoMinimalista: false,
+        // Hora em feriado vale N vezes no banco (convenção da empresa).
+        multFeriado: 1.4,
+        // Entrada habitual: sugestão de entrada de amanhã (respeitado o descanso de 11h).
+        horarioEntrada: "08:00",
         gcalUserPath: CONFIG.GCAL_USER_PATH,
         flags: {},
         _migrated: false
@@ -338,7 +345,8 @@
     for (let i = 0; i < batidas.length; i += 2) {
       const entrada = toMin(batidas[i]);
       const saida = batidas[i + 1] ? toMin(batidas[i + 1]) : now;
-      if (entrada !== null && saida !== null) total += saida - entrada;
+      if (entrada === null || saida === null) continue;
+      total += saida >= entrada ? saida - entrada : saida + 1440 - entrada;
     }
     return total;
   }
@@ -358,8 +366,7 @@
   function minuteToDate(baseDate, minute) {
     if (minute === null || minute === void 0) return null;
     const date = new Date(baseDate || /* @__PURE__ */ new Date());
-    const n = (Math.round(minute) % 1440 + 1440) % 1440;
-    date.setHours(Math.floor(n / 60), n % 60, 0, 0);
+    date.setHours(0, Math.round(minute), 0, 0);
     return date;
   }
   function dateParts(date) {
@@ -484,14 +491,33 @@
     return gmGetJson(STORAGE_KEYS.PANEL_POSITIONS, {});
   }
   function applyDockReflow(axes, barW, barH) {
+    const body = document.body;
     Object.values(DOCK_MARGIN_PROP).forEach((prop) => {
-      document.body.style[prop] = "";
+      body.style[prop] = "";
     });
+    if (body.dataset.ahgReflowHeight !== void 0) {
+      body.style.height = body.dataset.ahgReflowHeight;
+      delete body.dataset.ahgReflowHeight;
+    }
     if (!axes) return;
+    const fullHeightHost = isFullHeightHost();
+    let vertical = 0;
     axes.forEach((axis) => {
-      const size = axis === "top" || axis === "bottom" ? barH : barW;
-      document.body.style[DOCK_MARGIN_PROP[axis]] = `${size + DOCK_GAP}px`;
+      const isVertical = axis === "top" || axis === "bottom";
+      const size = (isVertical ? barH : barW) + DOCK_GAP;
+      body.style[DOCK_MARGIN_PROP[axis]] = `${size}px`;
+      if (isVertical) vertical += size;
     });
+    if (vertical > 0 && fullHeightHost) {
+      body.dataset.ahgReflowHeight = body.style.height || "";
+      body.style.height = `calc(100vh - ${Math.round(vertical)}px)`;
+    }
+  }
+  function isFullHeightHost() {
+    const vh = window.innerHeight;
+    const body = document.body;
+    if (!vh || !body.offsetHeight) return false;
+    return Math.abs(body.offsetHeight - vh) <= 2 && document.documentElement.scrollHeight <= vh + 2;
   }
   function savePanelPosition(key, position) {
     if (!key) return;
@@ -605,12 +631,158 @@
     all[key] = { ...all[key], mini: !!mini };
     gmSetJson(STORAGE_KEYS.PANEL_POSITIONS, all);
   }
-  function applyPanelDock(panel, key) {
+  function measureDockFootprint(panel) {
+    const rect = panel.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return { w: rect.width, h: rect.height };
+    const bar = panel.querySelector(".ahg-dock-bar");
+    return { w: bar?.offsetWidth || 170, h: bar?.offsetHeight || 60 };
+  }
+  function layoutAnchoredDock(panel, edge, anchorEl, footprint) {
+    if (!anchorEl || edge !== "left" && edge !== "right") return false;
+    const a = anchorEl.getBoundingClientRect();
+    if (!(a.width > 0)) return false;
+    const space = edge === "right" ? window.innerWidth - a.right - DOCK_GAP * 2 : a.left - DOCK_GAP * 2;
+    if (space < footprint.w) return false;
+    applyDockReflow(null);
+    panel.classList.add("ahg-dock-anchored");
+    panel.style.right = panel.style.bottom = "auto";
+    panel.style.left = edge === "right" ? `${Math.round(a.right + DOCK_GAP)}px` : `${Math.round(a.left - DOCK_GAP - footprint.w)}px`;
+    const maxTop = Math.max(DOCK_GAP, window.innerHeight - footprint.h - DOCK_GAP);
+    panel.style.top = `${Math.round(Math.min(Math.max(DOCK_GAP, a.top), maxTop))}px`;
+    return true;
+  }
+  function layoutPanelDock(panel) {
+    const state = panel?._ahgDockState;
+    if (!state) return;
+    if (!panel.isConnected) {
+      teardownPanelDock(panel);
+      return;
+    }
+    const { edge, key } = state;
+    const axes = EDGE_AXES[edge];
+    const anchorEl = typeof state.anchor === "function" ? state.anchor() : null;
+    if (state.observer && anchorEl !== state.observedAnchor) {
+      if (state.observedAnchor) state.observer.unobserve(state.observedAnchor);
+      if (anchorEl) state.observer.observe(anchorEl);
+      state.observedAnchor = anchorEl;
+    }
+    reassertDockSnapshot(panel, state);
+    const current = measureDockFootprint(panel);
+    const layoutKey = [
+      edge,
+      panel.classList.contains("ahg-dock-expanded"),
+      window.innerWidth,
+      window.innerHeight,
+      Math.round(current.w),
+      Math.round(current.h),
+      !!anchorEl
+    ].join("|");
+    if (layoutKey === state.layoutKey) {
+      if (state.mode === "anchored") {
+        if (!layoutAnchoredDock(panel, edge, anchorEl, current)) {
+          state.layoutKey = null;
+          layoutPanelDock(panel);
+          return;
+        }
+        snapshotDock(panel, state);
+      }
+      return;
+    }
+    state.layoutKey = layoutKey;
+    applyDockReflow(null);
+    panel.classList.remove("ahg-dock-anchored");
+    placePanelOnEdge(panel, axes, key);
+    const footprint = measureDockFootprint(panel);
+    if (layoutAnchoredDock(panel, edge, anchorEl, footprint)) {
+      state.mode = "anchored";
+    } else {
+      state.mode = "edge";
+      applyDockReflow(axes, footprint.w, footprint.h);
+    }
+    snapshotDock(panel, state);
+  }
+  var DOCK_POS_PROPS = ["left", "right", "top", "bottom"];
+  var DOCK_LAYOUT_CLASSES = ["ahg-dock-anchored", "ahg-dock-strip"];
+  function snapshotDock(panel, state) {
+    state.snapshot = {
+      styles: Object.fromEntries(DOCK_POS_PROPS.map((p) => [p, panel.style[p]])),
+      classes: DOCK_LAYOUT_CLASSES.filter((c) => panel.classList.contains(c))
+    };
+  }
+  function reassertDockSnapshot(panel, state) {
+    const snap = state.snapshot;
+    if (!snap) return;
+    DOCK_POS_PROPS.forEach((p) => {
+      if (panel.style[p] !== snap.styles[p]) panel.style[p] = snap.styles[p];
+    });
+    DOCK_LAYOUT_CLASSES.forEach((c) => {
+      const want = snap.classes.includes(c);
+      if (panel.classList.contains(c) !== want) panel.classList.toggle(c, want);
+    });
+    if (panel.style.transform !== "none") panel.style.transform = "none";
+  }
+  function placePanelOnEdge(panel, axes, key) {
+    panel.classList.remove("ahg-dock-strip");
+    panel.style.left = panel.style.right = panel.style.top = panel.style.bottom = "auto";
+    axes.forEach((axis) => {
+      panel.style[axis] = "0px";
+    });
+    if (axes.length === 1) {
+      const axis = axes[0];
+      const pos = readPanelPositions()[key] || {};
+      const horizontal = axis === "top" || axis === "bottom";
+      const strip = horizontal && panel.classList.contains("ahg-dock-expanded");
+      panel.classList.toggle("ahg-dock-strip", strip);
+      if (strip) {
+        panel.style.left = `${DOCK_GAP}px`;
+        panel.style.right = `${DOCK_GAP}px`;
+      } else if (horizontal) {
+        const maxLeft = Math.max(0, window.innerWidth - (panel.offsetWidth || 280));
+        const freeLeft = typeof pos.left === "number" ? pos.left : 20;
+        panel.style.left = `${Math.min(Math.max(0, freeLeft), maxLeft)}px`;
+      } else {
+        const maxTop = Math.max(0, window.innerHeight - (panel.offsetHeight || 48));
+        const freeTop = typeof pos.top === "number" ? pos.top : 20;
+        panel.style.top = `${Math.min(Math.max(0, freeTop), maxTop)}px`;
+      }
+    }
+  }
+  function ensureDockObservers(panel, state) {
+    if (state.onWindowChange) return;
+    let frame = 0;
+    state.onWindowChange = () => {
+      if (frame) return;
+      const raf = window.requestAnimationFrame || ((cb) => setTimeout(cb, 16));
+      frame = raf(() => {
+        frame = 0;
+        layoutPanelDock(panel);
+      });
+    };
+    window.addEventListener("resize", state.onWindowChange);
+    window.addEventListener("scroll", state.onWindowChange, { passive: true, capture: true });
+    if (typeof ResizeObserver === "function") {
+      state.observer = new ResizeObserver(state.onWindowChange);
+      state.observer.observe(panel);
+    }
+  }
+  function teardownPanelDock(panel) {
+    const state = panel._ahgDockState;
+    if (!state) return;
+    if (state.onWindowChange) {
+      window.removeEventListener("resize", state.onWindowChange);
+      window.removeEventListener("scroll", state.onWindowChange, { capture: true });
+    }
+    state.observer?.disconnect();
+    delete panel._ahgDockState;
+    panel.classList.remove("ahg-dock-anchored", "ahg-dock-strip");
+  }
+  function applyPanelDock(panel, key, options = {}) {
     if (!panel || !key) return false;
     const edge = getDockEdge(key);
     const mini = getDockMini(key);
     panel.classList.remove(...DOCK_CLASSES);
     if (!edge) {
+      teardownPanelDock(panel);
       panel.classList.remove("ahg-docked");
       applyDockReflow(null);
       if (mini) {
@@ -624,42 +796,19 @@
     }
     if (panel._ahgDragCleanup) panel._ahgDragCleanup();
     panel.classList.add("ahg-docked", `ahg-dock-${edge}`);
-    const wasCollapsed = panel.classList.contains("ahg-dock-collapsed");
-    const hadState = wasCollapsed || panel.classList.contains("ahg-dock-expanded");
-    panel.classList.add("ahg-dock-collapsed");
-    const bar = panel.querySelector(".ahg-dock-bar");
-    const barW = bar?.offsetWidth || 170;
-    const barH = bar?.offsetHeight || 60;
-    panel.classList.remove("ahg-dock-collapsed");
-    applyDockReflow(EDGE_AXES[edge], barW, barH);
-    if (hadState) {
-      panel.classList.toggle("ahg-dock-collapsed", wasCollapsed);
-      panel.classList.toggle("ahg-dock-expanded", !wasCollapsed);
-    } else {
-      panel.classList.add("ahg-dock-expanded");
-    }
+    const hadState = panel.classList.contains("ahg-dock-collapsed") || panel.classList.contains("ahg-dock-expanded");
+    if (!hadState) panel.classList.add("ahg-dock-expanded");
     panel.style.transform = "none";
-    panel.style.left = panel.style.right = panel.style.top = panel.style.bottom = "auto";
-    const axes = EDGE_AXES[edge];
-    axes.forEach((axis) => {
-      panel.style[axis] = "0px";
-    });
-    if (axes.length === 1) {
-      const axis = axes[0];
-      const pos = readPanelPositions()[key] || {};
-      if (axis === "top" || axis === "bottom") {
-        const maxLeft = Math.max(0, window.innerWidth - (panel.offsetWidth || 280));
-        const freeLeft = typeof pos.left === "number" ? pos.left : 20;
-        panel.style.left = `${Math.min(Math.max(0, freeLeft), maxLeft)}px`;
-      } else {
-        const maxTop = Math.max(0, window.innerHeight - (panel.offsetHeight || 48));
-        const freeTop = typeof pos.top === "number" ? pos.top : 20;
-        panel.style.top = `${Math.min(Math.max(0, freeTop), maxTop)}px`;
-      }
-    }
+    const state = panel._ahgDockState || {};
+    state.edge = edge;
+    state.key = key;
+    state.anchor = typeof options.anchor === "function" ? options.anchor : null;
+    panel._ahgDockState = state;
+    ensureDockObservers(panel, state);
+    layoutPanelDock(panel);
     return true;
   }
-  function buildDockMenuHtml(currentEdge, currentMini = false) {
+  function buildDockMenuHtml(currentEdge, currentMini = false, zen = ConfigStore.get().modoZen) {
     const options = DOCK_EDGES.map((edge) => {
       const active = currentEdge === edge;
       return `<button type="button" class="ahg-dock-option${active ? " active" : ""}" data-dock-edge="${edge}"${active ? ' aria-current="true"' : ""}>${active ? icon("check", { size: 12 }) : ""}${DOCK_LABELS[edge]}</button>`;
@@ -673,6 +822,7 @@
             <button type="button" class="ahg-dock-option${livreActive ? " active" : ""}" data-dock-edge=""${livreActive ? ' aria-current="true"' : ""}>${icon("move", { size: 12 })} Livre</button>
             <button type="button" class="ahg-dock-option${miniActive ? " active" : ""}" data-dock-edge="" data-dock-mini="1"${miniActive ? ' aria-current="true"' : ""}>${icon("dot", { size: 12 })} Minimalista</button>
             ${options}
+            <button type="button" class="ahg-dock-option ahg-dock-option--toggle${zen ? " active" : ""}" data-dock-zen aria-pressed="${zen ? "true" : "false"}" title="Painel enxuto e p\xEDlula s\xF3 com o pr\xF3ximo hor\xE1rio (desligado: painel completo e os pr\xF3ximos da jornada)">${zen ? icon("check", { size: 12 }) : icon("eye-off", { size: 12 })} Modo Zen</button>
         </div>
     </div>`;
   }
@@ -713,6 +863,11 @@
       document.addEventListener("click", onDocClick);
       window.addEventListener("resize", onResize);
     });
+    menu.querySelector("[data-dock-zen]")?.addEventListener("click", () => {
+      ConfigStore.patch({ modoZen: !ConfigStore.get().modoZen });
+      closeMenu();
+      onChange?.(getDockEdge(key));
+    });
     menu.querySelectorAll("[data-dock-edge]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const edge = btn.dataset.dockEdge || null;
@@ -730,6 +885,7 @@
     const expand = panel.classList.contains("ahg-dock-collapsed");
     panel.classList.toggle("ahg-dock-collapsed", !expand);
     panel.classList.toggle("ahg-dock-expanded", expand);
+    layoutPanelDock(panel);
   }
   function setFloatingPanelVisible(panel, fab, visible) {
     const pinned = panel?.classList.contains("ahg-docked") || panel?.classList.contains("ahg-dock-collapsed") || panel?.classList.contains("ahg-dock-expanded");
@@ -764,6 +920,7 @@
       if (panel.classList.contains("ahg-docked") || panel.classList.contains("ahg-dock-expanded")) {
         panel.classList.add("ahg-dock-collapsed");
         panel.classList.remove("ahg-dock-expanded");
+        layoutPanelDock(panel);
       } else {
         setFloatingPanelVisible(panel, fab, false);
       }
@@ -788,6 +945,39 @@
     document.body.appendChild(btn);
     return btn;
   }
+  var toastAnchorProvider = null;
+  var TOAST_ANCHOR_GAP = 10;
+  function setToastAnchor(provider) {
+    toastAnchorProvider = typeof provider === "function" ? provider : null;
+    const region = document.getElementById("ahg-toast-region");
+    if (region) positionToastRegion(region);
+  }
+  function positionToastRegion(region) {
+    const anchorEl = toastAnchorProvider ? toastAnchorProvider() : null;
+    const rect = anchorEl?.getBoundingClientRect();
+    const visible = rect && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+    region.classList.remove("ahg-toast-region--anchored", "ahg-toast-region--above", "ahg-toast-region--below");
+    region.style.left = region.style.top = region.style.right = region.style.bottom = "";
+    region.style.maxWidth = "";
+    if (!visible) return false;
+    const regionH = region.offsetHeight || 0;
+    const above = rect.top - TOAST_ANCHOR_GAP - regionH >= 4;
+    const maxWidth = Math.max(220, Math.min(420, window.innerWidth - 16));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - maxWidth - 8));
+    region.classList.add("ahg-toast-region--anchored", above ? "ahg-toast-region--above" : "ahg-toast-region--below");
+    region.style.right = "auto";
+    region.style.left = `${Math.round(left)}px`;
+    region.style.maxWidth = `${Math.round(maxWidth)}px`;
+    region.style.setProperty("--ahg-toast-arrow-x", `${Math.round(Math.max(12, Math.min(rect.left + 24 - left, maxWidth - 24)))}px`);
+    if (above) {
+      region.style.top = "auto";
+      region.style.bottom = `${Math.round(window.innerHeight - rect.top + TOAST_ANCHOR_GAP)}px`;
+    } else {
+      region.style.bottom = "auto";
+      region.style.top = `${Math.round(rect.bottom + TOAST_ANCHOR_GAP)}px`;
+    }
+    return true;
+  }
   function ensureToastRegion() {
     let region = document.getElementById("ahg-toast-region");
     if (!region) {
@@ -797,6 +987,7 @@
       region.setAttribute("role", "status");
       region.setAttribute("aria-live", "polite");
       document.body.appendChild(region);
+      window.addEventListener("resize", () => positionToastRegion(region));
     }
     return region;
   }
@@ -821,9 +1012,12 @@
       });
       toast.appendChild(btn);
     }
-    ensureToastRegion().appendChild(toast);
+    const region = ensureToastRegion();
+    region.appendChild(toast);
+    positionToastRegion(region);
     setTimeout(() => {
       toast.remove();
+      if (region.childElementCount) positionToastRegion(region);
     }, timeout);
   }
   function openInNewTab(url) {
@@ -1077,9 +1271,21 @@
       restanteMin: CONFIG.DESCANSO_MINIMO
     };
   }
-  function computeDayBalance(batidas, isBusinessDay, now = nowMin()) {
+  function holidayMultiplier() {
+    const m = Number(ConfigStore.get().multFeriado);
+    return Number.isFinite(m) && m >= 1 ? m : 1;
+  }
+  function dayBalanceOptions(dia) {
+    return {
+      restDay: !!dia?.isRestDay,
+      multiplier: dia?.isHoliday ? holidayMultiplier() : 1
+    };
+  }
+  function computeDayBalance(batidas, isBusinessDay, now = nowMin(), { restDay = false, multiplier = 1 } = {}) {
     const trabalhado = batidas.length > 0 ? calcularTrabalhado(batidas, now) : 0;
-    const saldo = isBusinessDay ? trabalhado - CONFIG.CARGA_DIARIA : 0;
+    const carga = restDay ? 0 : CONFIG.CARGA_DIARIA;
+    const creditado = restDay ? Math.round(trabalhado * multiplier) : trabalhado;
+    const saldo = isBusinessDay ? creditado - carga : 0;
     return { trabalhado, saldo };
   }
 
@@ -1330,13 +1536,15 @@
     const batidas = readDayCellPunches(dayEl);
     const manualBatidas = readDayCellManualPunches(dayEl);
     const requestType = readDayCellRequestType(dayEl);
-    const isBusinessDay = weekDay !== 0 && weekDay !== 6 && !isHoliday || batidas.length > 0;
+    const isRestDay = weekDay === 0 || weekDay === 6 || isHoliday;
+    const isBusinessDay = !isRestDay || batidas.length > 0;
     return {
       data,
       dateKey,
       isToday,
       isFuture,
       isHoliday,
+      isRestDay,
       isBusinessDay,
       batidas,
       manualBatidas,
@@ -1358,6 +1566,286 @@
     const texto = saldoEl.textContent.trim();
     const min = toMin(texto);
     return min;
+  }
+
+  // src/mirror/bank-plan.js
+  var DEFAULT_FLOOR_MINUTES = CONFIG.CARGA_DIARIA / 2;
+  var WEEKDAY_LABELS = ["dom", "seg", "ter", "qua", "qui", "sex", "s\xE1b"];
+  function isWeekdayBusiness(date) {
+    const day = date.getDay();
+    return day !== 0 && day !== 6;
+  }
+  function readStore() {
+    return gmGetJson(STORAGE_KEYS.BANK_GOAL, null) || { manualBalance: null, goal: null };
+  }
+  function writeStore(store) {
+    gmSetJson(STORAGE_KEYS.BANK_GOAL, store);
+  }
+  function getManualBalance() {
+    return readStore().manualBalance || null;
+  }
+  function setManualBalance(valueMinutes) {
+    const store = readStore();
+    store.manualBalance = { value: Number(valueMinutes), updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    writeStore(store);
+    return store.manualBalance;
+  }
+  function normalizeBankGoal(raw) {
+    if (!raw) return null;
+    const mode = ["amount", "target"].includes(raw.mode) ? raw.mode : "zero";
+    const target = Number(raw.targetMinutes);
+    const deadlineType = raw.deadlineType === "date" ? "date" : "days";
+    return {
+      mode,
+      amountMinutes: mode === "amount" ? Math.max(0, Number(raw.amountMinutes) || 0) : null,
+      // Saldo-alvo (com sinal): +10:00 para acumular, -2:00 para gastar até lá.
+      targetMinutes: mode === "target" && Number.isFinite(target) ? Math.round(target) : null,
+      deadlineType,
+      deadlineDays: deadlineType === "days" ? Math.max(1, Math.round(Number(raw.deadlineDays) || 1)) : null,
+      deadlineDate: deadlineType === "date" ? raw.deadlineDate || null : null,
+      floorMinutes: Math.max(0, Number(raw.floorMinutes) || DEFAULT_FLOOR_MINUTES),
+      startBalance: raw.startBalance ?? null,
+      createdAt: raw.createdAt || (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  function getBankGoal() {
+    const raw = readStore().goal;
+    return raw ? normalizeBankGoal(raw) : null;
+  }
+  function setBankGoal(goalInput, startBalance) {
+    const store = readStore();
+    store.goal = normalizeBankGoal({ ...goalInput, startBalance });
+    writeStore(store);
+    return store.goal;
+  }
+  function clearBankGoal() {
+    const store = readStore();
+    store.goal = null;
+    writeStore(store);
+  }
+  function workedHolidayCredits(dias = [], hoje = /* @__PURE__ */ new Date(), multiplier = holidayMultiplier()) {
+    return (dias || []).filter((d) => d.isHoliday && !d.isFuture && d.data <= hoje && (d.batidas?.length || 0) > 0).map((d) => ({
+      dateKey: d.dateKey,
+      trabalhado: d.trabalhado || 0,
+      creditado: Math.round((d.trabalhado || 0) * multiplier),
+      multiplier
+    }));
+  }
+  function effectiveBalance({ officialBalance = null, manualBalance = null, dias = [], hoje = /* @__PURE__ */ new Date() } = {}) {
+    if (officialBalance !== null && officialBalance !== void 0) {
+      return { value: officialBalance, source: "oficial" };
+    }
+    if (!manualBalance) return { value: null, source: "indisponivel" };
+    const sinceKey = formatDateKey(new Date(manualBalance.updatedAt));
+    const accrued = (dias || []).filter((d) => d.isBusinessDay && !d.isFuture && d.dateKey > sinceKey && d.data <= hoje).reduce((acc, d) => acc + saldoComTolerancia(d), 0);
+    return { value: manualBalance.value + accrued, source: "manual" };
+  }
+  function businessDaysWindow(goal, dias, hoje) {
+    const scraped = new Map((dias || []).map((d) => [d.dateKey, d]));
+    const days = [];
+    const cursor = new Date(hoje);
+    cursor.setHours(0, 0, 0, 0);
+    const deadlineDate = goal.deadlineType === "date" && goal.deadlineDate ? new Date(goal.deadlineDate) : null;
+    const maxIterations = 365;
+    for (let i = 0; i < maxIterations; i++) {
+      const dateKey = formatDateKey(cursor);
+      const scrapedDay = scraped.get(dateKey);
+      const isBusiness = scrapedDay ? scrapedDay.isBusinessDay : isWeekdayBusiness(cursor);
+      const isHoliday = scrapedDay?.isHoliday === true;
+      if (isBusiness && !isHoliday) {
+        days.push({
+          dateKey,
+          weekdayLabel: WEEKDAY_LABELS[cursor.getDay()],
+          isToday: dateKey === formatDateKey(hoje)
+        });
+      }
+      if (goal.deadlineType === "days" && days.length >= goal.deadlineDays) break;
+      if (deadlineDate && cursor >= deadlineDate && days.length > 0) break;
+      cursor.setDate(cursor.getDate() + 1);
+      if (deadlineDate && cursor > deadlineDate) break;
+    }
+    return days;
+  }
+  function buildBankPlan({
+    officialBalance = null,
+    manualBalance = null,
+    goal = null,
+    dias = [],
+    hoje = /* @__PURE__ */ new Date(),
+    planMinutes = CONFIG.CARGA_DIARIA,
+    now = nowMin(),
+    todayPlannedExit = null
+  } = {}) {
+    const balanceInfo = effectiveBalance({ officialBalance, manualBalance, dias, hoje });
+    const holidayCredits = workedHolidayCredits(dias, hoje);
+    if (!goal) return { active: false, balanceInfo, holidayCredits };
+    if (balanceInfo.value === null) return { active: true, feasible: false, balanceInfo, noBalance: true };
+    const balance = balanceInfo.value;
+    let delta;
+    if (goal.mode === "target") delta = (goal.targetMinutes ?? 0) - balance;
+    else if (goal.mode === "amount") delta = -Math.sign(balance) * Math.min(goal.amountMinutes, Math.abs(balance));
+    else delta = -balance;
+    const targetReduction = Math.abs(delta);
+    const targetBalance = balance + delta;
+    if (targetReduction <= CONFIG.TOLERANCIA) {
+      return { active: true, completed: true, balanceInfo, remaining: 0, targetReduction: 0, targetBalance, holidayCredits };
+    }
+    const direction = delta < 0 ? "early" : "late";
+    const window2 = businessDaysWindow(goal, dias, hoje);
+    const capacity = direction === "early" ? Math.max(0, planMinutes - goal.floorMinutes) : Math.max(0, CONFIG.MAX_HORAS_DIA - planMinutes);
+    const numDays = window2.length;
+    const totalCapacity = capacity * numDays;
+    const achievableMinutes = Math.min(targetReduction, totalCapacity);
+    const base = numDays > 0 ? Math.floor(achievableMinutes / numDays) : 0;
+    let remainder = numDays > 0 ? Math.round(achievableMinutes - base * numDays) : 0;
+    const days = window2.map((day) => {
+      const allocation = Math.min(capacity, base + (remainder > 0 ? 1 : 0));
+      if (remainder > 0) remainder--;
+      let suggestedExit = null;
+      if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== void 0) {
+        suggestedExit = direction === "early" ? Math.max(now, todayPlannedExit - allocation) : todayPlannedExit + allocation;
+      }
+      return { ...day, adjustmentMinutes: allocation, suggestedExit };
+    });
+    return {
+      active: true,
+      completed: false,
+      balanceInfo,
+      direction,
+      targetReduction,
+      targetBalance,
+      achievableMinutes,
+      shortfallMinutes: Math.max(0, targetReduction - achievableMinutes),
+      feasible: achievableMinutes >= targetReduction,
+      days,
+      holidayCredits
+    };
+  }
+  function buildBankPlanSnapshot(bankPlan, dateKey) {
+    if (!bankPlan?.active) return { dateKey, active: false };
+    const today = bankPlan.days?.find((d) => d.isToday) || null;
+    return {
+      dateKey,
+      active: true,
+      completed: !!bankPlan.completed,
+      noBalance: !!bankPlan.noBalance,
+      balance: bankPlan.balanceInfo?.value ?? null,
+      balanceSource: bankPlan.balanceInfo?.source || "indisponivel",
+      targetBalance: bankPlan.targetBalance ?? null,
+      direction: bankPlan.direction || null,
+      targetReduction: bankPlan.targetReduction ?? 0,
+      achievableMinutes: bankPlan.achievableMinutes ?? 0,
+      feasible: bankPlan.feasible !== false,
+      todayExit: today?.suggestedExit ?? null,
+      todayAdjustment: today?.adjustmentMinutes ?? null,
+      days: (bankPlan.days || []).map((d) => ({
+        dateKey: d.dateKey,
+        weekdayLabel: d.weekdayLabel,
+        isToday: !!d.isToday,
+        adjustmentMinutes: d.adjustmentMinutes
+      }))
+    };
+  }
+  function buildBankSummaryLabel(balanceInfo, bankPlan) {
+    if (!bankPlan?.active || !bankPlan.days) {
+      return renderMinutes(balanceInfo?.value ?? null);
+    }
+    const verbo = bankPlan.direction === "early" ? "reduzindo" : "acumulando";
+    return `${verbo} ${renderMinutes(bankPlan.achievableMinutes)} em ${bankPlan.days.length} dia${bankPlan.days.length > 1 ? "s" : ""}`;
+  }
+  function buildManualBalanceFormHtml() {
+    return `
+    <div class="ahg-bank-manual">
+        <span class="ahg-bank-hint">${icon("triangle-alert", { size: 11 })} Sem leitura oficial do Ahgora \u2014 informe o saldo para usar o planejador.</span>
+        <div class="ahg-bank-form-row">
+            <input type="text" id="ahg-bank-manual-input" class="ahg-bank-input" placeholder="ex.: 5:30 ou -2:00" aria-label="Saldo do banco de horas">
+            <button type="button" class="ahg-btn ahg-btn-sm" id="ahg-bank-manual-save">Salvar</button>
+        </div>
+    </div>`;
+  }
+  function buildGoalFormHtml() {
+    return `
+    <div class="ahg-bank-goal-form">
+        <div class="ahg-bank-form-row">
+            <div class="ahg-as-presets" id="ahg-bank-mode-toggle" role="group" aria-label="Tipo de meta">
+                <button type="button" class="ahg-as-preset active" data-bank-mode="zero" aria-pressed="true" title="Levar o banco a 0">Zerar</button>
+                <button type="button" class="ahg-as-preset" data-bank-mode="amount" aria-pressed="false" title="Diminuir o saldo em X (aproxima de zero)">Reduzir em</button>
+                <button type="button" class="ahg-as-preset" data-bank-mode="target" aria-pressed="false" title="Saldo final desejado: positivo para acumular, negativo para gastar">Chegar a</button>
+            </div>
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-amount-row" hidden>
+            <span class="ahg-config-label">Reduzir</span>
+            <input type="text" id="ahg-bank-amount" class="ahg-bank-input ahg-bank-input-sm" placeholder="2:00" aria-label="Quantidade a reduzir">
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-target-row" hidden>
+            <span class="ahg-config-label">Saldo final</span>
+            <input type="text" id="ahg-bank-target" class="ahg-bank-input" placeholder="+10:00 ou -2:00" aria-label="Saldo-alvo do banco de horas">
+        </div>
+        <div class="ahg-bank-form-row">
+            <div class="ahg-as-presets" id="ahg-bank-deadline-toggle" role="group" aria-label="Formato do prazo">
+                <button type="button" class="ahg-as-preset active" data-deadline-type="days">Dias \xFAteis</button>
+                <button type="button" class="ahg-as-preset" data-deadline-type="date">Data</button>
+            </div>
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-deadline-days">
+            <span class="ahg-config-label">Em</span>
+            <input type="number" id="ahg-bank-days" class="ahg-bank-input ahg-bank-input-sm" min="1" value="5">
+            <span class="ahg-config-label">dias \xFAteis</span>
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-deadline-date" hidden>
+            <span class="ahg-config-label">At\xE9</span>
+            <input type="date" id="ahg-bank-date" class="ahg-bank-input">
+        </div>
+        <div class="ahg-bank-form-row">
+            <span class="ahg-config-label">Piso m\xEDnimo por dia</span>
+            <input type="text" id="ahg-bank-floor" class="ahg-bank-input ahg-bank-input-sm" placeholder="4:00" value="4:00">
+        </div>
+        <button type="button" class="ahg-btn ahg-btn-sm" id="ahg-bank-goal-create">${icon("target", { size: 11 })} Criar meta</button>
+    </div>`;
+  }
+  function buildDayRowHtml(day) {
+    const label = day.suggestedExit !== null ? `Saia at\xE9 <b>${renderClock(day.suggestedExit)}</b>` : `${day.adjustmentMinutes > 0 ? "\u2212" : ""}${renderMinutes(day.adjustmentMinutes)} no dia`;
+    return `
+    <div class="ahg-bank-day ${day.isToday ? "today" : ""}">
+        <span class="ahg-bank-day-lbl">${day.isToday ? "Hoje" : `${escapeHtml(day.weekdayLabel)} ${escapeHtml(day.dateKey.slice(8, 10))}/${escapeHtml(day.dateKey.slice(5, 7))}`}</span>
+        <span class="ahg-bank-day-val">${label}</span>
+    </div>`;
+  }
+  function buildActivePlanHtml(bankPlan) {
+    const rows = bankPlan.days.map(buildDayRowHtml).join("");
+    const shortfall = !bankPlan.feasible ? `<div class="ahg-bank-hint ahg-bank-hint--warn">${icon("triangle-alert", { size: 11 })} Dentro do prazo e do piso informados, chega a reduzir ${renderMinutes(bankPlan.achievableMinutes)} de ${renderMinutes(bankPlan.targetReduction)} \u2014 faltam ${renderMinutes(bankPlan.shortfallMinutes)}.</div>` : "";
+    const verbo = bankPlan.direction === "early" ? "sair mais cedo" : "ficar a mais";
+    const objetivo = `<div class="ahg-bank-hint">${icon("target", { size: 11 })} Objetivo: banco em <b>${renderMinutes(bankPlan.targetBalance)}</b> \u2014 ${verbo} ${renderMinutes(bankPlan.targetReduction)} no total</div>`;
+    return `
+    <div class="ahg-bank-plan">
+        ${objetivo}
+        ${shortfall}
+        <div class="ahg-bank-days">${rows}</div>
+        <button type="button" class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-bank-goal-cancel">Cancelar meta</button>
+    </div>`;
+  }
+  function buildHolidayCreditsHtml(credits = []) {
+    if (!credits.length) return "";
+    return credits.map((c) => {
+      const mult = String(c.multiplier).replace(".", ",");
+      const date = `${c.dateKey.slice(8, 10)}/${c.dateKey.slice(5, 7)}`;
+      return `<div class="ahg-bank-hint" title="Feriado trabalhado em car\xE1ter especial \u2014 cada hora vale \xD7${mult} no banco (Configura\xE7\xF5es)">${icon("calendar", { size: 11 })} Feriado ${date} trabalhado: ${renderMinutes(c.trabalhado)} \xD7 ${mult} = <b>+${renderMinutes(c.creditado)}</b> no banco</div>`;
+    }).join("");
+  }
+  function buildBankPlanHtml(bankPlan) {
+    return buildHolidayCreditsHtml(bankPlan.holidayCredits) + buildBankPlanBodyHtml(bankPlan);
+  }
+  function buildBankPlanBodyHtml(bankPlan) {
+    if (bankPlan.completed) {
+      return `<div class="ahg-bank-hint ahg-bank-hint--ok">${icon("circle-check", { size: 11 })} Meta de banco de horas conclu\xEDda.</div>`;
+    }
+    if (!bankPlan.active) {
+      return buildGoalFormHtml();
+    }
+    if (bankPlan.noBalance) {
+      return buildManualBalanceFormHtml();
+    }
+    return buildActivePlanHtml(bankPlan);
   }
 
   // src/mirror/guidance-engine.js
@@ -1461,16 +1949,81 @@
     return guidance;
   }
 
-  // src/mirror/mirror-summary.js
-  function buildTurno(entrada, saida, now) {
+  // src/mirror/shift-pairs.js
+  var MAX_CROSS_DAY_SHIFT = 12 * 60;
+  var DAY = 1440;
+  function addDaysKey(date, n) {
+    const d = new Date(date);
+    d.setDate(d.getDate() + n);
+    return formatDateKey(d);
+  }
+  function linkCrossDayShifts(dias = []) {
+    const byKey = new Map(dias.map((d) => [d.dateKey, d]));
+    dias.forEach((d) => {
+      delete d.carryIn;
+      delete d.carryOut;
+    });
+    [...dias].sort((a, b) => a.data - b.data).forEach((d) => {
+      const own = ownPunches(d);
+      if (d.isToday || own.length % 2 === 0) return;
+      const next = byKey.get(addDaysKey(d.data, 1));
+      const first = next?.batidas?.[0];
+      if (!first) return;
+      const entrada = toMin(own[own.length - 1]);
+      const saida = toMin(first);
+      if (entrada === null || saida === null) return;
+      const duration = DAY - entrada + saida;
+      if (duration <= 0 || duration > MAX_CROSS_DAY_SHIFT) return;
+      d.carryOut = first;
+      next.carryIn = own[own.length - 1];
+    });
+    return dias;
+  }
+  function ownPunches(dia) {
+    const base = dia?.batidas || [];
+    return dia?.carryIn ? base.slice(1) : base;
+  }
+  function effectivePunches(dia) {
+    const own = ownPunches(dia);
+    return dia?.carryOut ? [...own, dia.carryOut] : own;
+  }
+  function makePair(entrada, saida, now, extra = {}) {
     const e = toMin(entrada);
-    const s = saida ? toMin(saida) : now;
-    if (e === null || s === null) return null;
+    if (e === null) return null;
+    let s = saida ? toMin(saida) : now;
+    if (s === null || s === void 0) return null;
+    const aberto = !saida;
+    const saidaNextDay = s < e || !!extra.saidaNextDay;
+    if (s < e) s += DAY;
     const total = s - e;
     const severity = classifyShiftDuration(total);
-    const classe = severity === "ok" ? "infos" : severity;
-    return { entrada, saida: saida || "agora", aberto: !saida, total, limite: CONFIG.MAX_HORAS_TURNO, classe };
+    return {
+      entrada,
+      saida: saida || "agora",
+      aberto,
+      total,
+      saidaNextDay,
+      entradaPrevDay: !!extra.entradaPrevDay,
+      countsForPrevDay: !!extra.countsForPrevDay,
+      classe: severity === "ok" ? "infos" : severity
+    };
   }
+  function buildShiftPairs(dia, now) {
+    if (!dia) return [];
+    const pairs = [];
+    if (dia.carryIn) {
+      pairs.push(makePair(dia.carryIn, dia.batidas[0], now, { entradaPrevDay: true, saidaNextDay: true, countsForPrevDay: true }));
+    }
+    const own = ownPunches(dia);
+    for (let i = 0; i < own.length; i += 2) {
+      const isLast = i + 1 >= own.length;
+      const saida = own[i + 1] || isLast && dia.carryOut || null;
+      pairs.push(makePair(own[i], saida, now, { saidaNextDay: isLast && !!dia.carryOut }));
+    }
+    return pairs.filter(Boolean);
+  }
+
+  // src/mirror/mirror-summary.js
   function buildStatus(batidas) {
     const q = batidas.length;
     if (q === 0) return "\u{1F6EC} N\xE3o iniciado";
@@ -1484,12 +2037,13 @@
     const hojeDia = dias.find((x) => x.isToday);
     if (!hojeDia) return null;
     const agora = nowMin();
-    const { trabalhado, saldo } = computeDayBalance(hojeDia.batidas, hojeDia.isBusinessDay, agora);
+    linkCrossDayShifts(dias);
+    const { trabalhado, saldo } = computeDayBalance(effectivePunches(hojeDia), hojeDia.isBusinessDay, agora, dayBalanceOptions(hojeDia));
     hojeDia.trabalhado = trabalhado;
     hojeDia.saldo = saldo;
     dias.forEach((dia) => {
       if (dia === hojeDia) return;
-      const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora);
+      const balance = computeDayBalance(effectivePunches(dia), dia.isBusinessDay, agora, dayBalanceOptions(dia));
       dia.trabalhado = balance.trabalhado;
       dia.saldo = balance.saldo;
       dia.violations = getDayRuleViolations(dia);
@@ -1497,12 +2051,13 @@
     hojeDia.violations = getDayRuleViolations(hojeDia);
     const aggregates = computePeriodAggregates(dias, hoje);
     const bancoHoras = extrairBancoHoras();
-    const guidance = buildPunchGuidance(hojeDia.batidas, aggregates.saldoSemana);
-    const milestones = computeExitMilestones(hojeDia.batidas, agora);
-    const retorno = computeReturnWindow(hojeDia.batidas);
+    const jornada = effectivePunches(hojeDia);
+    hojeDia.batidasJornada = jornada;
+    const guidance = buildPunchGuidance(jornada, aggregates.saldoSemana);
+    const milestones = computeExitMilestones(jornada, agora);
+    const retorno = computeReturnWindow(jornada);
     const alerta = computeDailyAlert(hojeDia);
-    const turno1 = hojeDia.batidas[0] ? buildTurno(hojeDia.batidas[0], hojeDia.batidas[1], agora) : null;
-    const turno2 = hojeDia.batidas[2] ? buildTurno(hojeDia.batidas[2], hojeDia.batidas[3], agora) : null;
+    const turnos = buildShiftPairs(hojeDia, agora);
     const amanha = new Date(hojeDia.data);
     amanha.setDate(amanha.getDate() + 1);
     const diaAmanha = dias.find((d) => d.dateKey === formatDateKey(amanha));
@@ -1515,15 +2070,17 @@
     ontem.setDate(ontem.getDate() - 1);
     const diaOntem = dias.find((d) => d.dateKey === formatDateKey(ontem));
     const yesterdayLastPunch = diaOntem?.batidas?.[diaOntem.batidas.length - 1] || yesterdayLastPunchFallback || null;
-    const hojePunchHealth = getPunchCountHealth(hojeDia.batidas.length, { isToday: true });
+    const hojePunchHealth = getPunchCountHealth(jornada.length, { isToday: true });
     const weeklyRestWarning = getWeeklyRestWarning(dias, hoje);
     const weeklyOvertimeWarning = getWeeklyOvertimeWarning(aggregates.saldoSemana);
     const monthlySundayRestWarning = getMonthlySundayRestWarning(dias, hoje);
     const compliance = collectComplianceDays(dias);
+    const bankBalance = effectiveBalance({ officialBalance: bancoHoras, manualBalance: getManualBalance(), dias, hoje });
     return {
       hoje: hojeDia,
       dias,
       bancoHoras,
+      bankBalance,
       ...aggregates,
       ...milestones,
       ...compliance,
@@ -1531,9 +2088,9 @@
       retornoMaximo: retorno.retornoMaximo,
       alerta,
       guidance,
-      turno1,
-      turno2,
-      status: buildStatus(hojeDia.batidas),
+      turnos,
+      status: buildStatus(jornada),
+      restStartToday: hojeDia.carryIn ? hojeDia.batidas[0] : null,
       interjornada,
       yesterdayLastPunch,
       hojePunchHealth,
@@ -2066,6 +2623,18 @@
     animation: ahg-fadein .3s ease;
 }
 .ahg-toast-action { flex-shrink: 0; }
+/* Bal\xE3o alinhado a um elemento do host (ex.: bot\xE3o de bater ponto): a regi\xE3o
+   \xE9 posicionada via JS (positionToastRegion) e a seta aponta para a \xE2ncora. */
+.ahg-toast-region--anchored { align-items: stretch; }
+.ahg-toast-region--anchored .ahg-toast { position: relative; }
+.ahg-toast-region--above .ahg-toast:last-child::after,
+.ahg-toast-region--below .ahg-toast:first-child::before {
+    content: ''; position: absolute; left: var(--ahg-toast-arrow-x, 24px);
+    width: 10px; height: 10px; background: var(--ahg-bg-card);
+    border: 1px solid var(--ahg-border); transform: rotate(45deg);
+}
+.ahg-toast-region--above .ahg-toast:last-child::after { bottom: -6px; border-top: none; border-left: none; }
+.ahg-toast-region--below .ahg-toast:first-child::before { top: -6px; border-bottom: none; border-right: none; }
 @keyframes ahg-fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 /* Assistente de fluxo de batidas */
@@ -2179,6 +2748,19 @@
 .ahg-modal-hint--info { color: var(--ahg-info); }
 .ahg-modal-hint--error { color: var(--ahg-danger); }
 .ahg-modal-hint--ok { color: var(--ahg-ok); }
+/* Banner de cabe\xE7alho dentro do modal do host (fundo claro do MUI): o texto
+   herda a cor do host (contraste garantido) e o estado vem da faixa + tinta. */
+.ahg-modal-hint--banner {
+    --ahg-hint-c: var(--ahg-info);
+    display: block; box-sizing: border-box; width: 100%;
+    margin: 0 0 12px; padding: 10px 14px;
+    border-radius: 8px; border-left: 4px solid var(--ahg-hint-c);
+    background: color-mix(in srgb, var(--ahg-hint-c) 12%, transparent);
+    color: inherit; font-size: 14px; font-weight: 600; line-height: 1.35; text-align: left;
+}
+.ahg-modal-hint--banner.ahg-modal-hint--ok { --ahg-hint-c: var(--ahg-ok); }
+.ahg-modal-hint--banner.ahg-modal-hint--error { --ahg-hint-c: var(--ahg-danger); }
+.ahg-modal-hint--banner.ahg-modal-hint--info { --ahg-hint-c: var(--ahg-info); }
 
 /* Ancoragem em borda \u2014 "importante para quando est\xE1 com janela reduzida":
    o painel fica colado numa borda e nunca cai fora da tela. Vira uma barra
@@ -2233,6 +2815,99 @@
 
 #ahg-panel.ahg-docked.ahg-dock-expanded,
 #ahg-batida-panel.ahg-docked.ahg-dock-expanded { max-height: calc(100vh - 16px); }
+
+/* Topo/rodap\xE9 expandido: faixa horizontal de largura total (left/right via JS).
+   O conte\xFAdo, que \xE9 uma lista plana de se\xE7\xF5es e linhas, vira colunas lado a
+   lado \u2014 a altura cai e o reflow empurra a p\xE1gina bem menos. */
+#ahg-panel.ahg-dock-strip,
+#ahg-batida-panel.ahg-dock-strip {
+    min-width: 0; max-width: none; width: auto;
+    max-height: min(50vh, 420px);
+}
+.ahg-panel.ahg-dock-strip > .a-body {
+    display: block;
+    column-width: 250px; column-gap: 24px;
+    column-rule: 1px solid var(--ahg-border);
+}
+.ahg-panel.ahg-dock-strip > .a-body > * {
+    break-inside: avoid; margin-bottom: 4px;
+}
+.ahg-panel.ahg-dock-strip > .a-body > .a-sec { break-after: avoid; }
+/* Divis\xF3rias horizontais n\xE3o fazem sentido entre colunas \u2014 o column-rule separa. */
+.ahg-panel.ahg-dock-strip > .a-body > hr.a-div { display: none; }
+.ahg-panel.ahg-dock-strip > .a-body > .a-sec:not(:first-child) { margin-top: 8px; }
+
+/* P\xEDlula minimalista com a sequ\xEAncia dos pr\xF3ximos hor\xE1rios (Zen desligado) */
+.ahg-dock-bar--seq { gap: 8px; flex-wrap: nowrap; white-space: nowrap; }
+.ahg-dock-step { display: inline-flex; align-items: baseline; gap: 4px; }
+.ahg-dock-step:not(.is-next) .ahg-dock-bar-time { font-size: 13px; color: var(--ahg-text); opacity: .8; }
+.ahg-dock-sep { color: var(--ahg-text-label); }
+.ahg-dock-step.is-done { opacity: .5; }
+.ahg-dock-step.is-done .ahg-dock-bar-time { text-decoration: line-through; text-decoration-thickness: 1px; }
+.ahg-dock-step.is-goal .ahg-dock-bar-time { color: var(--ahg-warn); }
+.ahg-dock-bar--stack { flex-direction: column; align-items: flex-start; gap: 2px; }
+.ahg-dock-bar--stack .ahg-dock-step { gap: 6px; }
+.ahg-dock-option--toggle { border-top: 1px solid var(--ahg-border); margin-top: 4px; padding-top: 8px; }
+
+/* Logger \u2014 atalho do espelho com o estado da sincroniza\xE7\xE3o embutido */
+/* Link compacto ao lado do t\xEDtulo "\xDAltima batida" */
+.ahg-sec-action { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ahg-mirror-link {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none;
+    color: var(--ahg-primary); text-decoration: none;
+    padding: 2px 8px; border: 1px solid var(--ahg-border); border-radius: 999px;
+}
+.ahg-mirror-link:hover, .ahg-mirror-link:focus-visible { background: var(--ahg-hover-bg); text-decoration: underline; }
+.ahg-sync-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ahg-ok); }
+.ahg-sync--cache .ahg-sync-dot { background: var(--ahg-info); }
+.ahg-sync--stale .ahg-sync-dot,
+.ahg-sync--none .ahg-sync-dot { background: var(--ahg-warn); }
+.ahg-sync-label { font-size: 10px; font-weight: 600; color: var(--ahg-text-label); text-transform: uppercase; letter-spacing: .3px; }
+
+/* Logger \u2014 hist\xF3rico do m\xEAs atual + anterior com ajuste manual */
+.ahg-hist-month { margin: 2px 0 6px; }
+.ahg-hist-month-title {
+    cursor: pointer; list-style: none; user-select: none;
+    font-size: 11px; font-weight: 700; text-transform: capitalize; color: var(--ahg-text);
+    padding: 4px 0;
+}
+.ahg-hist-month-title::-webkit-details-marker { display: none; }
+.ahg-hist-month-title::before { content: '\u25B8 '; color: var(--ahg-text-label); }
+.ahg-hist-month[open] > .ahg-hist-month-title::before { content: '\u25BE '; }
+.ahg-hist-month-title small { font-weight: 500; color: var(--ahg-text-label); text-transform: none; }
+.ahg-hist-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.ahg-hist-day {
+    display: grid; grid-template-columns: max-content minmax(0, 1fr) auto auto; align-items: center; gap: 4px 10px;
+    padding: 4px 6px; border-radius: var(--ahg-radius); font-size: 11px;
+}
+.ahg-hist-day:hover { background: var(--ahg-hover-bg); }
+.ahg-hist-day.is-today { background: color-mix(in srgb, var(--ahg-primary) 8%, transparent); }
+.ahg-hist-day.is-today .ahg-hist-date,
+.ahg-hist-day.is-today .ahg-hist-punch { color: var(--ahg-primary); font-weight: 700; }
+.ahg-hist-day.is-manual { box-shadow: inset 3px 0 0 var(--ahg-warn); }
+.ahg-hist-date { color: var(--ahg-text-label); white-space: nowrap; }
+.ahg-hist-punches { display: grid; grid-template-columns: repeat(4, minmax(0, 5ch)); gap: 2px 6px; font-variant-numeric: tabular-nums; min-width: 0; }
+.ahg-hist-punch { font-weight: 600; white-space: nowrap; }
+.ahg-hist-empty { grid-column: 1 / -1; }
+.ahg-hist-more {
+    justify-self: start; white-space: nowrap; cursor: help; font-size: 10px; font-weight: 700;
+    color: var(--ahg-primary); border: 1px solid color-mix(in srgb, var(--ahg-primary) 40%, transparent);
+    border-radius: 999px; padding: 0 5px; line-height: 15px;
+}
+.ahg-hist-badge-slot { width: 17px; }
+.ahg-hist-empty { color: var(--ahg-text-label); font-style: italic; }
+.ahg-hist-badge {
+    display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    color: var(--ahg-warn); border: 1px solid color-mix(in srgb, var(--ahg-warn) 45%, transparent);
+    border-radius: 999px; padding: 1px 6px;
+}
+.ahg-hist-edit {
+    grid-column: 4; background: none; border: 1px solid transparent; border-radius: var(--ahg-radius);
+    color: var(--ahg-text-label); cursor: pointer; padding: 3px 5px; line-height: 0;
+}
+.ahg-hist-edit:hover, .ahg-hist-edit:focus-visible { color: var(--ahg-primary); border-color: var(--ahg-border); }
 
 /* Prazo/piso do planejador de banco de horas */
 .ahg-bank-goal-form, .ahg-bank-plan, .ahg-bank-manual { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
@@ -2434,6 +3109,21 @@
     });
     modal.focus();
   }
+  function describeShifts(dia, now = dia?.isToday ? nowMin() : 1440) {
+    const pairs = buildShiftPairs(dia, now).filter((p) => !p.countsForPrevDay);
+    const turnos = pairs.map((p) => {
+      const saida = p.aberto ? "aberto" : `${p.saida}${p.saidaNextDay ? " +1d" : ""}`;
+      return `${p.entrada}\u2192${saida} (${fmtMin(p.total)})`;
+    }).join(" | ");
+    let intervalo = null;
+    for (let i = 1; i < pairs.length; i++) {
+      const prev = pairs[i - 1];
+      if (prev.aberto) break;
+      const gap = (toMin(pairs[i].entrada) - toMin(prev.saida) + 1440) % 1440;
+      intervalo = (intervalo || 0) + gap;
+    }
+    return { turnos, intervalo };
+  }
   function exportarCsvMensal(dias) {
     const hoje = /* @__PURE__ */ new Date();
     const diasSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "S\xE1b"];
@@ -2463,12 +3153,8 @@
       "Semana",
       "\xDAtil",
       "Feriado",
-      "Batida 1",
-      "Batida 2",
-      "Batida 3",
-      "Batida 4",
-      "1\xBA Turno",
-      "2\xBA Turno",
+      "Qtd. batidas",
+      "Turnos",
       "Intervalo",
       "Trabalhado",
       "Saldo dia",
@@ -2485,9 +3171,7 @@
         semanaAnterior = semana;
       }
       const b = d.batidas;
-      const turno1Min = b[0] && b[1] ? toMin(b[1]) - toMin(b[0]) : null;
-      const turno2Min = b[2] && b[3] ? toMin(b[3]) - toMin(b[2]) : null;
-      const intervMin = b[1] && b[2] ? toMin(b[2]) - toMin(b[1]) : null;
+      const { turnos, intervalo } = describeShifts(d);
       const saldoEfetivo = saldoComTolerancia(d);
       saldoMesAcum += saldoEfetivo;
       saldoSemAcum += saldoEfetivo;
@@ -2496,26 +3180,55 @@
         diasSemana[d.data.getDay()],
         semana,
         d.isBusinessDay ? "Sim" : "N\xE3o",
-        d.isHoliday ? "Sim" : "N\xE3o",
-        b[0] || "",
-        b[1] || "",
-        b[2] || "",
-        b[3] || "",
-        turno1Min !== null ? fmtMin(turno1Min) : "",
-        turno2Min !== null ? fmtMin(turno2Min) : "",
-        intervMin !== null ? fmtMin(intervMin) : "",
+        d.isHoliday ? `Sim (\xD7${String(holidayMultiplier()).replace(".", ",")})` : "N\xE3o",
+        b.length,
+        turnos,
+        intervalo !== null ? fmtMin(intervalo) : "",
         b.length > 0 ? fmtMin(d.trabalhado) : "",
         d.isBusinessDay ? fmtMin(d.saldo) : "",
         fmtMin(saldoSemAcum),
         fmtMin(saldoMesAcum)
       ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(sep);
     });
-    const conteudo = [...cabecalhoResumo, "", cabecalhoDados, ...linhas].join("\r\n");
+    const secaoBatidas = ['"Batidas"', buildCsvBatidasVertical(dias, hoje)];
+    const conteudo = [...cabecalhoResumo, "", cabecalhoDados, ...linhas, "", ...secaoBatidas].join("\r\n");
+    downloadCsv(conteudo, `Ahgora_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}.csv`);
+  }
+  var csvCell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  function buildCsvBatidasVertical(dias, hoje = /* @__PURE__ */ new Date()) {
+    const diasSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "S\xE1b"];
+    const header = ["Data", "Dia", "Semana", "\xDAtil", "Feriado", "Batida", "Num.Batida"].map(csvCell).join(";");
+    const linhas = [];
+    (dias || []).filter((x) => !x.isFuture && x.data.getMonth() === hoje.getMonth()).sort((a, b) => a.data - b.data).forEach((d) => {
+      const base = [
+        d.data.toLocaleDateString("pt-BR"),
+        diasSemana[d.data.getDay()],
+        getWeekNumber(d.data),
+        d.isBusinessDay ? "Sim" : "N\xE3o",
+        d.isHoliday ? "Sim" : "N\xE3o"
+      ];
+      const batidas = d.batidas || [];
+      if (!batidas.length) {
+        linhas.push([...base, "", ""].map(csvCell).join(";"));
+        return;
+      }
+      batidas.forEach((b, i) => linhas.push([...base, b, i + 1].map(csvCell).join(";")));
+    });
+    return [header, ...linhas].join("\r\n");
+  }
+  function exportarCsvBatidas(dias) {
+    const hoje = /* @__PURE__ */ new Date();
+    downloadCsv(
+      buildCsvBatidasVertical(dias, hoje),
+      `Ahgora_batidas_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}.csv`
+    );
+  }
+  function downloadCsv(conteudo, filename) {
     const blob = new Blob(["\uFEFF" + conteudo], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `Ahgora_${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}.csv`;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -3317,7 +4030,7 @@
   }
 
   // src/mirror/assistant-engine.js
-  var WEEKDAY_LABELS = ["dom", "seg", "ter", "qua", "qui", "sex", "s\xE1b"];
+  var WEEKDAY_LABELS2 = ["dom", "seg", "ter", "qua", "qui", "sex", "s\xE1b"];
   var SUGGESTION_LABELS = {
     entry: "Entrada",
     exit1: "Sa\xEDda p/ intervalo",
@@ -3335,7 +4048,9 @@
   function balancedFirstShift(planMinutes) {
     return Math.min(Math.round(planMinutes / 2), CONFIG.MAX_HORAS_TURNO);
   }
-  function interjornadaEarliestEntry(yesterdayLastPunch) {
+  function interjornadaEarliestEntry(yesterdayLastPunch, restStartToday = null) {
+    const todayStart = toMin(restStartToday);
+    if (todayStart !== null) return todayStart + CONFIG.DESCANSO_MINIMO;
     const last = toMin(yesterdayLastPunch);
     if (last === null) return null;
     const earliest = last + CONFIG.DESCANSO_MINIMO - CONFIG.MINUTES_PER_DAY;
@@ -3350,7 +4065,10 @@
     saldoSemana = 0,
     now = nowMin(),
     yesterdayLastPunch = null,
-    intervalMinutes = 60
+    restStartToday = null,
+    intervalMinutes = 60,
+    // Horário de entrada configurado ('HH:MM'); vazio/null = rotina (entrada de hoje).
+    entryTime = ConfigStore.get().horarioEntrada
   } = {}) {
     const enforcement = [];
     const schedule = [];
@@ -3359,6 +4077,7 @@
     let idealExit = null;
     let workedPlanned = null;
     let nextDayEntry = null;
+    let nextEntryForecast = null;
     const count = batidas.length;
     const interval = clamp(intervalMinutes, CONFIG.INTERVALO_MINIMO, null);
     if (intervalMinutes < CONFIG.INTERVALO_MINIMO) {
@@ -3392,10 +4111,11 @@
     }
     if (count === 0) {
       stage = "entry";
-      const earliest = interjornadaEarliestEntry(yesterdayLastPunch);
-      let entryTime = now;
-      if (earliest !== null && entryTime < earliest) {
-        entryTime = earliest;
+      const earliest = interjornadaEarliestEntry(yesterdayLastPunch, restStartToday);
+      const configuredEntry = toMin(entryTime);
+      let entryAt = configuredEntry !== null && now < configuredEntry ? configuredEntry : now;
+      if (earliest !== null && now < earliest) {
+        entryAt = Math.max(entryAt, earliest);
         enforcement.push(rule(
           "BR-001",
           "hard-block",
@@ -3403,10 +4123,10 @@
           "entry"
         ));
       }
-      next = suggestion("entry", entryTime, "next", earliest, null);
+      next = suggestion("entry", entryAt, "next", earliest, null);
       schedule.push({ ...next });
       const shift1 = balancedFirstShift(planMinutes);
-      const exit1 = entryTime + shift1;
+      const exit1 = entryAt + shift1;
       const returnTime = exit1 + interval;
       const exitFinal = returnTime + (planMinutes - shift1);
       schedule.push(suggestion("exit1", exit1, "planned"));
@@ -3518,6 +4238,10 @@
         if (lastPunch !== null) {
           const restEnd = lastPunch + CONFIG.DESCANSO_MINIMO;
           nextDayEntry = restEnd >= CONFIG.MINUTES_PER_DAY ? restEnd : null;
+          const configured = toMin(entryTime);
+          const firstEntry = toMin(batidas[0]);
+          const preferred = configured !== null ? configured + CONFIG.MINUTES_PER_DAY : firstEntry !== null ? firstEntry + CONFIG.MINUTES_PER_DAY : null;
+          nextEntryForecast = preferred !== null && preferred >= restEnd ? { time: preferred, reason: configured !== null ? "configured" : "routine" } : { time: Math.max(restEnd, CONFIG.MINUTES_PER_DAY), reason: "rest" };
         }
       }
     }
@@ -3537,16 +4261,17 @@
       enforcement,
       idealExit,
       workedPlanned,
-      nextDayEntry
+      nextDayEntry,
+      nextEntryForecast
     };
   }
   function buildWeekPlan({ dias = [], hoje = /* @__PURE__ */ new Date(), planMinutes = CONFIG.CARGA_DIARIA } = {}) {
     const weekDays = dias.filter((d) => d.isBusinessDay && sameWeek(d.data, hoje)).sort((a, b) => a.data - b.data);
     const days = weekDays.map((d) => {
-      const target = d.isToday ? planMinutes : CONFIG.CARGA_DIARIA;
+      const target = d.isRestDay ? 0 : d.isToday ? planMinutes : CONFIG.CARGA_DIARIA;
       return {
         dateKey: d.dateKey,
-        weekdayLabel: WEEKDAY_LABELS[d.data.getDay()],
+        weekdayLabel: WEEKDAY_LABELS2[d.data.getDay()],
         isToday: !!d.isToday,
         isFuture: !!d.isFuture,
         worked: d.trabalhado || 0,
@@ -3562,6 +4287,10 @@
   }
 
   // src/shared/assistant-card.js
+  function interjornadaLabel(minutes = CONFIG.DESCANSO_MINIMO) {
+    const amount = minutes % 60 === 0 ? `${minutes / 60}h` : fmtMin(minutes);
+    return `Intervalo ${amount}`;
+  }
   var STAGE_TITLES = {
     entry: "Pr\xF3xima batida \u2014 Entrada",
     interval: "Pr\xF3xima batida \u2014 Sa\xEDda p/ intervalo",
@@ -3608,6 +4337,18 @@
     }
     return html;
   }
+  function buildNextDayEntryHtml(assistant, alarmConfig) {
+    const restEnd = assistant.nextDayEntry ?? null;
+    const forecast = assistant.nextEntryForecast || null;
+    if (restEnd === null && !forecast) return "";
+    const suggested = forecast ? forecast.time : restEnd;
+    const restText = restEnd !== null ? `amanh\xE3 a partir de ${renderClock(restEnd)} (${interjornadaLabel()})` : "";
+    const suggestedText = forecast && (restEnd === null || suggested !== restEnd) ? `${restText ? " \xB7 " : "amanh\xE3 "}entrada ${renderClock(suggested)}` : "";
+    const calLabel = forecast?.reason === "rest" || suggested === restEnd ? `Entrada liberada (${interjornadaLabel()})` : "Entrada";
+    const calendar = buildCalendarLinksHtml({ label: calLabel, time: suggested }, alarmConfig);
+    return `<div class="ahg-as-next-window" title="Descanso m\xEDnimo entre jornadas (interjornada, CLT art. 66); entrada sugerida pelo hor\xE1rio configurado">${restText}${suggestedText}
+        <span class="ahg-as-step-cal">${calendar}</span></div>`;
+  }
   function buildScheduleHtml(assistant, alarmConfig) {
     if (!assistant.schedule?.length) return "";
     const steps = assistant.schedule.map((step) => {
@@ -3648,7 +4389,7 @@
             </div>
         </div>`;
     } else {
-      const nextDay = assistant.nextDayEntry !== null && assistant.nextDayEntry !== void 0 ? `<div class="ahg-as-next-window">amanh\xE3 a partir de ${renderClock(assistant.nextDayEntry)}</div>` : "";
+      const nextDay = buildNextDayEntryHtml(assistant, alarmConfig);
       body = `
         <div class="ahg-as-next">
             <div class="ahg-as-next-time done">${icon("circle-check", { size: 30 })}</div>
@@ -3671,11 +4412,63 @@
         ${ideal}
     </div>`;
   }
-  function buildDockBarHtml(assistant, fallbackLabel = "") {
-    const label = assistant?.next?.label || fallbackLabel || "Painel";
-    const time = assistant?.next ? renderClock(assistant.next.time) : "--:--";
+  var DOCK_SHORT_LABELS = { entry: "Entrada", exit1: "Sa\xEDda", return: "Retorno", exitFinal: "Sa\xEDda" };
+  var DOCK_MAX_STEPS = 4;
+  function buildDockBarHtml(assistant, fallbackLabel = "", { zen = ConfigStore.get().modoZen, full = false, edge = null, exitOverride = null } = {}) {
+    if (full && !zen) {
+      const html = buildFullDayDockBarHtml(assistant, { edge, exitOverride });
+      if (html) return html;
+    }
+    const upcoming = (assistant?.schedule || []).filter((s) => s.status !== "done" && s.time !== null && s.time !== void 0);
+    if (!zen && upcoming.length > 1) {
+      const steps = upcoming.slice(0, DOCK_MAX_STEPS).map((s) => `
+            <span class="ahg-dock-step${s.status === "next" ? " is-next" : ""}"><span class="ahg-dock-bar-time">${renderClock(s.time)}</span><span class="ahg-dock-bar-label">${escapeHtml(DOCK_SHORT_LABELS[s.id] || s.label || "")}</span></span>`).join('<span class="ahg-dock-sep" aria-hidden="true">\xB7</span>');
+      return `
+    <div class="ahg-dock-bar ahg-dock-bar--seq" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+        ${icon("clock", { size: 14 })}
+        ${steps}
+    </div>`;
+    }
+    return buildSingleDockBarHtml(assistant, fallbackLabel);
+  }
+  function buildFullDayDockBarHtml(assistant, { edge = null, exitOverride = null } = {}) {
+    const schedule = (assistant?.schedule || []).filter((s) => s.time !== null && s.time !== void 0);
+    if (!schedule.length) return "";
+    const steps = schedule.slice(0, DOCK_MAX_STEPS).map((s) => {
+      const goal = s.id === "exitFinal" && s.status !== "done" && exitOverride?.time !== null && exitOverride?.time !== void 0;
+      const time = goal ? exitOverride.time : s.time;
+      const cls = ["ahg-dock-step", s.status === "next" ? "is-next" : "", s.status === "done" ? "is-done" : "", goal ? "is-goal" : ""].filter(Boolean).join(" ");
+      const title = goal ? ` title="Sa\xEDda sugerida pela meta do banco de horas (sem a meta: ${renderClock(s.time)})"` : s.status === "done" ? ' title="Batida feita"' : "";
+      const label = `${DOCK_SHORT_LABELS[s.id] || s.label || ""}${goal ? " \xB7 meta" : ""}`;
+      return `<span class="${cls}"${title}><span class="ahg-dock-bar-time">${renderClock(time)}</span><span class="ahg-dock-bar-label">${escapeHtml(label)}</span></span>`;
+    });
+    const forecast = !assistant?.next && assistant?.nextEntryForecast;
+    if (forecast) {
+      steps.push(`<span class="ahg-dock-step is-next" title="Previs\xE3o da pr\xF3xima entrada"><span class="ahg-dock-bar-time">${renderClock(forecast.time)}</span><span class="ahg-dock-bar-label">Amanh\xE3</span></span>`);
+    }
+    const stack = edge === "left" || edge === "right";
     return `
-    <div class="ahg-dock-bar" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+    <div class="ahg-dock-bar ahg-dock-bar--seq ahg-dock-bar--full${stack ? " ahg-dock-bar--stack" : ""}" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+        ${icon("clock", { size: 14 })}
+        ${steps.join(stack ? "" : '<span class="ahg-dock-sep" aria-hidden="true">\xB7</span>')}
+    </div>`;
+  }
+  function buildSingleDockBarHtml(assistant, fallbackLabel) {
+    let label = assistant?.next?.label || fallbackLabel || "Painel";
+    let time = assistant?.next ? renderClock(assistant.next.time) : "--:--";
+    let title = "";
+    if (!assistant?.next && assistant?.nextEntryForecast) {
+      const { time: forecast, reason } = assistant.nextEntryForecast;
+      time = renderClock(forecast);
+      label = reason === "rest" ? `Entrada amanh\xE3 \xB7 ${interjornadaLabel()}` : "Entrada amanh\xE3";
+      title = {
+        rest: "Previs\xE3o da pr\xF3xima entrada: fim do descanso m\xEDnimo entre jornadas",
+        configured: "Previs\xE3o da pr\xF3xima entrada: hor\xE1rio de entrada configurado (descanso de 11h respeitado)",
+        routine: "Previs\xE3o da pr\xF3xima entrada: mesmo hor\xE1rio da entrada de hoje"
+      }[reason] || "";
+    }
+    return `
+    <div class="ahg-dock-bar" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado"${title ? ` title="${escapeHtml(title)}"` : ""}>
         ${icon("clock", { size: 14 })}
         <span class="ahg-dock-bar-time">${time}</span>
         <span class="ahg-dock-bar-label">${escapeHtml(label)}</span>
@@ -3683,7 +4476,7 @@
   }
   function bindAssistantCard(rootEl, { onPresetSelect } = {}) {
     if (!rootEl || typeof onPresetSelect !== "function") return;
-    rootEl.querySelectorAll(".ahg-as-preset").forEach((btn) => {
+    rootEl.querySelectorAll(".ahg-as-preset[data-preset]").forEach((btn) => {
       btn.addEventListener("click", () => onPresetSelect(btn.dataset.preset));
     });
   }
@@ -3708,218 +4501,6 @@
     </div>`;
   }
 
-  // src/mirror/bank-plan.js
-  var DEFAULT_FLOOR_MINUTES = CONFIG.CARGA_DIARIA / 2;
-  var WEEKDAY_LABELS2 = ["dom", "seg", "ter", "qua", "qui", "sex", "s\xE1b"];
-  function isWeekdayBusiness(date) {
-    const day = date.getDay();
-    return day !== 0 && day !== 6;
-  }
-  function readStore() {
-    return gmGetJson(STORAGE_KEYS.BANK_GOAL, null) || { manualBalance: null, goal: null };
-  }
-  function writeStore(store) {
-    gmSetJson(STORAGE_KEYS.BANK_GOAL, store);
-  }
-  function getManualBalance() {
-    return readStore().manualBalance || null;
-  }
-  function setManualBalance(valueMinutes) {
-    const store = readStore();
-    store.manualBalance = { value: Number(valueMinutes), updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
-    writeStore(store);
-    return store.manualBalance;
-  }
-  function normalizeBankGoal(raw) {
-    if (!raw) return null;
-    const mode = raw.mode === "amount" ? "amount" : "zero";
-    const deadlineType = raw.deadlineType === "date" ? "date" : "days";
-    return {
-      mode,
-      amountMinutes: mode === "amount" ? Math.max(0, Number(raw.amountMinutes) || 0) : null,
-      deadlineType,
-      deadlineDays: deadlineType === "days" ? Math.max(1, Math.round(Number(raw.deadlineDays) || 1)) : null,
-      deadlineDate: deadlineType === "date" ? raw.deadlineDate || null : null,
-      floorMinutes: Math.max(0, Number(raw.floorMinutes) || DEFAULT_FLOOR_MINUTES),
-      startBalance: raw.startBalance ?? null,
-      createdAt: raw.createdAt || (/* @__PURE__ */ new Date()).toISOString()
-    };
-  }
-  function getBankGoal() {
-    const raw = readStore().goal;
-    return raw ? normalizeBankGoal(raw) : null;
-  }
-  function setBankGoal(goalInput, startBalance) {
-    const store = readStore();
-    store.goal = normalizeBankGoal({ ...goalInput, startBalance });
-    writeStore(store);
-    return store.goal;
-  }
-  function clearBankGoal() {
-    const store = readStore();
-    store.goal = null;
-    writeStore(store);
-  }
-  function effectiveBalance({ officialBalance = null, manualBalance = null, dias = [], hoje = /* @__PURE__ */ new Date() } = {}) {
-    if (officialBalance !== null && officialBalance !== void 0) {
-      return { value: officialBalance, source: "oficial" };
-    }
-    if (!manualBalance) return { value: null, source: "indisponivel" };
-    const sinceKey = formatDateKey(new Date(manualBalance.updatedAt));
-    const accrued = (dias || []).filter((d) => d.isBusinessDay && !d.isFuture && d.dateKey > sinceKey && d.data <= hoje).reduce((acc, d) => acc + saldoComTolerancia(d), 0);
-    return { value: manualBalance.value + accrued, source: "manual" };
-  }
-  function businessDaysWindow(goal, dias, hoje) {
-    const scraped = new Map((dias || []).map((d) => [d.dateKey, d]));
-    const days = [];
-    const cursor = new Date(hoje);
-    cursor.setHours(0, 0, 0, 0);
-    const deadlineDate = goal.deadlineType === "date" && goal.deadlineDate ? new Date(goal.deadlineDate) : null;
-    const maxIterations = 365;
-    for (let i = 0; i < maxIterations; i++) {
-      const dateKey = formatDateKey(cursor);
-      const scrapedDay = scraped.get(dateKey);
-      const isBusiness = scrapedDay ? scrapedDay.isBusinessDay : isWeekdayBusiness(cursor);
-      if (isBusiness) {
-        days.push({
-          dateKey,
-          weekdayLabel: WEEKDAY_LABELS2[cursor.getDay()],
-          isToday: dateKey === formatDateKey(hoje)
-        });
-      }
-      if (goal.deadlineType === "days" && days.length >= goal.deadlineDays) break;
-      if (deadlineDate && cursor >= deadlineDate && days.length > 0) break;
-      cursor.setDate(cursor.getDate() + 1);
-      if (deadlineDate && cursor > deadlineDate) break;
-    }
-    return days;
-  }
-  function buildBankPlan({
-    officialBalance = null,
-    manualBalance = null,
-    goal = null,
-    dias = [],
-    hoje = /* @__PURE__ */ new Date(),
-    planMinutes = CONFIG.CARGA_DIARIA,
-    now = nowMin(),
-    todayPlannedExit = null
-  } = {}) {
-    const balanceInfo = effectiveBalance({ officialBalance, manualBalance, dias, hoje });
-    if (!goal) return { active: false, balanceInfo };
-    if (balanceInfo.value === null) return { active: true, feasible: false, balanceInfo, noBalance: true };
-    const balance = balanceInfo.value;
-    const targetReduction = goal.mode === "zero" ? Math.abs(balance) : Math.min(goal.amountMinutes, Math.abs(balance));
-    if (targetReduction <= CONFIG.TOLERANCIA) {
-      return { active: true, completed: true, balanceInfo, remaining: 0, targetReduction: 0 };
-    }
-    const direction = balance > 0 ? "early" : "late";
-    const window2 = businessDaysWindow(goal, dias, hoje);
-    const capacity = direction === "early" ? Math.max(0, planMinutes - goal.floorMinutes) : Math.max(0, CONFIG.MAX_HORAS_DIA - planMinutes);
-    const numDays = window2.length;
-    const totalCapacity = capacity * numDays;
-    const achievableMinutes = Math.min(targetReduction, totalCapacity);
-    const base = numDays > 0 ? Math.floor(achievableMinutes / numDays) : 0;
-    let remainder = numDays > 0 ? Math.round(achievableMinutes - base * numDays) : 0;
-    const days = window2.map((day) => {
-      const allocation = Math.min(capacity, base + (remainder > 0 ? 1 : 0));
-      if (remainder > 0) remainder--;
-      let suggestedExit = null;
-      if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== void 0) {
-        suggestedExit = direction === "early" ? Math.max(now, todayPlannedExit - allocation) : todayPlannedExit + allocation;
-      }
-      return { ...day, adjustmentMinutes: allocation, suggestedExit };
-    });
-    return {
-      active: true,
-      completed: false,
-      balanceInfo,
-      direction,
-      targetReduction,
-      achievableMinutes,
-      shortfallMinutes: Math.max(0, targetReduction - achievableMinutes),
-      feasible: achievableMinutes >= targetReduction,
-      days
-    };
-  }
-  function buildBankSummaryLabel(balanceInfo, bankPlan) {
-    if (!bankPlan?.active || !bankPlan.days) {
-      return renderMinutes(balanceInfo?.value ?? null);
-    }
-    const verbo = bankPlan.direction === "early" ? "reduzindo" : "compensando";
-    return `${verbo} ${renderMinutes(bankPlan.achievableMinutes)} em ${bankPlan.days.length} dia${bankPlan.days.length > 1 ? "s" : ""}`;
-  }
-  function buildManualBalanceFormHtml() {
-    return `
-    <div class="ahg-bank-manual">
-        <span class="ahg-bank-hint">${icon("triangle-alert", { size: 11 })} Sem leitura oficial do Ahgora \u2014 informe o saldo para usar o planejador.</span>
-        <div class="ahg-bank-form-row">
-            <input type="text" id="ahg-bank-manual-input" class="ahg-bank-input" placeholder="ex.: 5:30 ou -2:00" aria-label="Saldo do banco de horas">
-            <button type="button" class="ahg-btn ahg-btn-sm" id="ahg-bank-manual-save">Salvar</button>
-        </div>
-    </div>`;
-  }
-  function buildGoalFormHtml() {
-    return `
-    <div class="ahg-bank-goal-form">
-        <div class="ahg-bank-form-row">
-            <label class="ahg-toggle"><input type="radio" name="ahg-bank-mode" value="zero" checked> Zerar</label>
-            <label class="ahg-toggle"><input type="radio" name="ahg-bank-mode" value="amount"> Reduzir em
-                <input type="text" id="ahg-bank-amount" class="ahg-bank-input ahg-bank-input-sm" placeholder="2:00" aria-label="Quantidade a reduzir">
-            </label>
-        </div>
-        <div class="ahg-bank-form-row">
-            <div class="ahg-as-presets" id="ahg-bank-deadline-toggle" role="group" aria-label="Formato do prazo">
-                <button type="button" class="ahg-as-preset active" data-deadline-type="days">Dias \xFAteis</button>
-                <button type="button" class="ahg-as-preset" data-deadline-type="date">Data</button>
-            </div>
-        </div>
-        <div class="ahg-bank-form-row" id="ahg-bank-deadline-days">
-            <span class="ahg-config-label">Em</span>
-            <input type="number" id="ahg-bank-days" class="ahg-bank-input ahg-bank-input-sm" min="1" value="5">
-            <span class="ahg-config-label">dias \xFAteis</span>
-        </div>
-        <div class="ahg-bank-form-row" id="ahg-bank-deadline-date" hidden>
-            <span class="ahg-config-label">At\xE9</span>
-            <input type="date" id="ahg-bank-date" class="ahg-bank-input">
-        </div>
-        <div class="ahg-bank-form-row">
-            <span class="ahg-config-label">Piso m\xEDnimo por dia</span>
-            <input type="text" id="ahg-bank-floor" class="ahg-bank-input ahg-bank-input-sm" placeholder="4:00" value="4:00">
-        </div>
-        <button type="button" class="ahg-btn ahg-btn-sm" id="ahg-bank-goal-create">${icon("target", { size: 11 })} Criar meta</button>
-    </div>`;
-  }
-  function buildDayRowHtml(day) {
-    const label = day.suggestedExit !== null ? `Saia at\xE9 <b>${renderClock(day.suggestedExit)}</b>` : `${day.adjustmentMinutes > 0 ? "\u2212" : ""}${renderMinutes(day.adjustmentMinutes)} no dia`;
-    return `
-    <div class="ahg-bank-day ${day.isToday ? "today" : ""}">
-        <span class="ahg-bank-day-lbl">${day.isToday ? "Hoje" : `${escapeHtml(day.weekdayLabel)} ${escapeHtml(day.dateKey.slice(8, 10))}/${escapeHtml(day.dateKey.slice(5, 7))}`}</span>
-        <span class="ahg-bank-day-val">${label}</span>
-    </div>`;
-  }
-  function buildActivePlanHtml(bankPlan) {
-    const rows = bankPlan.days.map(buildDayRowHtml).join("");
-    const shortfall = !bankPlan.feasible ? `<div class="ahg-bank-hint ahg-bank-hint--warn">${icon("triangle-alert", { size: 11 })} Dentro do prazo e do piso informados, chega a reduzir ${renderMinutes(bankPlan.achievableMinutes)} de ${renderMinutes(bankPlan.targetReduction)} \u2014 faltam ${renderMinutes(bankPlan.shortfallMinutes)}.</div>` : "";
-    return `
-    <div class="ahg-bank-plan">
-        ${shortfall}
-        <div class="ahg-bank-days">${rows}</div>
-        <button type="button" class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-bank-goal-cancel">Cancelar meta</button>
-    </div>`;
-  }
-  function buildBankPlanHtml(bankPlan) {
-    if (bankPlan.completed) {
-      return `<div class="ahg-bank-hint ahg-bank-hint--ok">${icon("circle-check", { size: 11 })} Meta de banco de horas conclu\xEDda.</div>`;
-    }
-    if (!bankPlan.active) {
-      return buildGoalFormHtml();
-    }
-    if (bankPlan.noBalance) {
-      return buildManualBalanceFormHtml();
-    }
-    return buildActivePlanHtml(bankPlan);
-  }
-
   // src/mirror/panel-renderer.js
   var PERSIST_KEY = "mirror-panel";
   function ensurePanelContainer() {
@@ -3942,6 +4523,27 @@
       });
     }
     return { panel, fab };
+  }
+  function buildHolidayRowHtml(hoje) {
+    if (!hoje?.isHoliday || !(hoje.batidas?.length > 0)) return "";
+    const mult = holidayMultiplier();
+    const multLabel = `\xD7${String(mult).replace(".", ",")}`;
+    const creditado = Math.round((hoje.trabalhado || 0) * mult);
+    return `<div class="a-row infos" title="Feriado trabalhado em car\xE1ter especial \u2014 cada hora vale ${multLabel} no banco (Configura\xE7\xF5es)">
+        <span class="a-lbl">${icon("calendar")} Feriado ${multLabel}</span>
+        <span class="a-val pos">${renderMinutes(hoje.trabalhado || 0)} \u2192 +${renderMinutes(creditado)}<small class="a-cap">car\xE1ter especial \xB7 pr\xE9via do banco</small></span></div>`;
+  }
+  function buildShiftPairsHtml(turnos = []) {
+    let n = 0;
+    return (turnos || []).map((t) => {
+      const label = t.countsForPrevDay ? "Turno de ontem" : `${++n}\xBA turno`;
+      const entrada = `${renderText(t.entrada)}${t.entradaPrevDay ? ' <small class="a-cap">ontem</small>' : ""}`;
+      const saida = `${renderText(t.saida)}${t.saidaNextDay ? ' <small class="a-cap">+1 dia</small>' : ""}`;
+      const notas = [renderMinutes(t.total)];
+      if (t.aberto) notas.push("em andamento");
+      if (t.countsForPrevDay) notas.push("conta em ontem");
+      return `<div class="a-row ${t.classe}"><span class="a-lbl">${label}</span><span class="a-val neu">${entrada} \u2192 ${saida}<small class="a-cap">${notas.join(" \xB7 ")}</small></span></div>`;
+    }).join("");
   }
   function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
     const r = resumo;
@@ -3975,8 +4577,13 @@
         </div>
         <div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val ${r.hoje.saldo >= 0 ? "pos" : "warn"}">${renderMinutes(r.hoje.trabalhado)}</span></div>
         <div class="a-row infos"><span class="a-lbl">Saldo do dia</span><span class="a-val ${r.hoje.saldo >= 0 ? "pos" : "neg"}">${renderMinutes(r.hoje.saldo)}</span></div>
+        ${buildHolidayRowHtml(r.hoje)}
     `;
-    if (cfg.flags?.F006_inconsistencias && r.punchAnomalyDays?.length > 0) {
+    if (cfg.modoZen) {
+      html += `</div><div class="a-foot">Modo Zen \xB7 Atualizado ${fmtHour(nowMin())}</div>`;
+      return html;
+    }
+    if (cfg.flags?.F006_inconsistencias !== false && r.punchAnomalyDays?.length > 0) {
       html += `<div class="a-row warn"><span class="a-lbl">${icon("triangle-alert")} Aten\xE7\xE3o</span><span class="a-val warn"><small>${renderText(anomalyLabel)}</small></span></div>`;
     }
     if (r.alerta) {
@@ -4000,12 +4607,7 @@
       html += `<div class="a-row warn"><span class="a-lbl">Descanso mensal</span><span class="a-val warn"><small>${renderText(r.monthlySundayRestWarning)}</small></span></div>`;
     }
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-day-details"><summary class="a-sec">Hoje em detalhe</summary>`;
-    if (r.turno1) {
-      html += `<div class="a-row ${r.turno1.classe}"><span class="a-lbl">1\xBA turno</span><span class="a-val neu">${renderText(r.turno1.entrada)} \u2192 ${renderText(r.turno1.saida)}<small class="a-cap">${renderMinutes(r.turno1.total)} ${r.turno1.aberto ? "\xB7 em andamento" : ""}</small></span></div>`;
-    }
-    if (r.turno2) {
-      html += `<div class="a-row ${r.turno2.classe}"><span class="a-lbl">2\xBA turno</span><span class="a-val neu">${renderText(r.turno2.entrada)} \u2192 ${renderText(r.turno2.saida)}<small class="a-cap">${renderMinutes(r.turno2.total)} ${r.turno2.aberto ? "\xB7 em andamento" : ""}</small></span></div>`;
-    }
+    html += buildShiftPairsHtml(r.turnos);
     if (r.retornoMinimo) {
       html += `<div class="a-row infos"><span class="a-lbl">${icon("pause")} Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} \u2192 ${renderClock(r.retornoMaximo)}</span></div>`;
     }
@@ -4021,8 +4623,9 @@
         <span class="a-val ${r.saldoMes >= 0 ? "pos" : "neg"}">${renderMinutes(r.saldoMes)}<small class="a-cap">${r.diasRestantesMes} \xFAteis restantes</small></span></div>
         <div class="a-row infos clickable" id="ahg-open-details" role="button" tabindex="0"><span class="a-lbl">${icon("bar-chart")} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
         <div class="a-row infos clickable" id="ahg-export-csv" role="button" tabindex="0"><span class="a-lbl">${icon("download")} Exportar CSV</span><span class="a-val neu"><small>relat\xF3rio do m\xEAs</small></span></div>
+        <div class="a-row infos clickable" id="ahg-export-csv-vertical" role="button" tabindex="0"><span class="a-lbl">${icon("download")} Exportar batidas</span><span class="a-val neu"><small>uma linha por batida</small></span></div>
     </details>`;
-    if (cfg.flags?.F009_banco_horas) {
+    if (cfg.flags?.F009_banco_horas !== false) {
       const bankPlan = view.bankPlan || buildBankPlan({ officialBalance: r.bancoHoras ?? null });
       const balanceValue = bankPlan.balanceInfo?.value ?? null;
       const summaryLabel = buildBankSummaryLabel(bankPlan.balanceInfo, bankPlan);
@@ -4041,8 +4644,11 @@
                     <option value="dark" ${cfg.tema === "dark" ? "selected" : ""}>Escuro</option>
                 </select>
             </div>
-            <div class="ahg-config-item">
-                <label class="ahg-toggle"><input type="checkbox" id="ahg-zen-toggle" ${cfg.modoZen ? "checked" : ""}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span>Modo Zen</label>
+            <div class="ahg-config-item"><span class="ahg-config-label">Hor\xE1rio de entrada</span>
+                <input class="ahg-config-select" type="time" id="ahg-horario-entrada" value="${escapeHtml(cfg.horarioEntrada || "")}" title="Entrada habitual: a sugest\xE3o de entrada de amanh\xE3 usa este hor\xE1rio quando o descanso de 11h j\xE1 acabou">
+            </div>
+            <div class="ahg-config-item"><span class="ahg-config-label">Hora em feriado vale</span>
+                <input class="ahg-config-select" type="number" id="ahg-mult-feriado" min="1" max="3" step="0.1" value="${Number(cfg.multFeriado) || 1.4}" title="Multiplicador do banco para horas trabalhadas em feriado (ex.: 1,4)">
             </div>
         </div>
     </details>`;
@@ -4058,7 +4664,8 @@
     const calendarButtons = buildQuickCalendarButtons(autoLink, alarmConfig);
     const plan = getJourneyPlan();
     const assistant = buildAssistantPlan({
-      batidas: resumo.hoje.batidas,
+      batidas: resumo.hoje.batidasJornada || resumo.hoje.batidas,
+      restStartToday: resumo.restStartToday || null,
       planMinutes: plan.minutes,
       saldoSemana: resumo.saldoSemana,
       yesterdayLastPunch: resumo.yesterdayLastPunch || null
@@ -4077,10 +4684,18 @@
       todayPlannedExit
     });
     if (bankPlan.completed) clearBankGoal();
+    const bankTodayExit = bankPlan.days?.find((d) => d.isToday)?.suggestedExit ?? null;
+    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null));
     const view = {
       assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
       weekHtml: buildWeekViewHtml(weekPlan),
-      dockBarHtml: buildDockBarHtml(assistant, resumo.status),
+      // Fixado numa borda: pílula com os 4 horários; a saída final segue a
+      // meta de banco de horas, se houver.
+      dockBarHtml: buildDockBarHtml(assistant, resumo.status, {
+        full: !!getDockEdge(PERSIST_KEY),
+        edge: getDockEdge(PERSIST_KEY),
+        exitOverride: { time: bankTodayExit }
+      }),
       dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY)),
       bankPlan
     };
@@ -4134,6 +4749,23 @@
         renderMirrorPanel(resumo);
       });
     }
+    const bankModeToggle = panel.querySelector("#ahg-bank-mode-toggle");
+    if (bankModeToggle) {
+      bankModeToggle.querySelectorAll("[data-bank-mode]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          bankModeToggle.querySelectorAll("[data-bank-mode]").forEach((b) => {
+            b.classList.toggle("active", b === btn);
+            b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+          });
+          const mode = btn.dataset.bankMode;
+          const amountRow = panel.querySelector("#ahg-bank-amount-row");
+          const targetRow = panel.querySelector("#ahg-bank-target-row");
+          if (amountRow) amountRow.hidden = mode !== "amount";
+          if (targetRow) targetRow.hidden = mode !== "target";
+          panel.querySelector(mode === "amount" ? "#ahg-bank-amount" : "#ahg-bank-target")?.focus();
+        });
+      });
+    }
     const bankDeadlineToggle = panel.querySelector("#ahg-bank-deadline-toggle");
     if (bankDeadlineToggle) {
       bankDeadlineToggle.querySelectorAll("[data-deadline-type]").forEach((btn) => {
@@ -4150,8 +4782,10 @@
     const bankGoalCreate = panel.querySelector("#ahg-bank-goal-create");
     if (bankGoalCreate) {
       bankGoalCreate.addEventListener("click", () => {
-        const mode = panel.querySelector('input[name="ahg-bank-mode"]:checked')?.value || "zero";
+        const mode = panel.querySelector("#ahg-bank-mode-toggle [data-bank-mode].active")?.dataset.bankMode || "zero";
         const amountMinutes = mode === "amount" ? toMin(panel.querySelector("#ahg-bank-amount")?.value) : null;
+        const targetRaw = String(panel.querySelector("#ahg-bank-target")?.value || "").trim().replace(/^\+/, "");
+        const targetMinutes = mode === "target" ? toMin(targetRaw) : null;
         const deadlineType = panel.querySelector("#ahg-bank-deadline-toggle [data-deadline-type].active")?.dataset.deadlineType || "days";
         const deadlineDays = Number(panel.querySelector("#ahg-bank-days")?.value) || 5;
         const deadlineDate = panel.querySelector("#ahg-bank-date")?.value || null;
@@ -4160,12 +4794,16 @@
           showLoggerToast("Informe quanto reduzir (ex.: 2:00)");
           return;
         }
+        if (mode === "target" && targetMinutes === null) {
+          showLoggerToast("Informe o saldo-alvo (ex.: +10:00 ou -2:00)");
+          return;
+        }
         if (deadlineType === "date" && !deadlineDate) {
           showLoggerToast("Informe a data do prazo");
           return;
         }
         setBankGoal(
-          { mode, amountMinutes, deadlineType, deadlineDays, deadlineDate, floorMinutes },
+          { mode, amountMinutes, targetMinutes, deadlineType, deadlineDays, deadlineDate, floorMinutes },
           bankPlan.balanceInfo?.value ?? resumo.bancoHoras ?? 0
         );
         renderMirrorPanel(resumo);
@@ -4196,6 +4834,7 @@
     };
     bindActivate(panel.querySelector("#ahg-open-details"), () => abrirDetalhes(resumo.dias));
     bindActivate(panel.querySelector("#ahg-export-csv"), () => exportarCsvMensal(resumo.dias));
+    bindActivate(panel.querySelector("#ahg-export-csv-vertical"), () => exportarCsvBatidas(resumo.dias));
     const themeSelect = panel.querySelector("#ahg-tema-select");
     if (themeSelect) {
       themeSelect.addEventListener("change", (e) => {
@@ -4204,44 +4843,134 @@
         renderMirrorPanel(resumo);
       });
     }
-    const zenToggle = panel.querySelector("#ahg-zen-toggle");
-    if (zenToggle) {
-      zenToggle.addEventListener("change", (e) => {
-        ConfigStore.patch({ modoZen: e.target.checked });
+    const entryInput = panel.querySelector("#ahg-horario-entrada");
+    if (entryInput) {
+      entryInput.addEventListener("change", () => {
+        const value = entryInput.value ? normalizePunchTime(entryInput.value) : "";
+        if (value === null) {
+          showLoggerToast("Hor\xE1rio de entrada inv\xE1lido (ex.: 08:00)");
+          return;
+        }
+        ConfigStore.patch({ horarioEntrada: value });
         renderMirrorPanel(resumo);
+      });
+    }
+    const multInput = panel.querySelector("#ahg-mult-feriado");
+    if (multInput) {
+      multInput.addEventListener("change", () => {
+        const value = Number(String(multInput.value).replace(",", "."));
+        if (!Number.isFinite(value) || value < 1 || value > 3) {
+          showLoggerToast("Multiplicador inv\xE1lido (entre 1 e 3, ex.: 1,4)");
+          return;
+        }
+        ConfigStore.patch({ multFeriado: Math.round(value * 100) / 100 });
+        bus.emit("config:holiday-multiplier");
       });
     }
     bus.emit("panel:rendered", { page: "mirror" });
   }
 
-  // src/logger/punch-history.js
-  var LOGGER_HISTORY_MAX_ENTRIES = 100;
-  function getPunchHistory() {
-    return gmGetJson(STORAGE_KEYS.PUNCH_HISTORY, []);
+  // src/logger/month-history.js
+  var WEEKDAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "s\xE1b"];
+  var MONTHS = [
+    "janeiro",
+    "fevereiro",
+    "mar\xE7o",
+    "abril",
+    "maio",
+    "junho",
+    "julho",
+    "agosto",
+    "setembro",
+    "outubro",
+    "novembro",
+    "dezembro"
+  ];
+  function monthKey(date) {
+    return formatDateKey(date).slice(0, 7);
   }
-  function setPunchHistory(history) {
-    gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history.slice(0, LOGGER_HISTORY_MAX_ENTRIES));
-    bus.emit("punch-history:changed");
+  function historyWindowStartKey(hoje = /* @__PURE__ */ new Date()) {
+    return formatDateKey(new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1));
   }
-  function savePunch(time, date = /* @__PURE__ */ new Date(), timestamp = Date.now()) {
-    const normalized = normalizePunchTime(time);
-    if (!normalized) return false;
-    const dateKey = formatDateKey(date);
-    const history = getPunchHistory();
-    const exists = history.some(
-      (entry) => entry.dateKey === dateKey && entry.time === normalized
-    );
-    if (exists) return false;
-    history.unshift({ time: normalized, dateKey, timestamp });
-    setPunchHistory(history);
+  function sortPunches(punches) {
+    return [...new Set(punches)].sort((a, b) => (toMin(a) ?? 0) - (toMin(b) ?? 0));
+  }
+  function getMirrorDays() {
+    return gmGetJson(STORAGE_KEYS.MIRROR_DAYS, {}) || {};
+  }
+  function persistMirrorDays(dias, hoje = /* @__PURE__ */ new Date()) {
+    if (!Array.isArray(dias) || !dias.some((d) => d.isToday)) return false;
+    const store = getMirrorDays();
+    dias.forEach((d) => {
+      if (!d?.dateKey || d.isFuture) return;
+      if (d.batidas?.length) store[d.dateKey] = [...d.batidas];
+      else delete store[d.dateKey];
+    });
+    const startKey = historyWindowStartKey(hoje);
+    Object.keys(store).forEach((k) => {
+      if (k < startKey) delete store[k];
+    });
+    gmSetJson(STORAGE_KEYS.MIRROR_DAYS, store);
     return true;
   }
-  function deleteLastSavedPunch() {
-    const history = getPunchHistory();
-    if (history.length === 0) return false;
-    history.shift();
-    setPunchHistory(history);
-    return true;
+  function dayLabel(dateKey) {
+    const [y, m, d] = dateKey.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    return `${WEEKDAYS[date.getDay()]} ${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}`;
+  }
+  function monthLabel(key) {
+    const [y, m] = key.split("-").map(Number);
+    return `${MONTHS[m - 1]} ${y}`;
+  }
+  function buildMonthHistory({
+    hoje = /* @__PURE__ */ new Date(),
+    mirrorDays = {},
+    overrides = {},
+    history = [],
+    todayPunches = null
+  } = {}) {
+    const startKey = historyWindowStartKey(hoje);
+    const todayKey = formatDateKey(hoje);
+    const inWindow = (k) => k >= startKey && k <= todayKey;
+    const localByDay = {};
+    (history || []).forEach((e) => {
+      var _a;
+      if (!e?.dateKey || !e.time || !inWindow(e.dateKey)) return;
+      (localByDay[_a = e.dateKey] || (localByDay[_a] = [])).push(e.time);
+    });
+    const keys = /* @__PURE__ */ new Set([todayKey]);
+    [mirrorDays, overrides, localByDay].forEach((src) => {
+      Object.keys(src || {}).forEach((k) => {
+        if (inWindow(k)) keys.add(k);
+      });
+    });
+    const days = [...keys].sort().reverse().map((dateKey) => {
+      const isToday = dateKey === todayKey;
+      const mirror = mirrorDays?.[dateKey] || [];
+      const local = sortPunches(localByDay[dateKey] || []);
+      const base = isToday && todayPunches?.length ? sortPunches(todayPunches) : mirror.length ? sortPunches(mirror) : local;
+      const manualPunches = overrides?.[dateKey] || [];
+      const manual = manualPunches.length > 0;
+      const source = manual ? "manual" : mirror.length ? "mirror" : "local";
+      return {
+        dateKey,
+        label: dayLabel(dateKey),
+        isToday,
+        punches: manual ? sortPunches(manualPunches) : base,
+        basePunches: base,
+        manual,
+        source
+      };
+    }).filter((d) => d.isToday || d.punches.length > 0);
+    const currentKey = monthKey(hoje);
+    const prevKey = startKey.slice(0, 7);
+    const months = [currentKey, prevKey].map((key) => ({
+      key,
+      label: monthLabel(key),
+      isCurrent: key === currentKey,
+      days: days.filter((d) => d.dateKey.startsWith(key))
+    }));
+    return { months };
   }
 
   // src/logger/live-refresh.js
@@ -4271,6 +5000,29 @@
       unsubscribeGm?.();
       timers.forEach(clearInterval);
     };
+  }
+
+  // src/logger/punch-history.js
+  var LOGGER_HISTORY_MAX_ENTRIES = 100;
+  function getPunchHistory() {
+    return gmGetJson(STORAGE_KEYS.PUNCH_HISTORY, []);
+  }
+  function setPunchHistory(history) {
+    gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history.slice(0, LOGGER_HISTORY_MAX_ENTRIES));
+    bus.emit("punch-history:changed");
+  }
+  function savePunch(time, date = /* @__PURE__ */ new Date(), timestamp = Date.now()) {
+    const normalized = normalizePunchTime(time);
+    if (!normalized) return false;
+    const dateKey = formatDateKey(date);
+    const history = getPunchHistory();
+    const exists = history.some(
+      (entry) => entry.dateKey === dateKey && entry.time === normalized
+    );
+    if (exists) return false;
+    history.unshift({ time: normalized, dateKey, timestamp });
+    setPunchHistory(history);
+    return true;
   }
 
   // src/logger/mirror-sync.js
@@ -4360,6 +5112,8 @@
       weekBalance: resumo.saldoSemana || 0,
       monthWorked: resumo.totalMes || 0,
       monthBalance: resumo.saldoMes || 0,
+      bankBalance: resumo.bankBalance?.value ?? null,
+      bankSource: resumo.bankBalance?.source || "indisponivel",
       status: resumo.status || "",
       guidance: resumo.guidance || null,
       idealExit: resumo.saidaIdeal || null,
@@ -4383,21 +5137,56 @@
     const yesterdayCtx = getYesterdayContext(sharedTruth);
     const history = getPunchHistory();
     const timeline = buildLoggerPunchTimeline(history, mirrorCtx.mirrorPunches, bounds.startMs, bounds.endMs);
+    const overrides = gmGetJson(STORAGE_KEYS.LOCAL_DAY_PUNCHES, {}) || {};
+    const todayOverride = overrides[bounds.todayKey] || [];
+    const monthHistory = buildMonthHistory({
+      mirrorDays: getMirrorDays(),
+      overrides,
+      history,
+      todayPunches: timeline.combinedPunches
+    });
+    if (todayOverride.length) {
+      timeline.combinedPunches = [...todayOverride];
+      timeline.combinedLastPunch = todayOverride[todayOverride.length - 1];
+    }
     const isTruthFresh = sharedTruth?.todayKey === bounds.todayKey;
     const alarmConfig = getAlarmConfig();
     return {
       ...timeline,
       ...mirrorCtx,
       ...yesterdayCtx,
+      todayManual: todayOverride.length > 0,
+      monthHistory,
       workedToday: isTruthFresh && sharedTruth?.workedToday || 0,
       dayBalance: isTruthFresh && sharedTruth?.dayBalance || 0,
       weekBalance: isTruthFresh && sharedTruth?.weekBalance || 0,
       monthBalance: isTruthFresh && sharedTruth?.monthBalance || 0,
+      // Banco total muda devagar: o último publicado vale mesmo de outro dia.
+      bankBalance: sharedTruth?.bankBalance ?? null,
+      bankSource: sharedTruth?.bankSource || "indisponivel",
       status: isTruthFresh && sharedTruth?.status || "",
       guidance: isTruthFresh && sharedTruth?.guidance || null,
       alarmEnabled: alarmConfig?.enabled ?? true,
       alarmConfig
     };
+  }
+
+  // src/logger/host-anchors.js
+  var PUNCH_CTA_TEXT_RE = /punch-?in|registr\w*\s+(seu\s+)?ponto|bater\s+ponto|marcar\s+ponto/i;
+  var EXCLUDED_SCOPES = '[role="presentation"], [role="dialog"], .ahg-panel, .ahg-toast-region';
+  function findPunchCta(root = document) {
+    for (const btn of root.querySelectorAll("button")) {
+      if (btn.closest(EXCLUDED_SCOPES)) continue;
+      if (PUNCH_CTA_TEXT_RE.test((btn.textContent || "").trim())) return btn;
+    }
+    return null;
+  }
+  function findLoggerContentAnchor(root = document) {
+    const cta = findPunchCta(root);
+    if (!cta) return null;
+    const container = cta.closest(".MuiGrid-container");
+    if (!container) return null;
+    return container.parentElement?.closest(".MuiGrid-item") || container;
   }
 
   // src/logger/logger-renderer.js
@@ -4425,15 +5214,77 @@
   }
   function resolveDataSource(state) {
     if (state.mirrorSource === "truth") {
-      return { cls: "ok", valCls: "pos", label: "Mirror sincronizado" };
+      return { key: "ok", label: "Mirror sincronizado", short: "" };
     }
     if (state.mirrorSource === "cache") {
-      return { cls: "infos", valCls: "neu", label: "Cache local do Mirror" };
+      return { key: "cache", label: "Cache local do Mirror", short: "cache" };
     }
     if (state.hasSharedStaleCache || state.hasMirrorStaleCache) {
-      return { cls: "warn", valCls: "warn", label: "Cache de outro dia" };
+      return { key: "stale", label: "Cache de outro dia", short: "outro dia" };
     }
-    return { cls: "warn", valCls: "warn", label: "Sem dados do Mirror" };
+    return { key: "none", label: "Sem dados do Mirror", short: "sem dados" };
+  }
+  function buildMirrorLinkHtml(source, mirrorUrl) {
+    const shortHtml = source.short ? `<span class="ahg-sync-label">${escapeHtml(source.short)}</span>` : "";
+    return `<a class="ahg-mirror-link ahg-sync--${source.key}" id="ahg-logger-open-mirror" href="${escapeHtml(mirrorUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(source.label)} \u2014 abrir espelho em nova aba" aria-label="Abrir espelho (${escapeHtml(source.label)})"><span class="ahg-sync-dot" aria-hidden="true"></span>Abrir espelho${shortHtml}</a>`;
+  }
+  var HIST_SLOTS = 4;
+  function buildHistoryPunchesHtml(punches) {
+    if (!punches.length) return '<span class="ahg-hist-empty">sem batidas</span>';
+    const overflow = punches.length > HIST_SLOTS;
+    const visible = overflow ? punches.slice(0, HIST_SLOTS - 1) : punches;
+    let html = visible.map((t) => `<span class="ahg-hist-punch">${renderText(t)}</span>`).join("");
+    if (overflow) {
+      const all = punches.map((t) => renderText(t)).join(" \xB7 ");
+      const rest = punches.length - visible.length;
+      html += `<span class="ahg-hist-more" tabindex="0" title="${all}" aria-label="Todas as batidas: ${all}">+${rest}</span>`;
+    }
+    return html;
+  }
+  function buildHistoryHtml(monthHistory) {
+    const months = monthHistory?.months || [];
+    const total = months.reduce((n, m) => n + m.days.length, 0);
+    let html = `<hr class="a-div"><details class="ahg-details" id="ahg-logger-history" open><summary class="a-sec">Hist\xF3rico</summary>`;
+    if (total === 0) {
+      html += '<div class="a-row neu"><span class="a-lbl">Sem registros</span></div>';
+    }
+    months.forEach((m) => {
+      if (!m.days.length) return;
+      html += `<details class="ahg-hist-month" id="ahg-logger-hist-${m.key}"${m.isCurrent ? " open" : ""}>
+            <summary class="ahg-hist-month-title">${escapeHtml(m.label)} <small>${m.days.length} ${m.days.length === 1 ? "dia" : "dias"}</small></summary>
+            <ul class="ahg-hist-list">`;
+      m.days.forEach((d) => {
+        const punches = buildHistoryPunchesHtml(d.punches);
+        const badge = d.manual ? `<span class="ahg-hist-badge" title="Ajustado manualmente \u2014 vale no lugar do espelho neste painel" aria-label="Ajustado manualmente">${icon("pencil", { size: 9 })}</span>` : '<span class="ahg-hist-badge-slot"></span>';
+        html += `<li class="ahg-hist-day${d.manual ? " is-manual" : ""}${d.isToday ? " is-today" : ""}">
+                <span class="ahg-hist-date"${d.isToday ? ' title="Hoje"' : ""}>${escapeHtml(d.label)}</span>
+                <span class="ahg-hist-punches">${punches}</span>
+                ${badge}
+                <button type="button" class="ahg-hist-edit" data-date-key="${escapeHtml(d.dateKey)}" title="Ajustar batidas manualmente" aria-label="Ajustar batidas de ${escapeHtml(d.label)}">${icon("pencil", { size: 11 })}</button>
+            </li>`;
+      });
+      html += "</ul></details>";
+    });
+    return `${html}</details>`;
+  }
+  function captureDetailsState(panel) {
+    const state = {};
+    panel.querySelectorAll("details[id]").forEach((d) => {
+      state[d.id] = d.open;
+    });
+    return state;
+  }
+  function restoreDetailsState(panel, state) {
+    panel.querySelectorAll("details[id]").forEach((d) => {
+      if (d.id in state) d.open = state[d.id];
+    });
+  }
+  function findHistoryDay(vm, dateKey) {
+    for (const m of vm.monthHistory?.months || []) {
+      const day = m.days.find((d) => d.dateKey === dateKey);
+      if (day) return day;
+    }
+    return null;
   }
   function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
     const state = vm;
@@ -4451,26 +5302,27 @@
     </div>
     <div class="a-body">
         ${view.assistantHtml || ""}
-        <div class="a-sec">\xDAltima batida</div>
+        <div class="a-sec ahg-sec-action">\xDAltima batida ${buildMirrorLinkHtml(source, view.mirrorUrl || buildMirrorUrl())}</div>
         <div class="a-row infos"><span class="a-lbl">Hor\xE1rio</span><span class="a-val neu ahg-time-display">${lastPunch ? renderClock(toMin(lastPunch)) : "--:--"}</span></div>
     `;
-    html += `<div class="a-row ${source.cls}" id="ahg-logger-source"><span class="a-lbl">Fonte</span><span class="a-val ${source.valCls}">${source.label}</span></div>`;
     if (pendingCount > 0) {
       html += `<div class="a-row warn"><span class="a-lbl">Pendentes</span><span class="a-val warn">${pendingCount} local</span></div>`;
     }
-    html += `<hr class="a-div"><div class="a-sec">Hoje</div>
+    if (view.zen) {
+      html += `</div><div class="a-foot">Modo Zen \xB7 Atualizado ${fmtHour((/* @__PURE__ */ new Date()).getHours() * 60 + (/* @__PURE__ */ new Date()).getMinutes())}</div>`;
+      return html;
+    }
+    html += `<hr class="a-div"><div class="a-sec">Saldos</div>
         <div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val neu">${renderMinutes(state.workedToday || 0)}</span></div>
         <div class="a-row infos"><span class="a-lbl">Saldo dia</span><span class="a-val ${(state.dayBalance || 0) >= 0 ? "pos" : "neg"}">${renderMinutes(state.dayBalance || 0)}</span></div>
-        <div class="a-row infos"><span class="a-lbl">Saldo semana</span><span class="a-val ${(state.weekBalance || 0) >= 0 ? "pos" : "neg"}">${renderMinutes(state.weekBalance || 0)}</span></div>`;
-    html += `<hr class="a-div"><div class="a-sec">Hist\xF3rico recente</div>`;
-    const recent = (state.historyTimelineEntries || []).slice(0, 5);
-    if (recent.length === 0) {
-      html += `<div class="a-row neu"><span class="a-lbl">Sem registros</span></div>`;
-    } else {
-      recent.forEach((entry) => {
-        html += `<div class="a-row ${entry.isToday ? "infos" : "neu"}"><span class="a-lbl">${entry.dateKey}</span><span class="a-val neu">${renderText(entry.time)}</span></div>`;
-      });
+        <div class="a-row infos"><span class="a-lbl">Saldo semana</span><span class="a-val ${(state.weekBalance || 0) >= 0 ? "pos" : "neg"}">${renderMinutes(state.weekBalance || 0)}</span></div>
+        <div class="a-row infos"><span class="a-lbl">Saldo m\xEAs</span><span class="a-val ${(state.monthBalance || 0) >= 0 ? "pos" : "neg"}">${renderMinutes(state.monthBalance || 0)}</span></div>`;
+    if (state.bankBalance !== null && state.bankBalance !== void 0) {
+      const bankHint = state.bankSource === "manual" ? "informado + acumulado" : "oficial Ahgora";
+      html += `<div class="a-row infos" title="Banco de horas total (inclui meses anteriores) \u2014 ${bankHint}"><span class="a-lbl">Banco total</span><span class="a-val ${state.bankBalance >= 0 ? "pos" : "neg"}">${renderMinutes(state.bankBalance)}<small class="a-cap">${bankHint}</small></span></div>`;
     }
+    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl());
+    html += buildHistoryHtml(state.monthHistory);
     html += `<hr class="a-div"><div class="a-sec">Alarme</div>
         <div class="a-row infos ahg-items-center ahg-gap-8">
             <input type="checkbox" id="ahg-logger-alarm-toggle" ${state.alarmEnabled ? "checked" : ""}>
@@ -4480,17 +5332,44 @@
       html += `<hr class="a-div"><div class="a-sec">Calend\xE1rio</div>
             <div id="ahg-logger-calendar-row" class="a-row infos ahg-flex-wrap ahg-gap-4"></div>`;
     }
-    html += `<hr class="a-div"><div class="a-sec">A\xE7\xF5es</div>
-        <div class="a-row infos ahg-flex-wrap ahg-gap-4">
-            <button class="ahg-btn ahg-btn-sm" id="ahg-logger-save" ${lastPunch ? "" : "disabled"}>${icon("save", { size: 11 })} Salvar \xFAltima</button>
-            <button class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-delete">${icon("trash", { size: 11 })} Desfazer</button>
-            <a class="ahg-btn ahg-btn-sm" id="ahg-logger-open-mirror" href="${escapeHtml(view.mirrorUrl || buildMirrorUrl())}" target="_blank" rel="noopener noreferrer" title="Abrir espelho de ponto em nova aba">${icon("bar-chart", { size: 11 })} Abrir espelho</a>
-        </div>`;
     html += `</div><div class="a-foot">Atualizado ${fmtHour((/* @__PURE__ */ new Date()).getHours() * 60 + (/* @__PURE__ */ new Date()).getMinutes())}</div>`;
     return html;
   }
-  function renderLoggerContainer(vm, onSave, onDelete) {
+  function readBankPlanSnapshot() {
+    return gmGetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, null);
+  }
+  function readBankTodayExit() {
+    const snap = readBankPlanSnapshot();
+    return snap?.active && snap.dateKey === formatDateKey() ? snap.todayExit ?? null : null;
+  }
+  function buildBankGoalHtml(snap, mirrorUrl) {
+    if (!snap?.active) return "";
+    const fresh = snap.dateKey === formatDateKey();
+    let html = `<hr class="a-div"><div class="a-sec ahg-sec-action">Meta do banco</div>`;
+    if (snap.completed) {
+      return html + `<div class="a-row ok"><span class="a-lbl">${icon("circle-check")} Meta conclu\xEDda</span></div>`;
+    }
+    if (snap.noBalance) {
+      return html + `<div class="a-row warn"><span class="a-lbl">Informe o saldo no espelho</span><span class="a-val"><a class="ahg-mirror-link" href="${escapeHtml(mirrorUrl)}" target="_blank" rel="noopener noreferrer">abrir</a></span></div>`;
+    }
+    const verbo = snap.direction === "early" ? "sair mais cedo" : "ficar a mais";
+    html += `<div class="a-row infos"><span class="a-lbl">${icon("target")} Objetivo</span><span class="a-val ${(snap.targetBalance ?? 0) >= 0 ? "pos" : "neg"}">${renderMinutes(snap.targetBalance)}<small class="a-cap">${verbo} ${renderMinutes(snap.targetReduction)} \xB7 ${snap.days.length} dia${snap.days.length === 1 ? "" : "s"}</small></span></div>`;
+    if (fresh && snap.todayExit !== null && snap.todayExit !== void 0) {
+      html += `<div class="a-row warn"><span class="a-lbl">Hoje</span><span class="a-val warn">Saia at\xE9 ${renderClock(snap.todayExit)}<small class="a-cap">${snap.direction === "early" ? "\u2212" : "+"}${renderMinutes(snap.todayAdjustment || 0)} no dia</small></span></div>`;
+    } else if (fresh && snap.todayAdjustment) {
+      html += `<div class="a-row infos"><span class="a-lbl">Hoje</span><span class="a-val neu">${snap.direction === "early" ? "\u2212" : "+"}${renderMinutes(snap.todayAdjustment)} no dia</span></div>`;
+    }
+    if (!snap.feasible) {
+      html += `<div class="a-row warn"><span class="a-lbl">${icon("triangle-alert")} Prazo curto</span><span class="a-val warn"><small>chega a ${renderMinutes(snap.achievableMinutes)} de ${renderMinutes(snap.targetReduction)}</small></span></div>`;
+    }
+    if (!fresh) {
+      html += `<div class="a-row neu"><span class="a-lbl">Plano de outro dia</span><span class="a-val"><a class="ahg-mirror-link" href="${escapeHtml(mirrorUrl)}" target="_blank" rel="noopener noreferrer">atualizar no espelho</a></span></div>`;
+    }
+    return html;
+  }
+  function renderLoggerContainer(vm) {
     const { panel, fab } = ensureLoggerContainer();
+    const rerender = () => renderLoggerContainer(vm);
     const alarmConfig = getAlarmConfig();
     const autoLink = buildAutoGcalMaxMinusLink(vm.guidance, alarmConfig);
     const calendarButtons = buildQuickCalendarButtons(autoLink, alarmConfig);
@@ -4503,18 +5382,42 @@
     });
     const view = {
       assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
-      dockBarHtml: buildDockBarHtml(assistant),
-      dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY2), getDockMini(PERSIST_KEY2))
+      // Fixado numa borda: os 4 horários do dia; a saída final segue a meta
+      // de banco de horas publicada pelo Mirror (só vale a de hoje).
+      dockBarHtml: buildDockBarHtml(assistant, "", {
+        full: !!getDockEdge(PERSIST_KEY2),
+        edge: getDockEdge(PERSIST_KEY2),
+        exitOverride: { time: readBankTodayExit() }
+      }),
+      dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY2), getDockMini(PERSIST_KEY2)),
+      zen: !!ConfigStore.get().modoZen
     };
     const keepMinimized = panel.dataset.ahgRendered === "true" && !panel.classList.contains("active");
     panel.dataset.ahgRendered = "true";
+    const detailsState = captureDetailsState(panel);
     panel.innerHTML = buildLoggerHtml(vm, !!calendarButtons, view);
+    restoreDetailsState(panel, detailsState);
     setFloatingPanelVisible(panel, fab, !keepMinimized);
     bindAssistantCard(panel, {
       onPresetSelect: (presetId) => {
         setJourneyPlan(presetId);
-        renderLoggerContainer(vm, onSave, onDelete);
+        rerender();
       }
+    });
+    panel.querySelectorAll(".ahg-hist-edit").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const day = findHistoryDay(vm, btn.dataset.dateKey);
+        if (!day) return;
+        openPunchEditor({
+          dateKey: day.dateKey,
+          dateLabel: day.label,
+          mirrorPunches: day.basePunches,
+          localPunches: day.manual ? day.punches : [],
+          targetEl: btn.closest(".ahg-hist-day"),
+          // O live-refresh escuta este evento e re-renderiza com VM novo.
+          onSave: () => bus.emit("punch-history:changed")
+        });
+      });
     });
     if (calendarButtons) {
       const calendarRow = panel.querySelector("#ahg-logger-calendar-row");
@@ -4523,18 +5426,10 @@
     const dragHandle = getDockMini(PERSIST_KEY2) ? "#ahg-dock-bar" : ".a-tit";
     makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY2 });
     applySavedPanelPosition(panel, PERSIST_KEY2);
-    applyPanelDock(panel, PERSIST_KEY2);
-    bindDockMenu(panel, PERSIST_KEY2, () => renderLoggerContainer(vm, onSave, onDelete));
+    applyPanelDock(panel, PERSIST_KEY2, { anchor: () => findLoggerContentAnchor() });
+    bindDockMenu(panel, PERSIST_KEY2, rerender);
     bindDockBarExpand(panel);
     bindDockMinimizeButton(panel, fab, "#ahg-logger-min");
-    const saveBtn = panel.querySelector("#ahg-logger-save");
-    if (saveBtn && vm.combinedLastPunch) {
-      saveBtn.addEventListener("click", () => onSave?.(vm.combinedLastPunch));
-    }
-    const deleteBtn = panel.querySelector("#ahg-logger-delete");
-    if (deleteBtn) {
-      deleteBtn.addEventListener("click", () => onDelete?.());
-    }
     const alarmToggle = panel.querySelector("#ahg-logger-alarm-toggle");
     if (alarmToggle) {
       alarmToggle.addEventListener("change", () => {
@@ -4546,7 +5441,7 @@
     if (privacyBtn) {
       privacyBtn.addEventListener("click", () => {
         togglePrivacyHidden();
-        renderLoggerContainer(vm, onSave, onDelete);
+        rerender();
       });
     }
     applyPrivacyState();
@@ -4571,30 +5466,38 @@
     const isBlocked = diff < CONFIG.INTERVALO_MINIMO;
     return { nextMinute, lastMinute, minMinute, diff, isBlocked, noReference: false };
   }
+  function findModalBannerSlot(modal, confirmBtn) {
+    const title = modal?.querySelector?.('[id$="modal-title"], h1, h2, h3, .v-card__title');
+    if (title?.parentElement) return { parent: title.parentElement, before: title };
+    return { parent: confirmBtn.parentElement, before: confirmBtn };
+  }
   function upsertClockingInModalHint(confirmBtn, state) {
     if (!confirmBtn) return;
     const modal = confirmBtn.closest('[role="dialog"]') || confirmBtn.closest(".v-dialog--active") || confirmBtn.closest('[role="presentation"]') || document.body;
+    const slot = findModalBannerSlot(modal, confirmBtn);
     let hint = modal.querySelector(".ahg-modal-hint");
     if (!hint) {
       hint = document.createElement("div");
-      hint.className = "ahg-modal-hint";
-      confirmBtn.parentElement.insertBefore(hint, confirmBtn);
+      hint.setAttribute("role", "status");
+    }
+    if (hint.parentElement !== slot.parent || hint.nextSibling !== slot.before) {
+      slot.parent.insertBefore(hint, slot.before);
     }
     if (state.noReference) {
       hint.textContent = "\u26A0\uFE0F Sem refer\xEAncia de \xFAltima batida";
-      hint.className = "ahg-modal-hint ahg-modal-hint--info";
+      hint.className = "ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--info";
       confirmBtn.style.pointerEvents = "";
       confirmBtn.style.opacity = "";
       confirmBtn.removeAttribute("aria-disabled");
     } else if (state.isBlocked) {
       hint.textContent = `\u26D4 Intervalo m\xEDnimo de 30min n\xE3o atingido. Aguarde at\xE9 ${String(Math.floor(state.minMinute / 60)).padStart(2, "0")}:${String(state.minMinute % 60).padStart(2, "0")}.`;
-      hint.className = "ahg-modal-hint ahg-modal-hint--error";
+      hint.className = "ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--error";
       confirmBtn.style.pointerEvents = "none";
       confirmBtn.style.opacity = "0.55";
       confirmBtn.setAttribute("aria-disabled", "true");
     } else {
       hint.textContent = `\u2705 Intervalo OK (${state.diff}min)`;
-      hint.className = "ahg-modal-hint ahg-modal-hint--ok";
+      hint.className = "ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--ok";
       confirmBtn.style.pointerEvents = "";
       confirmBtn.style.opacity = "";
       confirmBtn.removeAttribute("aria-disabled");
@@ -4728,7 +5631,7 @@
       if (dia.isFuture) return;
       dia.batidas = [...overrides];
       const agora = dia.isToday ? nowMin() : 1440;
-      const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora);
+      const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora, dayBalanceOptions(dia));
       dia.trabalhado = balance.trabalhado;
       dia.saldo = balance.saldo;
       dia.violations = getDayRuleViolations(dia);
@@ -4750,6 +5653,7 @@
   function tryRenderMirror(hoje = /* @__PURE__ */ new Date()) {
     const dias = extrairDados(hoje);
     if (!dias.length) return null;
+    persistMirrorDays(dias, hoje);
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
     const sharedTruthPrev = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
@@ -4825,25 +5729,15 @@
       }
     });
     bus.on("privacy:changed", () => tryRenderMirror());
+    bus.on("config:holiday-multiplier", () => tryRenderMirror());
   }
   function renderLogger(vm) {
-    renderLoggerContainer(
-      vm,
-      (time) => {
-        const saved = savePunch(time);
-        showLoggerToast(saved ? `Batida ${time} salva` : "Batida j\xE1 estava salva");
-        if (saved) renderLogger(getLoggerVm());
-      },
-      () => {
-        const removed = deleteLastSavedPunch();
-        showLoggerToast(removed ? "\xDAltima batida local removida" : "Nada para remover");
-        if (removed) renderLogger(getLoggerVm());
-      }
-    );
+    renderLoggerContainer(vm);
   }
   function startLogger() {
     injectCSS();
     applyTheme(ConfigStore.get().tema);
+    setToastAnchor(() => findPunchCta());
     const vm = getLoggerVm();
     renderLogger(vm);
     const autoLink = buildAutoGcalMaxMinusLink(vm.guidance, vm.alarmConfig);

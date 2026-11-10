@@ -15,6 +15,9 @@ export const STORAGE_KEYS = Object.freeze({
     BANK_GOAL: 'ahgora_bank_goal_v1',
     LOCAL_DAY_PUNCHES: 'ahgora_local_day_punches_v1',
     PUNCH_HISTORY: 'ahgora_history_v6',
+    MIRROR_DAYS: 'ahgora_mirror_days_v1',
+    // Resumo do plano da meta de banco de horas (Mirror → Logger).
+    BANK_PLAN_SNAPSHOT: 'ahgora_bank_plan_snapshot_v1',
     MIRROR_TODAY: 'ahgora_mirror_today',
     MIRROR_TODAY_REF: 'ahgora_mirror_today_ref',
     WEEK_BALANCE_CACHE: 'ahgora_saldo_semana_anterior',

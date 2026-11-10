@@ -122,6 +122,19 @@ describe('BankPlan', () => {
             expect(result.source).toBe('manual');
             expect(result.value).toBe(100 + 30 - 10);
         });
+
+        it('feriado trabalhado: prévia ×1,4 só quando há batida', () => {
+            const hoje = localDate(2026, 1, 3);
+            const dias = [
+                dia(2026, 1, 1, { isHoliday: true, batidas: [] }),
+                dia(2026, 1, 2, { isHoliday: true, batidas: ['08:00', '15:00'], trabalhado: 420, saldo: 588 })
+            ];
+            const plan = buildBankPlan({ officialBalance: 0, dias, hoje });
+            expect(plan.holidayCredits).toEqual([{ dateKey: '2026-01-02', trabalhado: 420, creditado: 588, multiplier: 1.4 }]);
+            const html = buildBankPlanHtml(plan);
+            expect(html).toContain('Feriado 02/01 trabalhado');
+            expect(html).not.toContain('Feriado 01/01');
+        });
     });
 
     describe('buildBankPlan', () => {
@@ -142,6 +155,30 @@ describe('BankPlan', () => {
             const goal = normalizeBankGoal({ mode: 'zero' });
             const plan = buildBankPlan({ officialBalance: 5, goal });
             expect(plan.completed).toBe(true);
+        });
+
+        it('meta "Chegar a" saldo positivo: acumula (fica a mais) até o alvo', () => {
+            const goal = normalizeBankGoal({ mode: 'target', targetMinutes: 600, deadlineType: 'days', deadlineDays: 10 });
+            const plan = buildBankPlan({ officialBalance: 541, goal, dias: [], hoje: localDate(2026, 1, 5) });
+            expect(plan.direction).toBe('late');
+            expect(plan.targetReduction).toBe(59);
+            expect(plan.targetBalance).toBe(600);
+            expect(buildBankPlanHtml(plan)).toContain('Objetivo: banco em');
+        });
+
+        it('meta "Chegar a" saldo negativo: sai mais cedo até o alvo', () => {
+            const goal = normalizeBankGoal({ mode: 'target', targetMinutes: -120, deadlineType: 'days', deadlineDays: 5, floorMinutes: 240 });
+            const plan = buildBankPlan({ officialBalance: 60, goal, dias: [], hoje: localDate(2026, 1, 5) });
+            expect(plan.direction).toBe('early');
+            expect(plan.targetReduction).toBe(180);
+            expect(plan.targetBalance).toBe(-120);
+        });
+
+        it('feriado não recebe distribuição da meta', () => {
+            const goal = normalizeBankGoal({ mode: 'zero', deadlineType: 'days', deadlineDays: 2 });
+            const dias = [dia(2026, 1, 5, { isHoliday: true }), dia(2026, 1, 6), dia(2026, 1, 7)];
+            const plan = buildBankPlan({ officialBalance: 120, goal, dias, hoje: localDate(2026, 1, 5) });
+            expect(plan.days.map((d) => d.dateKey)).toEqual(['2026-01-06', '2026-01-07']);
         });
 
         it('saldo positivo distribui saída mais cedo dentro do prazo', () => {

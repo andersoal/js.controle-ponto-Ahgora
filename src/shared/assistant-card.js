@@ -5,11 +5,18 @@
  * alertas classificados pela matriz de enforcement.
  */
 
-import { escapeHtml } from '../core/time-utils.js';
+import { CONFIG, ConfigStore } from '../core/config.js';
+import { escapeHtml, fmtMin } from '../core/time-utils.js';
 import { renderClock, renderMinutes } from '../core/privacy-engine.js';
 import { JOURNEY_PRESETS } from '../core/journey-plan.js';
 import { buildGoogleCalendarUrl, buildOutlookCalendarUrl } from '../logger/calendar-links.js';
 import { icon } from './icons.js';
+
+/** "Intervalo 11h" — derivado da regra (CONFIG.DESCANSO_MINIMO), não fixo no texto. */
+export function interjornadaLabel(minutes = CONFIG.DESCANSO_MINIMO) {
+    const amount = minutes % 60 === 0 ? `${minutes / 60}h` : fmtMin(minutes);
+    return `Intervalo ${amount}`;
+}
 
 const STAGE_TITLES = {
     entry: 'Próxima batida — Entrada',
@@ -63,6 +70,30 @@ function buildCalendarLinksHtml(step, alarmConfig) {
     return html;
 }
 
+/**
+ * Jornada encerrada: quando entrar amanhã. O calendário vai para a entrada
+ * sugerida (horário configurado, se o descanso de 11h já tiver acabado; senão
+ * o fim do descanso) — não para o mínimo legal de madrugada.
+ */
+function buildNextDayEntryHtml(assistant, alarmConfig) {
+    const restEnd = assistant.nextDayEntry ?? null;
+    const forecast = assistant.nextEntryForecast || null;
+    if (restEnd === null && !forecast) return '';
+    const suggested = forecast ? forecast.time : restEnd;
+    const restText = restEnd !== null
+        ? `amanhã a partir de ${renderClock(restEnd)} (${interjornadaLabel()})`
+        : '';
+    const suggestedText = forecast && (restEnd === null || suggested !== restEnd)
+        ? `${restText ? ' · ' : 'amanhã '}entrada ${renderClock(suggested)}`
+        : '';
+    const calLabel = forecast?.reason === 'rest' || suggested === restEnd
+        ? `Entrada liberada (${interjornadaLabel()})`
+        : 'Entrada';
+    const calendar = buildCalendarLinksHtml({ label: calLabel, time: suggested }, alarmConfig);
+    return `<div class="ahg-as-next-window" title="Descanso mínimo entre jornadas (interjornada, CLT art. 66); entrada sugerida pelo horário configurado">${restText}${suggestedText}
+        <span class="ahg-as-step-cal">${calendar}</span></div>`;
+}
+
 function buildScheduleHtml(assistant, alarmConfig) {
     if (!assistant.schedule?.length) return '';
     const steps = assistant.schedule.map((step) => {
@@ -110,9 +141,7 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
             </div>
         </div>`;
     } else {
-        const nextDay = assistant.nextDayEntry !== null && assistant.nextDayEntry !== undefined
-            ? `<div class="ahg-as-next-window">amanhã a partir de ${renderClock(assistant.nextDayEntry)}</div>`
-            : '';
+        const nextDay = buildNextDayEntryHtml(assistant, alarmConfig);
         body = `
         <div class="ahg-as-next">
             <div class="ahg-as-next-time done">${icon('circle-check', { size: 30 })}</div>
@@ -141,11 +170,83 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
 }
 
 /** Barra compacta mostrada quando o painel está ancorado e colapsado. */
-export function buildDockBarHtml(assistant, fallbackLabel = '') {
-    const label = assistant?.next?.label || fallbackLabel || 'Painel';
-    const time = assistant?.next ? renderClock(assistant.next.time) : '--:--';
+const DOCK_SHORT_LABELS = { entry: 'Entrada', exit1: 'Saída', return: 'Retorno', exitFinal: 'Saída' };
+const DOCK_MAX_STEPS = 4;
+
+/**
+ * Pílula compacta. Minimalista (padrão): sequência dos próximos horários da
+ * jornada. Zen (`ConfigStore.modoZen`): só o próximo. Jornada encerrada, nos
+ * dois modos: previsão da entrada de amanhã.
+ */
+export function buildDockBarHtml(assistant, fallbackLabel = '', { zen = ConfigStore.get().modoZen, full = false, edge = null, exitOverride = null } = {}) {
+    if (full && !zen) {
+        const html = buildFullDayDockBarHtml(assistant, { edge, exitOverride });
+        if (html) return html;
+    }
+    const upcoming = (assistant?.schedule || [])
+        .filter((s) => s.status !== 'done' && s.time !== null && s.time !== undefined);
+    if (!zen && upcoming.length > 1) {
+        const steps = upcoming.slice(0, DOCK_MAX_STEPS).map((s) => `
+            <span class="ahg-dock-step${s.status === 'next' ? ' is-next' : ''}"><span class="ahg-dock-bar-time">${renderClock(s.time)}</span><span class="ahg-dock-bar-label">${escapeHtml(DOCK_SHORT_LABELS[s.id] || s.label || '')}</span></span>`).join('<span class="ahg-dock-sep" aria-hidden="true">·</span>');
+        return `
+    <div class="ahg-dock-bar ahg-dock-bar--seq" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+        ${icon('clock', { size: 14 })}
+        ${steps}
+    </div>`;
+    }
+    return buildSingleDockBarHtml(assistant, fallbackLabel);
+}
+
+/**
+ * Pílula fixada numa borda (Mirror): os 4 horários do dia — batidos
+ * esmaecidos, o próximo em destaque. Com meta de banco de horas ativa, a
+ * saída final vira a saída sugerida pela meta. Jornada encerrada: os 4 +
+ * a entrada de amanhã. Borda esquerda/direita empilha (coluna estreita).
+ */
+function buildFullDayDockBarHtml(assistant, { edge = null, exitOverride = null } = {}) {
+    const schedule = (assistant?.schedule || []).filter((s) => s.time !== null && s.time !== undefined);
+    if (!schedule.length) return '';
+    const steps = schedule.slice(0, DOCK_MAX_STEPS).map((s) => {
+        const goal = s.id === 'exitFinal' && s.status !== 'done' && exitOverride?.time !== null && exitOverride?.time !== undefined;
+        const time = goal ? exitOverride.time : s.time;
+        const cls = ['ahg-dock-step', s.status === 'next' ? 'is-next' : '', s.status === 'done' ? 'is-done' : '', goal ? 'is-goal' : '']
+            .filter(Boolean).join(' ');
+        const title = goal
+            ? ` title="Saída sugerida pela meta do banco de horas (sem a meta: ${renderClock(s.time)})"`
+            : (s.status === 'done' ? ' title="Batida feita"' : '');
+        const label = `${DOCK_SHORT_LABELS[s.id] || s.label || ''}${goal ? ' · meta' : ''}`;
+        return `<span class="${cls}"${title}><span class="ahg-dock-bar-time">${renderClock(time)}</span><span class="ahg-dock-bar-label">${escapeHtml(label)}</span></span>`;
+    });
+    const forecast = !assistant?.next && assistant?.nextEntryForecast;
+    if (forecast) {
+        steps.push(`<span class="ahg-dock-step is-next" title="Previsão da próxima entrada"><span class="ahg-dock-bar-time">${renderClock(forecast.time)}</span><span class="ahg-dock-bar-label">Amanhã</span></span>`);
+    }
+    const stack = edge === 'left' || edge === 'right';
     return `
-    <div class="ahg-dock-bar" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+    <div class="ahg-dock-bar ahg-dock-bar--seq ahg-dock-bar--full${stack ? ' ahg-dock-bar--stack' : ''}" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado">
+        ${icon('clock', { size: 14 })}
+        ${steps.join(stack ? '' : '<span class="ahg-dock-sep" aria-hidden="true">·</span>')}
+    </div>`;
+}
+
+function buildSingleDockBarHtml(assistant, fallbackLabel) {
+    let label = assistant?.next?.label || fallbackLabel || 'Painel';
+    let time = assistant?.next ? renderClock(assistant.next.time) : '--:--';
+    let title = '';
+    // Jornada encerrada: a pílula segue útil mostrando a previsão da próxima
+    // entrada (amanhã), inclusive quando quem manda é o descanso de 11h.
+    if (!assistant?.next && assistant?.nextEntryForecast) {
+        const { time: forecast, reason } = assistant.nextEntryForecast;
+        time = renderClock(forecast);
+        label = reason === 'rest' ? `Entrada amanhã · ${interjornadaLabel()}` : 'Entrada amanhã';
+        title = {
+            rest: 'Previsão da próxima entrada: fim do descanso mínimo entre jornadas',
+            configured: 'Previsão da próxima entrada: horário de entrada configurado (descanso de 11h respeitado)',
+            routine: 'Previsão da próxima entrada: mesmo horário da entrada de hoje'
+        }[reason] || '';
+    }
+    return `
+    <div class="ahg-dock-bar" id="ahg-dock-bar" role="button" tabindex="0" aria-label="Expandir painel ancorado"${title ? ` title="${escapeHtml(title)}"` : ''}>
         ${icon('clock', { size: 14 })}
         <span class="ahg-dock-bar-time">${time}</span>
         <span class="ahg-dock-bar-label">${escapeHtml(label)}</span>
@@ -155,7 +256,10 @@ export function buildDockBarHtml(assistant, fallbackLabel = '') {
 /** Liga o toggle de preset do card. `onPresetSelect(presetId)` deve re-renderizar. */
 export function bindAssistantCard(rootEl, { onPresetSelect } = {}) {
     if (!rootEl || typeof onPresetSelect !== 'function') return;
-    rootEl.querySelectorAll('.ahg-as-preset').forEach((btn) => {
+    // Só os presets de jornada: `.ahg-as-preset` também estiliza os botões
+    // segmentados do banco de horas (modo/prazo), que não têm data-preset —
+    // sem o filtro, clicar neles re-renderizava o painel e zerava o formulário.
+    rootEl.querySelectorAll('.ahg-as-preset[data-preset]').forEach((btn) => {
         btn.addEventListener('click', () => onPresetSelect(btn.dataset.preset));
     });
 }

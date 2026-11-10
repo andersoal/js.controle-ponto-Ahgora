@@ -78,7 +78,9 @@ export function calcularTrabalhado(batidas, now = nowMin()) {
     for (let i = 0; i < batidas.length; i += 2) {
         const entrada = toMin(batidas[i]);
         const saida = batidas[i + 1] ? toMin(batidas[i + 1]) : now;
-        if (entrada !== null && saida !== null) total += saida - entrada;
+        if (entrada === null || saida === null) continue;
+        // Saída "antes" da entrada = virou a meia-noite (22:00 → 02:00).
+        total += saida >= entrada ? saida - entrada : saida + 1440 - entrada;
     }
     return total;
 }
@@ -118,9 +120,10 @@ export function fmtCountdown(ms) {
 
 export function minuteToDate(baseDate, minute) {
     if (minute === null || minute === undefined) return null;
+    // Minutos fora de 0–1439 caem no dia vizinho (ex.: 1627 = amanhã 03:07),
+    // não dão a volta no mesmo dia — evento de interjornada ia para o passado.
     const date = new Date(baseDate || new Date());
-    const n = ((Math.round(minute) % 1440) + 1440) % 1440;
-    date.setHours(Math.floor(n / 60), n % 60, 0, 0);
+    date.setHours(0, Math.round(minute), 0, 0);
     return date;
 }
 

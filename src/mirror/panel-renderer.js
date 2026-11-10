@@ -5,7 +5,8 @@
 
 import { CONFIG, ConfigStore } from '../core/config.js';
 import { bus } from '../core/event-bus.js';
-import { fmtHour, fmtMin, getWeekNumber, nowMin, toMin } from '../core/time-utils.js';
+import { STORAGE_KEYS, gmSetJsonCrossOrigin } from '../core/storage-adapter.js';
+import { escapeHtml, fmtHour, fmtMin, getWeekNumber, normalizePunchTime, nowMin, toMin } from '../core/time-utils.js';
 import {
     applyPanelDock,
     applySavedPanelPosition,
@@ -29,7 +30,7 @@ import {
     renderText,
     togglePrivacyHidden
 } from '../core/privacy-engine.js';
-import { abrirDetalhes, exportarCsvMensal } from './details-modal.js';
+import { abrirDetalhes, exportarCsvBatidas, exportarCsvMensal } from './details-modal.js';
 import { openPunchEditor } from './punch-editor.js';
 import { getAlarmConfig } from '../logger/alarm-engine.js';
 import { buildAutoGcalMaxMinusLink, buildQuickCalendarButtons } from '../logger/quick-actions.js';
@@ -38,6 +39,7 @@ import { buildAssistantPlan, buildWeekPlan } from './assistant-engine.js';
 import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml } from '../shared/assistant-card.js';
 import {
     buildBankPlan,
+    buildBankPlanSnapshot,
     buildBankPlanHtml,
     buildBankSummaryLabel,
     clearBankGoal,
@@ -48,6 +50,7 @@ import {
     setManualBalance
 } from './bank-plan.js';
 import { icon } from '../shared/icons.js';
+import { holidayMultiplier } from './calculator.js';
 
 const PERSIST_KEY = 'mirror-panel';
 
@@ -74,6 +77,38 @@ export function ensurePanelContainer() {
     }
 
     return { panel, fab };
+}
+
+/**
+ * Feriado trabalhado (só com batida — o normal é não trabalhar): prévia do
+ * crédito do dia, trabalhado × multiplicador.
+ */
+function buildHolidayRowHtml(hoje) {
+    if (!hoje?.isHoliday || !(hoje.batidas?.length > 0)) return '';
+    const mult = holidayMultiplier();
+    const multLabel = `×${String(mult).replace('.', ',')}`;
+    const creditado = Math.round((hoje.trabalhado || 0) * mult);
+    return `<div class="a-row infos" title="Feriado trabalhado em caráter especial — cada hora vale ${multLabel} no banco (Configurações)">
+        <span class="a-lbl">${icon('calendar')} Feriado ${multLabel}</span>
+        <span class="a-val pos">${renderMinutes(hoje.trabalhado || 0)} → +${renderMinutes(creditado)}<small class="a-cap">caráter especial · prévia do banco</small></span></div>`;
+}
+
+/**
+ * Jornadas em pares, quantas houver. Virada de dia fica explícita: entrada
+ * "ontem" / saída "+1 dia"; o turno de ontem que fechou hoje aparece marcado
+ * e não soma no trabalhado de hoje.
+ */
+function buildShiftPairsHtml(turnos = []) {
+    let n = 0;
+    return (turnos || []).map((t) => {
+        const label = t.countsForPrevDay ? 'Turno de ontem' : `${++n}º turno`;
+        const entrada = `${renderText(t.entrada)}${t.entradaPrevDay ? ' <small class="a-cap">ontem</small>' : ''}`;
+        const saida = `${renderText(t.saida)}${t.saidaNextDay ? ' <small class="a-cap">+1 dia</small>' : ''}`;
+        const notas = [renderMinutes(t.total)];
+        if (t.aberto) notas.push('em andamento');
+        if (t.countsForPrevDay) notas.push('conta em ontem');
+        return `<div class="a-row ${t.classe}"><span class="a-lbl">${label}</span><span class="a-val neu">${entrada} → ${saida}<small class="a-cap">${notas.join(' · ')}</small></span></div>`;
+    }).join('');
 }
 
 export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
@@ -113,9 +148,17 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
         </div>
         <div class="a-row infos"><span class="a-lbl">Trabalhado</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'warn'}">${renderMinutes(r.hoje.trabalhado)}</span></div>
         <div class="a-row infos"><span class="a-lbl">Saldo do dia</span><span class="a-val ${r.hoje.saldo >= 0 ? 'pos' : 'neg'}">${renderMinutes(r.hoje.saldo)}</span></div>
+        ${buildHolidayRowHtml(r.hoje)}
     `;
 
-    if (cfg.flags?.F006_inconsistencias && r.punchAnomalyDays?.length > 0) {
+    // Modo Zen: painel enxuto — assistente + status do dia. O toggle sai do
+    // menu do alfinete (sem a seção Configurações nesta visão).
+    if (cfg.modoZen) {
+        html += `</div><div class="a-foot">Modo Zen · Atualizado ${fmtHour(nowMin())}</div>`;
+        return html;
+    }
+
+    if (cfg.flags?.F006_inconsistencias !== false && r.punchAnomalyDays?.length > 0) {
         html += `<div class="a-row warn"><span class="a-lbl">${icon('triangle-alert')} Atenção</span><span class="a-val warn"><small>${renderText(anomalyLabel)}</small></span></div>`;
     }
 
@@ -145,12 +188,7 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
 
     // Dados densos do dia ficam fora da visão padrão, em expansão.
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-day-details"><summary class="a-sec">Hoje em detalhe</summary>`;
-    if (r.turno1) {
-        html += `<div class="a-row ${r.turno1.classe}"><span class="a-lbl">1º turno</span><span class="a-val neu">${renderText(r.turno1.entrada)} → ${renderText(r.turno1.saida)}<small class="a-cap">${renderMinutes(r.turno1.total)} ${r.turno1.aberto ? '· em andamento' : ''}</small></span></div>`;
-    }
-    if (r.turno2) {
-        html += `<div class="a-row ${r.turno2.classe}"><span class="a-lbl">2º turno</span><span class="a-val neu">${renderText(r.turno2.entrada)} → ${renderText(r.turno2.saida)}<small class="a-cap">${renderMinutes(r.turno2.total)} ${r.turno2.aberto ? '· em andamento' : ''}</small></span></div>`;
-    }
+    html += buildShiftPairsHtml(r.turnos);
     if (r.retornoMinimo) {
         html += `<div class="a-row infos"><span class="a-lbl">${icon('pause')} Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} → ${renderClock(r.retornoMaximo)}</span></div>`;
     }
@@ -168,9 +206,12 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
         <span class="a-val ${r.saldoMes >= 0 ? 'pos' : 'neg'}">${renderMinutes(r.saldoMes)}<small class="a-cap">${r.diasRestantesMes} úteis restantes</small></span></div>
         <div class="a-row infos clickable" id="ahg-open-details" role="button" tabindex="0"><span class="a-lbl">${icon('bar-chart')} Horas realizadas</span><span class="a-val neu">${renderMinutes(r.totalMes)}</span></div>
         <div class="a-row infos clickable" id="ahg-export-csv" role="button" tabindex="0"><span class="a-lbl">${icon('download')} Exportar CSV</span><span class="a-val neu"><small>relatório do mês</small></span></div>
+        <div class="a-row infos clickable" id="ahg-export-csv-vertical" role="button" tabindex="0"><span class="a-lbl">${icon('download')} Exportar batidas</span><span class="a-val neu"><small>uma linha por batida</small></span></div>
     </details>`;
 
-    if (cfg.flags?.F009_banco_horas) {
+    // Flags ausentes valem como ligadas (ConfigStore.isFeatureEnabled) — antes
+    // o `cfg.flags?.F009...` escondia o banco de horas de todo mundo.
+    if (cfg.flags?.F009_banco_horas !== false) {
         const bankPlan = view.bankPlan || buildBankPlan({ officialBalance: r.bancoHoras ?? null });
         const balanceValue = bankPlan.balanceInfo?.value ?? null;
         const summaryLabel = buildBankSummaryLabel(bankPlan.balanceInfo, bankPlan);
@@ -190,8 +231,11 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
                     <option value="dark" ${cfg.tema === 'dark' ? 'selected' : ''}>Escuro</option>
                 </select>
             </div>
-            <div class="ahg-config-item">
-                <label class="ahg-toggle"><input type="checkbox" id="ahg-zen-toggle" ${cfg.modoZen ? 'checked' : ''}><span class="ahg-toggle-track"><span class="ahg-toggle-thumb"></span></span>Modo Zen</label>
+            <div class="ahg-config-item"><span class="ahg-config-label">Horário de entrada</span>
+                <input class="ahg-config-select" type="time" id="ahg-horario-entrada" value="${escapeHtml(cfg.horarioEntrada || '')}" title="Entrada habitual: a sugestão de entrada de amanhã usa este horário quando o descanso de 11h já acabou">
+            </div>
+            <div class="ahg-config-item"><span class="ahg-config-label">Hora em feriado vale</span>
+                <input class="ahg-config-select" type="number" id="ahg-mult-feriado" min="1" max="3" step="0.1" value="${Number(cfg.multFeriado) || 1.4}" title="Multiplicador do banco para horas trabalhadas em feriado (ex.: 1,4)">
             </div>
         </div>
     </details>`;
@@ -212,7 +256,8 @@ export function renderMirrorPanel(resumo) {
 
     const plan = getJourneyPlan();
     const assistant = buildAssistantPlan({
-        batidas: resumo.hoje.batidas,
+        batidas: resumo.hoje.batidasJornada || resumo.hoje.batidas,
+        restStartToday: resumo.restStartToday || null,
         planMinutes: plan.minutes,
         saldoSemana: resumo.saldoSemana,
         yesterdayLastPunch: resumo.yesterdayLastPunch || null
@@ -233,10 +278,21 @@ export function renderMirrorPanel(resumo) {
     });
     if (bankPlan.completed) clearBankGoal();
 
+    // O plano do banco só existe no Mirror: publica a saída de hoje para a
+    // pílula do Logger (null quando não há meta).
+    const bankTodayExit = bankPlan.days?.find((d) => d.isToday)?.suggestedExit ?? null;
+    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null));
+
     const view = {
         assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
         weekHtml: buildWeekViewHtml(weekPlan),
-        dockBarHtml: buildDockBarHtml(assistant, resumo.status),
+        // Fixado numa borda: pílula com os 4 horários; a saída final segue a
+        // meta de banco de horas, se houver.
+        dockBarHtml: buildDockBarHtml(assistant, resumo.status, {
+            full: !!getDockEdge(PERSIST_KEY),
+            edge: getDockEdge(PERSIST_KEY),
+            exitOverride: { time: bankTodayExit }
+        }),
         dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY)),
         bankPlan
     };
@@ -303,6 +359,25 @@ export function renderMirrorPanel(resumo) {
         });
     }
 
+    // Tipo de meta: botões segmentados; só a linha de valor do modo aparece.
+    const bankModeToggle = panel.querySelector('#ahg-bank-mode-toggle');
+    if (bankModeToggle) {
+        bankModeToggle.querySelectorAll('[data-bank-mode]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                bankModeToggle.querySelectorAll('[data-bank-mode]').forEach((b) => {
+                    b.classList.toggle('active', b === btn);
+                    b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+                });
+                const mode = btn.dataset.bankMode;
+                const amountRow = panel.querySelector('#ahg-bank-amount-row');
+                const targetRow = panel.querySelector('#ahg-bank-target-row');
+                if (amountRow) amountRow.hidden = mode !== 'amount';
+                if (targetRow) targetRow.hidden = mode !== 'target';
+                panel.querySelector(mode === 'amount' ? '#ahg-bank-amount' : '#ahg-bank-target')?.focus();
+            });
+        });
+    }
+
     const bankDeadlineToggle = panel.querySelector('#ahg-bank-deadline-toggle');
     if (bankDeadlineToggle) {
         bankDeadlineToggle.querySelectorAll('[data-deadline-type]').forEach((btn) => {
@@ -320,8 +395,10 @@ export function renderMirrorPanel(resumo) {
     const bankGoalCreate = panel.querySelector('#ahg-bank-goal-create');
     if (bankGoalCreate) {
         bankGoalCreate.addEventListener('click', () => {
-            const mode = panel.querySelector('input[name="ahg-bank-mode"]:checked')?.value || 'zero';
+            const mode = panel.querySelector('#ahg-bank-mode-toggle [data-bank-mode].active')?.dataset.bankMode || 'zero';
             const amountMinutes = mode === 'amount' ? toMin(panel.querySelector('#ahg-bank-amount')?.value) : null;
+            const targetRaw = String(panel.querySelector('#ahg-bank-target')?.value || '').trim().replace(/^\+/, '');
+            const targetMinutes = mode === 'target' ? toMin(targetRaw) : null;
             const deadlineType = panel.querySelector('#ahg-bank-deadline-toggle [data-deadline-type].active')?.dataset.deadlineType || 'days';
             const deadlineDays = Number(panel.querySelector('#ahg-bank-days')?.value) || 5;
             const deadlineDate = panel.querySelector('#ahg-bank-date')?.value || null;
@@ -331,13 +408,17 @@ export function renderMirrorPanel(resumo) {
                 showLoggerToast('Informe quanto reduzir (ex.: 2:00)');
                 return;
             }
+            if (mode === 'target' && targetMinutes === null) {
+                showLoggerToast('Informe o saldo-alvo (ex.: +10:00 ou -2:00)');
+                return;
+            }
             if (deadlineType === 'date' && !deadlineDate) {
                 showLoggerToast('Informe a data do prazo');
                 return;
             }
 
             setBankGoal(
-                { mode, amountMinutes, deadlineType, deadlineDays, deadlineDate, floorMinutes },
+                { mode, amountMinutes, targetMinutes, deadlineType, deadlineDays, deadlineDate, floorMinutes },
                 bankPlan.balanceInfo?.value ?? resumo.bancoHoras ?? 0
             );
             renderMirrorPanel(resumo);
@@ -375,6 +456,7 @@ export function renderMirrorPanel(resumo) {
     };
     bindActivate(panel.querySelector('#ahg-open-details'), () => abrirDetalhes(resumo.dias));
     bindActivate(panel.querySelector('#ahg-export-csv'), () => exportarCsvMensal(resumo.dias));
+    bindActivate(panel.querySelector('#ahg-export-csv-vertical'), () => exportarCsvBatidas(resumo.dias));
 
     const themeSelect = panel.querySelector('#ahg-tema-select');
     if (themeSelect) {
@@ -385,13 +467,33 @@ export function renderMirrorPanel(resumo) {
         });
     }
 
-    const zenToggle = panel.querySelector('#ahg-zen-toggle');
-    if (zenToggle) {
-        zenToggle.addEventListener('change', (e) => {
-            ConfigStore.patch({ modoZen: e.target.checked });
+    const entryInput = panel.querySelector('#ahg-horario-entrada');
+    if (entryInput) {
+        entryInput.addEventListener('change', () => {
+            const value = entryInput.value ? normalizePunchTime(entryInput.value) : '';
+            if (value === null) {
+                showLoggerToast('Horário de entrada inválido (ex.: 08:00)');
+                return;
+            }
+            ConfigStore.patch({ horarioEntrada: value });
             renderMirrorPanel(resumo);
         });
     }
+
+    const multInput = panel.querySelector('#ahg-mult-feriado');
+    if (multInput) {
+        multInput.addEventListener('change', () => {
+            const value = Number(String(multInput.value).replace(',', '.'));
+            if (!Number.isFinite(value) || value < 1 || value > 3) {
+                showLoggerToast('Multiplicador inválido (entre 1 e 3, ex.: 1,4)');
+                return;
+            }
+            ConfigStore.patch({ multFeriado: Math.round(value * 100) / 100 });
+            // Saldos dependem do multiplicador: recalcula o resumo inteiro.
+            bus.emit('config:holiday-multiplier');
+        });
+    }
+
 
     bus.emit('panel:rendered', { page: 'mirror' });
 }

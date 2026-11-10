@@ -77,7 +77,9 @@ export function parseCalendarDayCell(dayEl, hoje = new Date()) {
     const batidas = readDayCellPunches(dayEl);
     const manualBatidas = readDayCellManualPunches(dayEl);
     const requestType = readDayCellRequestType(dayEl);
-    const isBusinessDay = (weekDay !== 0 && weekDay !== 6 && !isHoliday) || batidas.length > 0;
+    // Fim de semana/feriado: carga 0 — se houver batidas, todo o tempo trabalhado é saldo positivo.
+    const isRestDay = weekDay === 0 || weekDay === 6 || isHoliday;
+    const isBusinessDay = !isRestDay || batidas.length > 0;
 
     return {
         data,
@@ -85,6 +87,7 @@ export function parseCalendarDayCell(dayEl, hoje = new Date()) {
         isToday,
         isFuture,
         isHoliday,
+        isRestDay,
         isBusinessDay,
         batidas,
         manualBatidas,

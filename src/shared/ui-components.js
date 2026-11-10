@@ -3,6 +3,7 @@
  * Utilitários de UI reutilizáveis.
  */
 
+import { ConfigStore } from '../core/config.js';
 import { STORAGE_KEYS, gmGetJson, gmSetJson } from '../core/storage-adapter.js';
 import { icon } from './icons.js';
 
@@ -28,16 +29,47 @@ function readPanelPositions() {
 
 /**
  * Reflow da página host: reserva espaço na(s) borda(s) ancorada(s), medido pelo
- * tamanho real da barra compacta (não um valor fixo) — se o conteúdo da barra
- * aumenta ou diminui, a reserva acompanha. Um canto reserva os dois eixos.
+ * tamanho real do painel no estado atual (barra compacta quando colapsado,
+ * painel inteiro quando expandido) — nunca um valor fixo. Um canto reserva os
+ * dois eixos. Roda no document do frame onde o painel vive (ex.: dentro do
+ * iframe do mirror), então empurra o conteúdo daquele frame.
  */
 function applyDockReflow(axes, barW, barH) {
-    Object.values(DOCK_MARGIN_PROP).forEach((prop) => { document.body.style[prop] = ''; });
+    const body = document.body;
+    Object.values(DOCK_MARGIN_PROP).forEach((prop) => { body.style[prop] = ''; });
+    if (body.dataset.ahgReflowHeight !== undefined) {
+        body.style.height = body.dataset.ahgReflowHeight;
+        delete body.dataset.ahgReflowHeight;
+    }
     if (!axes) return;
+
+    // Medido antes de aplicar a margem (layout neutro do host).
+    const fullHeightHost = isFullHeightHost();
+    let vertical = 0;
     axes.forEach((axis) => {
-        const size = (axis === 'top' || axis === 'bottom') ? barH : barW;
-        document.body.style[DOCK_MARGIN_PROP[axis]] = `${size + DOCK_GAP}px`;
+        const isVertical = axis === 'top' || axis === 'bottom';
+        const size = (isVertical ? barH : barW) + DOCK_GAP;
+        body.style[DOCK_MARGIN_PROP[axis]] = `${size}px`;
+        if (isVertical) vertical += size;
     });
+
+    // Host de altura fixa (html/body/#root a 100%, rolagem num container
+    // interno — caso da novabatidaonline): margem vertical sozinha só desloca
+    // o body, que mantém 100% de altura → sobra rolagem na janela e o topo do
+    // conteúdo fica sob o painel. Encolhe o body na mesma medida.
+    if (vertical > 0 && fullHeightHost) {
+        body.dataset.ahgReflowHeight = body.style.height || '';
+        body.style.height = `calc(100vh - ${Math.round(vertical)}px)`;
+    }
+}
+
+/** O host ocupa exatamente a altura da janela (layout app-shell, sem rolagem no documento). */
+function isFullHeightHost() {
+    const vh = window.innerHeight;
+    const body = document.body;
+    if (!vh || !body.offsetHeight) return false;
+    return Math.abs(body.offsetHeight - vh) <= 2
+        && document.documentElement.scrollHeight <= vh + 2;
 }
 
 export function savePanelPosition(key, position) {
@@ -184,21 +216,210 @@ export function setDockMini(key, mini) {
     gmSetJson(STORAGE_KEYS.PANEL_POSITIONS, all);
 }
 
+/** Tamanho visível do painel agora (barra ou painel expandido); fallback p/ ambientes sem layout. */
+function measureDockFootprint(panel) {
+    const rect = panel.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return { w: rect.width, h: rect.height };
+    const bar = panel.querySelector('.ahg-dock-bar');
+    return { w: bar?.offsetWidth || 170, h: bar?.offsetHeight || 60 };
+}
+
+/**
+ * Modo "colado no conteúdo": com borda esquerda/direita e um elemento-âncora
+ * do host, o painel encosta na extremidade externa da âncora (alinhado ao topo
+ * dela) em vez de ir para a borda da janela — sem reflow, porque ocupa o
+ * espaço livre ao lado do conteúdo. Sem espaço suficiente, devolve false e o
+ * chamador cai no dock normal de borda + reflow.
+ */
+function layoutAnchoredDock(panel, edge, anchorEl, footprint) {
+    if (!anchorEl || (edge !== 'left' && edge !== 'right')) return false;
+    const a = anchorEl.getBoundingClientRect();
+    if (!(a.width > 0)) return false;
+    const space = edge === 'right'
+        ? window.innerWidth - a.right - DOCK_GAP * 2
+        : a.left - DOCK_GAP * 2;
+    if (space < footprint.w) return false;
+
+    applyDockReflow(null);
+    panel.classList.add('ahg-dock-anchored');
+    panel.style.right = panel.style.bottom = 'auto';
+    panel.style.left = edge === 'right'
+        ? `${Math.round(a.right + DOCK_GAP)}px`
+        : `${Math.round(a.left - DOCK_GAP - footprint.w)}px`;
+    const maxTop = Math.max(DOCK_GAP, window.innerHeight - footprint.h - DOCK_GAP);
+    panel.style.top = `${Math.round(Math.min(Math.max(DOCK_GAP, a.top), maxTop))}px`;
+    return true;
+}
+
+/**
+ * Recalcula posição e reflow do painel ancorado a partir do estado atual
+ * (expandido/colapsado, tamanho da janela, posição da âncora). Chamado pelo
+ * applyPanelDock, pelo toggle de expandir/colapsar e pelos observers de
+ * resize/scroll — é o que mantém a reserva certa sem re-render.
+ */
+export function layoutPanelDock(panel) {
+    const state = panel?._ahgDockState;
+    if (!state) return;
+    // Painel removido da página: desliga os observers em vez de mexer no body.
+    if (!panel.isConnected) { teardownPanelDock(panel); return; }
+    const { edge, key } = state;
+    const axes = EDGE_AXES[edge];
+
+    const anchorEl = typeof state.anchor === 'function' ? state.anchor() : null;
+    if (state.observer && anchorEl !== state.observedAnchor) {
+        if (state.observedAnchor) state.observer.unobserve(state.observedAnchor);
+        if (anchorEl) state.observer.observe(anchorEl);
+        state.observedAnchor = anchorEl;
+    }
+
+    // Só refaz a decisão quando algo que a define mudou. Em regime (scroll,
+    // re-render, a âncora mudando de tamanho por causa da nossa própria
+    // margem) não escreve estilo nenhum: o toggle neutro abaixo força um
+    // recálculo de estilo no meio da troca e, se o host tem transições CSS
+    // (margem/largura), elas disparam e o conteúdo anima de ida e volta.
+    // Re-renders (applySavedPanelPosition, innerHTML) mexem no inline do
+    // painel: antes de comparar, devolve a posição/classes do último layout.
+    // Sem isto o atalho de regime deixava o painel fora do lugar com a margem
+    // do body ainda aplicada — conteúdo coberto e rolagem "quebrada".
+    reassertDockSnapshot(panel, state);
+    const current = measureDockFootprint(panel);
+    const layoutKey = [edge, panel.classList.contains('ahg-dock-expanded'), window.innerWidth,
+        window.innerHeight, Math.round(current.w), Math.round(current.h), !!anchorEl].join('|');
+    if (layoutKey === state.layoutKey) {
+        // Colado na âncora não há margem, então a medida atual já é a neutra:
+        // só acompanha a âncora (scroll). Se deixou de caber, refaz tudo.
+        if (state.mode === 'anchored') {
+            if (!layoutAnchoredDock(panel, edge, anchorEl, current)) {
+                state.layoutKey = null;
+                layoutPanelDock(panel);
+                return;
+            }
+            snapshotDock(panel, state);
+        }
+        return;
+    }
+    state.layoutKey = layoutKey;
+
+    // Decide medindo no layout neutro (sem reflow, painel colado na borda).
+    // Sem isto há um ciclo: a margem do reflow desloca o conteúdo centralizado
+    // do host → passa a caber colado na âncora → a margem sai → o conteúdo
+    // volta → não cabe mais → pisca. Síncrono: nenhum frame intermediário.
+    applyDockReflow(null);
+    panel.classList.remove('ahg-dock-anchored');
+    placePanelOnEdge(panel, axes, key);
+    const footprint = measureDockFootprint(panel);
+
+    if (layoutAnchoredDock(panel, edge, anchorEl, footprint)) {
+        state.mode = 'anchored';
+    } else {
+        state.mode = 'edge';
+        applyDockReflow(axes, footprint.w, footprint.h);
+    }
+    snapshotDock(panel, state);
+}
+
+const DOCK_POS_PROPS = ['left', 'right', 'top', 'bottom'];
+const DOCK_LAYOUT_CLASSES = ['ahg-dock-anchored', 'ahg-dock-strip'];
+
+function snapshotDock(panel, state) {
+    state.snapshot = {
+        styles: Object.fromEntries(DOCK_POS_PROPS.map((p) => [p, panel.style[p]])),
+        classes: DOCK_LAYOUT_CLASSES.filter((c) => panel.classList.contains(c))
+    };
+}
+
+/** Só escreve o que divergiu — em regime é no-op (nenhum recálculo de estilo). */
+function reassertDockSnapshot(panel, state) {
+    const snap = state.snapshot;
+    if (!snap) return;
+    DOCK_POS_PROPS.forEach((p) => {
+        if (panel.style[p] !== snap.styles[p]) panel.style[p] = snap.styles[p];
+    });
+    DOCK_LAYOUT_CLASSES.forEach((c) => {
+        const want = snap.classes.includes(c);
+        if (panel.classList.contains(c) !== want) panel.classList.toggle(c, want);
+    });
+    if (panel.style.transform !== 'none') panel.style.transform = 'none';
+}
+
+function placePanelOnEdge(panel, axes, key) {
+    panel.classList.remove('ahg-dock-strip');
+    panel.style.left = panel.style.right = panel.style.top = panel.style.bottom = 'auto';
+    axes.forEach((axis) => { panel.style[axis] = '0px'; });
+
+    // Canto fixa os dois eixos; borda reta mantém o eixo livre na última
+    // posição conhecida (arrastável ao longo da borda), clampado à viewport.
+    if (axes.length === 1) {
+        const axis = axes[0];
+        const pos = readPanelPositions()[key] || {};
+        const horizontal = axis === 'top' || axis === 'bottom';
+        // Topo/rodapé expandido vira faixa horizontal de largura total (o CSS
+        // distribui o conteúdo em colunas); colapsado continua pílula livre.
+        const strip = horizontal && panel.classList.contains('ahg-dock-expanded');
+        panel.classList.toggle('ahg-dock-strip', strip);
+        if (strip) {
+            panel.style.left = `${DOCK_GAP}px`;
+            panel.style.right = `${DOCK_GAP}px`;
+        } else if (horizontal) {
+            const maxLeft = Math.max(0, window.innerWidth - (panel.offsetWidth || 280));
+            const freeLeft = typeof pos.left === 'number' ? pos.left : 20;
+            panel.style.left = `${Math.min(Math.max(0, freeLeft), maxLeft)}px`;
+        } else {
+            const maxTop = Math.max(0, window.innerHeight - (panel.offsetHeight || 48));
+            const freeTop = typeof pos.top === 'number' ? pos.top : 20;
+            panel.style.top = `${Math.min(Math.max(0, freeTop), maxTop)}px`;
+        }
+    }
+}
+
+/** Liga (uma vez por painel) os gatilhos de re-layout: resize/scroll da janela e ResizeObserver. */
+function ensureDockObservers(panel, state) {
+    if (state.onWindowChange) return;
+    let frame = 0;
+    state.onWindowChange = () => {
+        if (frame) return;
+        const raf = window.requestAnimationFrame || ((cb) => setTimeout(cb, 16));
+        frame = raf(() => { frame = 0; layoutPanelDock(panel); });
+    };
+    window.addEventListener('resize', state.onWindowChange);
+    window.addEventListener('scroll', state.onWindowChange, { passive: true, capture: true });
+    if (typeof ResizeObserver === 'function') {
+        state.observer = new ResizeObserver(state.onWindowChange);
+        state.observer.observe(panel);
+    }
+}
+
+function teardownPanelDock(panel) {
+    const state = panel._ahgDockState;
+    if (!state) return;
+    if (state.onWindowChange) {
+        window.removeEventListener('resize', state.onWindowChange);
+        window.removeEventListener('scroll', state.onWindowChange, { capture: true });
+    }
+    state.observer?.disconnect();
+    delete panel._ahgDockState;
+    panel.classList.remove('ahg-dock-anchored', 'ahg-dock-strip');
+}
+
 /**
  * Aplica a borda ancorada salva: fixa o(s) eixo(s) da borda/canto escolhido
  * (resolve "janela reduzida" — o painel nunca cai fora da tela) e reserva
- * espaço real na página host (reflow), medido pela barra compacta. Sem
- * borda salva, aplica a variante minimalista (pílula livre, sem reflow) se
- * marcada, ou limpa tudo e devolve false (o chamador segue com
- * makePanelDraggable + applySavedPanelPosition, como antes).
+ * espaço real na página host (reflow), medido pelo tamanho atual do painel e
+ * mantido em dia em resize/expandir/colapsar. Com `options.anchor` (função que
+ * devolve um elemento do host) e borda esquerda/direita, cola o painel na
+ * extremidade desse elemento quando há espaço. Sem borda salva, aplica a
+ * variante minimalista (pílula livre, sem reflow) se marcada, ou limpa tudo e
+ * devolve false (o chamador segue com makePanelDraggable +
+ * applySavedPanelPosition, como antes).
  */
-export function applyPanelDock(panel, key) {
+export function applyPanelDock(panel, key, options = {}) {
     if (!panel || !key) return false;
     const edge = getDockEdge(key);
     const mini = getDockMini(key);
     panel.classList.remove(...DOCK_CLASSES);
 
     if (!edge) {
+        teardownPanelDock(panel);
         panel.classList.remove('ahg-docked');
         applyDockReflow(null);
         if (mini) {
@@ -214,51 +435,22 @@ export function applyPanelDock(panel, key) {
     if (panel._ahgDragCleanup) panel._ahgDragCleanup();
 
     panel.classList.add('ahg-docked', `ahg-dock-${edge}`);
-    const wasCollapsed = panel.classList.contains('ahg-dock-collapsed');
-    const hadState = wasCollapsed || panel.classList.contains('ahg-dock-expanded');
-
-    // Mede a barra compacta de verdade (precisa existir no layout pra medir,
-    // daí o truque de ligar .ahg-dock-collapsed, medir, e só então aplicar
-    // o estado real) — a reserva de espaço acompanha o conteúdo, não é fixa.
-    panel.classList.add('ahg-dock-collapsed');
-    const bar = panel.querySelector('.ahg-dock-bar');
-    const barW = bar?.offsetWidth || 170;
-    const barH = bar?.offsetHeight || 60;
-    panel.classList.remove('ahg-dock-collapsed');
-    applyDockReflow(EDGE_AXES[edge], barW, barH);
-
-    if (hadState) {
-        panel.classList.toggle('ahg-dock-collapsed', wasCollapsed);
-        panel.classList.toggle('ahg-dock-expanded', !wasCollapsed);
-    } else {
-        panel.classList.add('ahg-dock-expanded');
-    }
+    const hadState = panel.classList.contains('ahg-dock-collapsed') || panel.classList.contains('ahg-dock-expanded');
+    if (!hadState) panel.classList.add('ahg-dock-expanded');
 
     panel.style.transform = 'none';
-    panel.style.left = panel.style.right = panel.style.top = panel.style.bottom = 'auto';
 
-    const axes = EDGE_AXES[edge];
-    axes.forEach((axis) => { panel.style[axis] = '0px'; });
-
-    // Canto fixa os dois eixos; borda reta mantém o eixo livre na última
-    // posição conhecida (arrastável ao longo da borda), clampado à viewport.
-    if (axes.length === 1) {
-        const axis = axes[0];
-        const pos = readPanelPositions()[key] || {};
-        if (axis === 'top' || axis === 'bottom') {
-            const maxLeft = Math.max(0, window.innerWidth - (panel.offsetWidth || 280));
-            const freeLeft = typeof pos.left === 'number' ? pos.left : 20;
-            panel.style.left = `${Math.min(Math.max(0, freeLeft), maxLeft)}px`;
-        } else {
-            const maxTop = Math.max(0, window.innerHeight - (panel.offsetHeight || 48));
-            const freeTop = typeof pos.top === 'number' ? pos.top : 20;
-            panel.style.top = `${Math.min(Math.max(0, freeTop), maxTop)}px`;
-        }
-    }
+    const state = panel._ahgDockState || {};
+    state.edge = edge;
+    state.key = key;
+    state.anchor = typeof options.anchor === 'function' ? options.anchor : null;
+    panel._ahgDockState = state;
+    ensureDockObservers(panel, state);
+    layoutPanelDock(panel);
     return true;
 }
 
-export function buildDockMenuHtml(currentEdge, currentMini = false) {
+export function buildDockMenuHtml(currentEdge, currentMini = false, zen = ConfigStore.get().modoZen) {
     // Marca a borda ativa com ícone de check + aria-current — a opção atual
     // não pode depender só de cor nem só de estado visual (WCAG 1.4.1 / 4.1.2).
     const options = DOCK_EDGES.map((edge) => {
@@ -274,6 +466,7 @@ export function buildDockMenuHtml(currentEdge, currentMini = false) {
             <button type="button" class="ahg-dock-option${livreActive ? ' active' : ''}" data-dock-edge=""${livreActive ? ' aria-current="true"' : ''}>${icon('move', { size: 12 })} Livre</button>
             <button type="button" class="ahg-dock-option${miniActive ? ' active' : ''}" data-dock-edge="" data-dock-mini="1"${miniActive ? ' aria-current="true"' : ''}>${icon('dot', { size: 12 })} Minimalista</button>
             ${options}
+            <button type="button" class="ahg-dock-option ahg-dock-option--toggle${zen ? ' active' : ''}" data-dock-zen aria-pressed="${zen ? 'true' : 'false'}" title="Painel enxuto e pílula só com o próximo horário (desligado: painel completo e os próximos da jornada)">${zen ? icon('check', { size: 12 }) : icon('eye-off', { size: 12 })} Modo Zen</button>
         </div>
     </div>`;
 }
@@ -326,6 +519,13 @@ export function bindDockMenu(panel, key, onChange) {
         window.addEventListener('resize', onResize);
     });
 
+    // Zen é preferência global (ConfigStore, compartilhada entre Mirror e Logger), não posição.
+    menu.querySelector('[data-dock-zen]')?.addEventListener('click', () => {
+        ConfigStore.patch({ modoZen: !ConfigStore.get().modoZen });
+        closeMenu();
+        onChange?.(getDockEdge(key));
+    });
+
     menu.querySelectorAll('[data-dock-edge]').forEach((btn) => {
         btn.addEventListener('click', () => {
             const edge = btn.dataset.dockEdge || null;
@@ -346,6 +546,9 @@ export function toggleDockExpanded(panel) {
     const expand = panel.classList.contains('ahg-dock-collapsed');
     panel.classList.toggle('ahg-dock-collapsed', !expand);
     panel.classList.toggle('ahg-dock-expanded', expand);
+    // Reserva acompanha o novo tamanho na hora (o ResizeObserver também
+    // pegaria, mas nem todo ambiente tem — e assim não há frame com overlap).
+    layoutPanelDock(panel);
 }
 
 /** Mostra/esconde o painel flutuante. Ancorado ou minimalista: sempre visível (pílula ou painel). */
@@ -387,6 +590,7 @@ export function bindDockMinimizeButton(panel, fab, minBtnSelector) {
         if (panel.classList.contains('ahg-docked') || panel.classList.contains('ahg-dock-expanded')) {
             panel.classList.add('ahg-dock-collapsed');
             panel.classList.remove('ahg-dock-expanded');
+            layoutPanelDock(panel);
         } else {
             setFloatingPanelVisible(panel, fab, false);
         }
@@ -415,6 +619,55 @@ export function createFab({ id, icon, bottom = '20px', left, right, onClick, tit
     return btn;
 }
 
+let toastAnchorProvider = null;
+const TOAST_ANCHOR_GAP = 10;
+
+/**
+ * Define o elemento do host ao qual os avisos se alinham (ex.: botão de bater
+ * ponto). `provider` é uma função que devolve o elemento ou null; sem âncora
+ * visível, os toasts voltam ao canto inferior direito.
+ */
+export function setToastAnchor(provider) {
+    toastAnchorProvider = typeof provider === 'function' ? provider : null;
+    const region = document.getElementById('ahg-toast-region');
+    if (region) positionToastRegion(region);
+}
+
+/**
+ * Balão alinhado à âncora: acima dela (antes do elemento) quando há espaço,
+ * senão logo abaixo; borda esquerda alinhada à da âncora, clampado à viewport.
+ */
+export function positionToastRegion(region) {
+    const anchorEl = toastAnchorProvider ? toastAnchorProvider() : null;
+    const rect = anchorEl?.getBoundingClientRect();
+    const visible = rect && rect.width > 0 && rect.height > 0
+        && rect.bottom > 0 && rect.top < window.innerHeight;
+
+    region.classList.remove('ahg-toast-region--anchored', 'ahg-toast-region--above', 'ahg-toast-region--below');
+    region.style.left = region.style.top = region.style.right = region.style.bottom = '';
+    region.style.maxWidth = '';
+    if (!visible) return false;
+
+    const regionH = region.offsetHeight || 0;
+    const above = rect.top - TOAST_ANCHOR_GAP - regionH >= 4;
+    const maxWidth = Math.max(220, Math.min(420, window.innerWidth - 16));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - maxWidth - 8));
+
+    region.classList.add('ahg-toast-region--anchored', above ? 'ahg-toast-region--above' : 'ahg-toast-region--below');
+    region.style.right = 'auto';
+    region.style.left = `${Math.round(left)}px`;
+    region.style.maxWidth = `${Math.round(maxWidth)}px`;
+    region.style.setProperty('--ahg-toast-arrow-x', `${Math.round(Math.max(12, Math.min(rect.left + 24 - left, maxWidth - 24)))}px`);
+    if (above) {
+        region.style.top = 'auto';
+        region.style.bottom = `${Math.round(window.innerHeight - rect.top + TOAST_ANCHOR_GAP)}px`;
+    } else {
+        region.style.bottom = 'auto';
+        region.style.top = `${Math.round(rect.bottom + TOAST_ANCHOR_GAP)}px`;
+    }
+    return true;
+}
+
 /** Região viva única: toasts empilham e são anunciados por leitores de tela. */
 function ensureToastRegion() {
     let region = document.getElementById('ahg-toast-region');
@@ -425,6 +678,7 @@ function ensureToastRegion() {
         region.setAttribute('role', 'status');
         region.setAttribute('aria-live', 'polite');
         document.body.appendChild(region);
+        window.addEventListener('resize', () => positionToastRegion(region));
     }
     return region;
 }
@@ -458,9 +712,12 @@ export function showLoggerToast(message, options = {}) {
         toast.appendChild(btn);
     }
 
-    ensureToastRegion().appendChild(toast);
+    const region = ensureToastRegion();
+    region.appendChild(toast);
+    positionToastRegion(region);
     setTimeout(() => {
         toast.remove();
+        if (region.childElementCount) positionToastRegion(region);
     }, timeout);
 }
 

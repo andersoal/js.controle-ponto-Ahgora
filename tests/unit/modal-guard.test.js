@@ -190,4 +190,25 @@ describe('ModalGuard', () => {
         expect(confirmBtn.dataset.ahgHooked).toBe('true');
         vi.useRealTimers();
     });
+    it('upsertClockingInModalHint entra como banner antes do título do modal MUI', () => {
+        const overlay = document.createElement('div');
+        overlay.setAttribute('role', 'presentation');
+        overlay.innerHTML = `<div class="MuiBox-root jss80">
+            <p id="server-modal-title">Register your punch-in</p>
+            <p id="server-modal-title">We need your ID to punch-in.</p>
+            <div class="jss119"><button>Clocking in</button></div>
+        </div>`;
+        document.body.appendChild(overlay);
+        const confirmBtn = overlay.querySelector('button');
+
+        upsertClockingInModalHint(confirmBtn, getClockingInIntervalState('14:00', 720));
+        upsertClockingInModalHint(confirmBtn, getClockingInIntervalState('14:05', 720));
+
+        const box = overlay.querySelector('.jss80');
+        const hints = overlay.querySelectorAll('.ahg-modal-hint');
+        expect(hints).toHaveLength(1);
+        expect(box.firstElementChild).toBe(hints[0]);
+        expect(hints[0].classList.contains('ahg-modal-hint--banner')).toBe(true);
+        expect(hints[0].textContent).toContain('Intervalo OK (125min)');
+    });
 });

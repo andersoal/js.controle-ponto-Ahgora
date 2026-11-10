@@ -4,18 +4,17 @@
  * Extraído do entry point (main.js) para ser testável no seam real.
  */
 
-import { CONFIG } from '../core/config.js';
-import { formatDateKey, nowMin, toMin } from '../core/time-utils.js';
+import { formatDateKey, nowMin } from '../core/time-utils.js';
 import {
     calcularInterjornadaMirror,
     computeDailyAlert,
     computeDayBalance,
+    dayBalanceOptions,
     computeExitMilestones,
     computePeriodAggregates,
     computeReturnWindow
 } from './calculator.js';
 import {
-    classifyShiftDuration,
     collectComplianceDays,
     getDayRuleViolations,
     getMonthlySundayRestWarning,
@@ -24,17 +23,9 @@ import {
     getWeeklyRestWarning
 } from './compliance-engine.js';
 import { extrairBancoHoras } from './dom-scraper.js';
+import { effectiveBalance, getManualBalance } from './bank-plan.js';
 import { buildPunchGuidance } from './guidance-engine.js';
-
-function buildTurno(entrada, saida, now) {
-    const e = toMin(entrada);
-    const s = saida ? toMin(saida) : now;
-    if (e === null || s === null) return null;
-    const total = s - e;
-    const severity = classifyShiftDuration(total);
-    const classe = severity === 'ok' ? 'infos' : severity;
-    return { entrada, saida: saida || 'agora', aberto: !saida, total, limite: CONFIG.MAX_HORAS_TURNO, classe };
-}
+import { buildShiftPairs, effectivePunches, linkCrossDayShifts } from './shift-pairs.js';
 
 export function buildStatus(batidas) {
     const q = batidas.length;
@@ -51,13 +42,15 @@ export function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = nu
     if (!hojeDia) return null;
 
     const agora = nowMin();
-    const { trabalhado, saldo } = computeDayBalance(hojeDia.batidas, hojeDia.isBusinessDay, agora);
+    // Turno que começa num dia e termina no outro conta no dia em que começou.
+    linkCrossDayShifts(dias);
+    const { trabalhado, saldo } = computeDayBalance(effectivePunches(hojeDia), hojeDia.isBusinessDay, agora, dayBalanceOptions(hojeDia));
     hojeDia.trabalhado = trabalhado;
     hojeDia.saldo = saldo;
 
     dias.forEach((dia) => {
         if (dia === hojeDia) return;
-        const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora);
+        const balance = computeDayBalance(effectivePunches(dia), dia.isBusinessDay, agora, dayBalanceOptions(dia));
         dia.trabalhado = balance.trabalhado;
         dia.saldo = balance.saldo;
         dia.violations = getDayRuleViolations(dia);
@@ -67,13 +60,15 @@ export function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = nu
 
     const aggregates = computePeriodAggregates(dias, hoje);
     const bancoHoras = extrairBancoHoras();
-    const guidance = buildPunchGuidance(hojeDia.batidas, aggregates.saldoSemana);
-    const milestones = computeExitMilestones(hojeDia.batidas, agora);
-    const retorno = computeReturnWindow(hojeDia.batidas);
+    // Jornada de hoje sem a batida que fechou o turno de ontem (virada de dia).
+    const jornada = effectivePunches(hojeDia);
+    hojeDia.batidasJornada = jornada;
+    const guidance = buildPunchGuidance(jornada, aggregates.saldoSemana);
+    const milestones = computeExitMilestones(jornada, agora);
+    const retorno = computeReturnWindow(jornada);
     const alerta = computeDailyAlert(hojeDia);
 
-    const turno1 = hojeDia.batidas[0] ? buildTurno(hojeDia.batidas[0], hojeDia.batidas[1], agora) : null;
-    const turno2 = hojeDia.batidas[2] ? buildTurno(hojeDia.batidas[2], hojeDia.batidas[3], agora) : null;
+    const turnos = buildShiftPairs(hojeDia, agora);
 
     const amanha = new Date(hojeDia.data);
     amanha.setDate(amanha.getDate() + 1);
@@ -91,16 +86,21 @@ export function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = nu
     const diaOntem = dias.find((d) => d.dateKey === formatDateKey(ontem));
     const yesterdayLastPunch = diaOntem?.batidas?.[diaOntem.batidas.length - 1] || yesterdayLastPunchFallback || null;
 
-    const hojePunchHealth = getPunchCountHealth(hojeDia.batidas.length, { isToday: true });
+    const hojePunchHealth = getPunchCountHealth(jornada.length, { isToday: true });
     const weeklyRestWarning = getWeeklyRestWarning(dias, hoje);
     const weeklyOvertimeWarning = getWeeklyOvertimeWarning(aggregates.saldoSemana);
     const monthlySundayRestWarning = getMonthlySundayRestWarning(dias, hoje);
     const compliance = collectComplianceDays(dias);
 
+    // Banco total (oficial do Ahgora ou o informado + acumulado): vai no
+    // SHARED_TRUTH para o Logger mostrar o que ainda não foi pago/compensado.
+    const bankBalance = effectiveBalance({ officialBalance: bancoHoras, manualBalance: getManualBalance(), dias, hoje });
+
     return {
         hoje: hojeDia,
         dias,
         bancoHoras,
+        bankBalance,
         ...aggregates,
         ...milestones,
         ...compliance,
@@ -108,9 +108,9 @@ export function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = nu
         retornoMaximo: retorno.retornoMaximo,
         alerta,
         guidance,
-        turno1,
-        turno2,
-        status: buildStatus(hojeDia.batidas),
+        turnos,
+        status: buildStatus(jornada),
+        restStartToday: hojeDia.carryIn ? hojeDia.batidas[0] : null,
         interjornada,
         yesterdayLastPunch,
         hojePunchHealth,

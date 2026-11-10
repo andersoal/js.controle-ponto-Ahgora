@@ -8,13 +8,13 @@ import { bus } from './core/event-bus.js';
 import { STORAGE_KEYS, gmGetJsonCrossOrigin, gmSetJsonCrossOrigin } from './core/storage-adapter.js';
 import { formatDateKey, nowMin } from './core/time-utils.js';
 import { decorateCalendarDays } from './mirror/calendar-decorator.js';
-import { computeDayBalance } from './mirror/calculator.js';
+import { computeDayBalance, dayBalanceOptions } from './mirror/calculator.js';
 import { getDayRuleViolations } from './mirror/compliance-engine.js';
 import { extrairDados } from './mirror/dom-scraper.js';
 import { buildMirrorSummary } from './mirror/mirror-summary.js';
 import { renderMirrorPanel } from './mirror/panel-renderer.js';
 import { getLocalDayPunches, openPunchEditor } from './mirror/punch-editor.js';
-import { deleteLastSavedPunch, savePunch } from './logger/punch-history.js';
+import { persistMirrorDays } from './logger/month-history.js';
 import { startLoggerLiveRefresh } from './logger/live-refresh.js';
 import { buildSharedTruth, getYesterdayContext } from './logger/mirror-sync.js';
 import { getLoggerGuidance, getLoggerVm } from './logger/logger-vm.js';
@@ -23,7 +23,8 @@ import { getAlarmConfig, evaluateLoggerAlarms, LOGGER_ALARM_CHECK_MS, setAlarmCo
 import { monitorModal } from './logger/modal-guard.js';
 import { buildAutoGcalMaxMinusLink, maybeAutoOpenQuickCalendar } from './logger/quick-actions.js';
 import { applyTheme, injectCSS } from './shared/css-injector.js';
-import { showLoggerToast } from './shared/ui-components.js';
+import { setToastAnchor } from './shared/ui-components.js';
+import { findPunchCta } from './logger/host-anchors.js';
 
 const AHG_PANEL_VERSION = CONFIG.VERSAO;
 
@@ -73,7 +74,7 @@ function applyLocalOverrides(dias, overridesByDay) {
         if (dia.isFuture) return;
         dia.batidas = [...overrides];
         const agora = dia.isToday ? nowMin() : 1440;
-        const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora);
+        const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora, dayBalanceOptions(dia));
         dia.trabalhado = balance.trabalhado;
         dia.saldo = balance.saldo;
         dia.violations = getDayRuleViolations(dia);
@@ -98,6 +99,10 @@ function handleOpenPunchEditor(dia, hoje = new Date()) {
 function tryRenderMirror(hoje = new Date()) {
     const dias = extrairDados(hoje);
     if (!dias.length) return null;
+
+    // Batidas cruas do espelho (antes dos ajustes locais) alimentam o
+    // histórico mensal do Logger.
+    persistMirrorDays(dias, hoje);
 
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
@@ -196,27 +201,20 @@ function startMirror() {
     // Privacidade muda em outro módulo (painel) — recalcula tudo pra levar o
     // mascaramento real (não só blur) aos badges do calendário também.
     bus.on('privacy:changed', () => tryRenderMirror());
+    bus.on('config:holiday-multiplier', () => tryRenderMirror());
 }
 
 function renderLogger(vm) {
-    renderLoggerContainer(
-        vm,
-        (time) => {
-            const saved = savePunch(time);
-            showLoggerToast(saved ? `Batida ${time} salva` : 'Batida já estava salva');
-            if (saved) renderLogger(getLoggerVm());
-        },
-        () => {
-            const removed = deleteLastSavedPunch();
-            showLoggerToast(removed ? 'Última batida local removida' : 'Nada para remover');
-            if (removed) renderLogger(getLoggerVm());
-        }
-    );
+    renderLoggerContainer(vm);
 }
 
 function startLogger() {
     injectCSS();
     applyTheme(ConfigStore.get().tema);
+
+    // Avisos do Logger (salvar, alarmes, bloqueio de intervalo) aparecem como
+    // balão alinhado ao botão de bater ponto, não no canto da tela.
+    setToastAnchor(() => findPunchCta());
 
     const vm = getLoggerVm();
     renderLogger(vm);

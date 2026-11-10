@@ -15,7 +15,7 @@
  * a saída e como informational quando o plano apenas encosta no limite.
  */
 
-import { CONFIG } from '../core/config.js';
+import { CONFIG, ConfigStore } from '../core/config.js';
 import { nowMin, sameWeek, toMin } from '../core/time-utils.js';
 import { saldoComTolerancia } from './calculator.js';
 
@@ -44,7 +44,11 @@ function balancedFirstShift(planMinutes) {
 }
 
 /** Entrada mais cedo permitida hoje pela interjornada de 11h (BR-001). */
-function interjornadaEarliestEntry(yesterdayLastPunch) {
+function interjornadaEarliestEntry(yesterdayLastPunch, restStartToday = null) {
+    // Turno de ontem que fechou depois da meia-noite: o descanso conta dessa
+    // saída (hoje), não da última batida do dia anterior.
+    const todayStart = toMin(restStartToday);
+    if (todayStart !== null) return todayStart + CONFIG.DESCANSO_MINIMO;
     const last = toMin(yesterdayLastPunch);
     if (last === null) return null;
     const earliest = last + CONFIG.DESCANSO_MINIMO - CONFIG.MINUTES_PER_DAY;
@@ -72,7 +76,10 @@ export function buildAssistantPlan({
     saldoSemana = 0,
     now = nowMin(),
     yesterdayLastPunch = null,
-    intervalMinutes = 60
+    restStartToday = null,
+    intervalMinutes = 60,
+    // Horário de entrada configurado ('HH:MM'); vazio/null = rotina (entrada de hoje).
+    entryTime = ConfigStore.get().horarioEntrada
 } = {}) {
     const enforcement = [];
     const schedule = [];
@@ -81,6 +88,7 @@ export function buildAssistantPlan({
     let idealExit = null;
     let workedPlanned = null;
     let nextDayEntry = null;
+    let nextEntryForecast = null;
 
     const count = batidas.length;
     const interval = clamp(intervalMinutes, CONFIG.INTERVALO_MINIMO, null);
@@ -120,10 +128,13 @@ export function buildAssistantPlan({
 
     if (count === 0) {
         stage = 'entry';
-        const earliest = interjornadaEarliestEntry(yesterdayLastPunch);
-        let entryTime = now;
-        if (earliest !== null && entryTime < earliest) {
-            entryTime = earliest;
+        const earliest = interjornadaEarliestEntry(yesterdayLastPunch, restStartToday);
+        // Antes do horário de entrada configurado, sugere ele (não "agora");
+        // depois dele, agora. O descanso de 11h sempre prevalece.
+        const configuredEntry = toMin(entryTime);
+        let entryAt = configuredEntry !== null && now < configuredEntry ? configuredEntry : now;
+        if (earliest !== null && now < earliest) {
+            entryAt = Math.max(entryAt, earliest);
             enforcement.push(rule(
                 'BR-001',
                 'hard-block',
@@ -131,12 +142,12 @@ export function buildAssistantPlan({
                 'entry'
             ));
         }
-        next = suggestion('entry', entryTime, 'next', earliest, null);
+        next = suggestion('entry', entryAt, 'next', earliest, null);
         schedule.push({ ...next });
 
         // Projeção do dia a partir da entrada sugerida.
         const shift1 = balancedFirstShift(planMinutes);
-        const exit1 = entryTime + shift1;
+        const exit1 = entryAt + shift1;
         const returnTime = exit1 + interval;
         const exitFinal = returnTime + (planMinutes - shift1);
         schedule.push(suggestion('exit1', exit1, 'planned'));
@@ -263,6 +274,18 @@ export function buildAssistantPlan({
                 // só expõe nextDayEntry quando a janela cruza a meia-noite.
                 const restEnd = lastPunch + CONFIG.DESCANSO_MINIMO;
                 nextDayEntry = restEnd >= CONFIG.MINUTES_PER_DAY ? restEnd : null;
+                // Previsão da entrada de amanhã: o horário de entrada
+                // configurado (sem ele, o mesmo horário da entrada de hoje),
+                // nunca antes do fim do descanso de 11h. Ex.: descanso libera
+                // 03:00 e a entrada configurada é 08:00 → sugere 08:00.
+                const configured = toMin(entryTime);
+                const firstEntry = toMin(batidas[0]);
+                const preferred = configured !== null
+                    ? configured + CONFIG.MINUTES_PER_DAY
+                    : (firstEntry !== null ? firstEntry + CONFIG.MINUTES_PER_DAY : null);
+                nextEntryForecast = preferred !== null && preferred >= restEnd
+                    ? { time: preferred, reason: configured !== null ? 'configured' : 'routine' }
+                    : { time: Math.max(restEnd, CONFIG.MINUTES_PER_DAY), reason: 'rest' };
             }
         }
     }
@@ -286,7 +309,8 @@ export function buildAssistantPlan({
         enforcement,
         idealExit,
         workedPlanned,
-        nextDayEntry
+        nextDayEntry,
+        nextEntryForecast
     };
 }
 
@@ -300,7 +324,7 @@ export function buildWeekPlan({ dias = [], hoje = new Date(), planMinutes = CONF
         .sort((a, b) => a.data - b.data);
 
     const days = weekDays.map((d) => {
-        const target = d.isToday ? planMinutes : CONFIG.CARGA_DIARIA;
+        const target = d.isRestDay ? 0 : (d.isToday ? planMinutes : CONFIG.CARGA_DIARIA);
         return {
             dateKey: d.dateKey,
             weekdayLabel: WEEKDAY_LABELS[d.data.getDay()],

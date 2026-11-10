@@ -123,6 +123,8 @@ export function buildSharedTruth(resumo) {
         weekBalance: resumo.saldoSemana || 0,
         monthWorked: resumo.totalMes || 0,
         monthBalance: resumo.saldoMes || 0,
+        bankBalance: resumo.bankBalance?.value ?? null,
+        bankSource: resumo.bankBalance?.source || 'indisponivel',
         status: resumo.status || '',
         guidance: resumo.guidance || null,
         idealExit: resumo.saidaIdeal || null,

@@ -526,6 +526,18 @@ export const CSS_COMPONENTS = `
     animation: ahg-fadein .3s ease;
 }
 .ahg-toast-action { flex-shrink: 0; }
+/* Balão alinhado a um elemento do host (ex.: botão de bater ponto): a região
+   é posicionada via JS (positionToastRegion) e a seta aponta para a âncora. */
+.ahg-toast-region--anchored { align-items: stretch; }
+.ahg-toast-region--anchored .ahg-toast { position: relative; }
+.ahg-toast-region--above .ahg-toast:last-child::after,
+.ahg-toast-region--below .ahg-toast:first-child::before {
+    content: ''; position: absolute; left: var(--ahg-toast-arrow-x, 24px);
+    width: 10px; height: 10px; background: var(--ahg-bg-card);
+    border: 1px solid var(--ahg-border); transform: rotate(45deg);
+}
+.ahg-toast-region--above .ahg-toast:last-child::after { bottom: -6px; border-top: none; border-left: none; }
+.ahg-toast-region--below .ahg-toast:first-child::before { top: -6px; border-bottom: none; border-right: none; }
 @keyframes ahg-fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 /* Assistente de fluxo de batidas */
@@ -639,6 +651,19 @@ export const CSS_COMPONENTS = `
 .ahg-modal-hint--info { color: var(--ahg-info); }
 .ahg-modal-hint--error { color: var(--ahg-danger); }
 .ahg-modal-hint--ok { color: var(--ahg-ok); }
+/* Banner de cabeçalho dentro do modal do host (fundo claro do MUI): o texto
+   herda a cor do host (contraste garantido) e o estado vem da faixa + tinta. */
+.ahg-modal-hint--banner {
+    --ahg-hint-c: var(--ahg-info);
+    display: block; box-sizing: border-box; width: 100%;
+    margin: 0 0 12px; padding: 10px 14px;
+    border-radius: 8px; border-left: 4px solid var(--ahg-hint-c);
+    background: color-mix(in srgb, var(--ahg-hint-c) 12%, transparent);
+    color: inherit; font-size: 14px; font-weight: 600; line-height: 1.35; text-align: left;
+}
+.ahg-modal-hint--banner.ahg-modal-hint--ok { --ahg-hint-c: var(--ahg-ok); }
+.ahg-modal-hint--banner.ahg-modal-hint--error { --ahg-hint-c: var(--ahg-danger); }
+.ahg-modal-hint--banner.ahg-modal-hint--info { --ahg-hint-c: var(--ahg-info); }
 
 /* Ancoragem em borda — "importante para quando está com janela reduzida":
    o painel fica colado numa borda e nunca cai fora da tela. Vira uma barra
@@ -693,6 +718,99 @@ export const CSS_COMPONENTS = `
 
 #ahg-panel.ahg-docked.ahg-dock-expanded,
 #ahg-batida-panel.ahg-docked.ahg-dock-expanded { max-height: calc(100vh - 16px); }
+
+/* Topo/rodapé expandido: faixa horizontal de largura total (left/right via JS).
+   O conteúdo, que é uma lista plana de seções e linhas, vira colunas lado a
+   lado — a altura cai e o reflow empurra a página bem menos. */
+#ahg-panel.ahg-dock-strip,
+#ahg-batida-panel.ahg-dock-strip {
+    min-width: 0; max-width: none; width: auto;
+    max-height: min(50vh, 420px);
+}
+.ahg-panel.ahg-dock-strip > .a-body {
+    display: block;
+    column-width: 250px; column-gap: 24px;
+    column-rule: 1px solid var(--ahg-border);
+}
+.ahg-panel.ahg-dock-strip > .a-body > * {
+    break-inside: avoid; margin-bottom: 4px;
+}
+.ahg-panel.ahg-dock-strip > .a-body > .a-sec { break-after: avoid; }
+/* Divisórias horizontais não fazem sentido entre colunas — o column-rule separa. */
+.ahg-panel.ahg-dock-strip > .a-body > hr.a-div { display: none; }
+.ahg-panel.ahg-dock-strip > .a-body > .a-sec:not(:first-child) { margin-top: 8px; }
+
+/* Pílula minimalista com a sequência dos próximos horários (Zen desligado) */
+.ahg-dock-bar--seq { gap: 8px; flex-wrap: nowrap; white-space: nowrap; }
+.ahg-dock-step { display: inline-flex; align-items: baseline; gap: 4px; }
+.ahg-dock-step:not(.is-next) .ahg-dock-bar-time { font-size: 13px; color: var(--ahg-text); opacity: .8; }
+.ahg-dock-sep { color: var(--ahg-text-label); }
+.ahg-dock-step.is-done { opacity: .5; }
+.ahg-dock-step.is-done .ahg-dock-bar-time { text-decoration: line-through; text-decoration-thickness: 1px; }
+.ahg-dock-step.is-goal .ahg-dock-bar-time { color: var(--ahg-warn); }
+.ahg-dock-bar--stack { flex-direction: column; align-items: flex-start; gap: 2px; }
+.ahg-dock-bar--stack .ahg-dock-step { gap: 6px; }
+.ahg-dock-option--toggle { border-top: 1px solid var(--ahg-border); margin-top: 4px; padding-top: 8px; }
+
+/* Logger — atalho do espelho com o estado da sincronização embutido */
+/* Link compacto ao lado do título "Última batida" */
+.ahg-sec-action { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ahg-mirror-link {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0; text-transform: none;
+    color: var(--ahg-primary); text-decoration: none;
+    padding: 2px 8px; border: 1px solid var(--ahg-border); border-radius: 999px;
+}
+.ahg-mirror-link:hover, .ahg-mirror-link:focus-visible { background: var(--ahg-hover-bg); text-decoration: underline; }
+.ahg-sync-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--ahg-ok); }
+.ahg-sync--cache .ahg-sync-dot { background: var(--ahg-info); }
+.ahg-sync--stale .ahg-sync-dot,
+.ahg-sync--none .ahg-sync-dot { background: var(--ahg-warn); }
+.ahg-sync-label { font-size: 10px; font-weight: 600; color: var(--ahg-text-label); text-transform: uppercase; letter-spacing: .3px; }
+
+/* Logger — histórico do mês atual + anterior com ajuste manual */
+.ahg-hist-month { margin: 2px 0 6px; }
+.ahg-hist-month-title {
+    cursor: pointer; list-style: none; user-select: none;
+    font-size: 11px; font-weight: 700; text-transform: capitalize; color: var(--ahg-text);
+    padding: 4px 0;
+}
+.ahg-hist-month-title::-webkit-details-marker { display: none; }
+.ahg-hist-month-title::before { content: '▸ '; color: var(--ahg-text-label); }
+.ahg-hist-month[open] > .ahg-hist-month-title::before { content: '▾ '; }
+.ahg-hist-month-title small { font-weight: 500; color: var(--ahg-text-label); text-transform: none; }
+.ahg-hist-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.ahg-hist-day {
+    display: grid; grid-template-columns: max-content minmax(0, 1fr) auto auto; align-items: center; gap: 4px 10px;
+    padding: 4px 6px; border-radius: var(--ahg-radius); font-size: 11px;
+}
+.ahg-hist-day:hover { background: var(--ahg-hover-bg); }
+.ahg-hist-day.is-today { background: color-mix(in srgb, var(--ahg-primary) 8%, transparent); }
+.ahg-hist-day.is-today .ahg-hist-date,
+.ahg-hist-day.is-today .ahg-hist-punch { color: var(--ahg-primary); font-weight: 700; }
+.ahg-hist-day.is-manual { box-shadow: inset 3px 0 0 var(--ahg-warn); }
+.ahg-hist-date { color: var(--ahg-text-label); white-space: nowrap; }
+.ahg-hist-punches { display: grid; grid-template-columns: repeat(4, minmax(0, 5ch)); gap: 2px 6px; font-variant-numeric: tabular-nums; min-width: 0; }
+.ahg-hist-punch { font-weight: 600; white-space: nowrap; }
+.ahg-hist-empty { grid-column: 1 / -1; }
+.ahg-hist-more {
+    justify-self: start; white-space: nowrap; cursor: help; font-size: 10px; font-weight: 700;
+    color: var(--ahg-primary); border: 1px solid color-mix(in srgb, var(--ahg-primary) 40%, transparent);
+    border-radius: 999px; padding: 0 5px; line-height: 15px;
+}
+.ahg-hist-badge-slot { width: 17px; }
+.ahg-hist-empty { color: var(--ahg-text-label); font-style: italic; }
+.ahg-hist-badge {
+    display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    color: var(--ahg-warn); border: 1px solid color-mix(in srgb, var(--ahg-warn) 45%, transparent);
+    border-radius: 999px; padding: 1px 6px;
+}
+.ahg-hist-edit {
+    grid-column: 4; background: none; border: 1px solid transparent; border-radius: var(--ahg-radius);
+    color: var(--ahg-text-label); cursor: pointer; padding: 3px 5px; line-height: 0;
+}
+.ahg-hist-edit:hover, .ahg-hist-edit:focus-visible { color: var(--ahg-primary); border-color: var(--ahg-border); }
 
 /* Prazo/piso do planejador de banco de horas */
 .ahg-bank-goal-form, .ahg-bank-plan, .ahg-bank-manual { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }

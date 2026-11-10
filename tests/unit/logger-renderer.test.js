@@ -42,25 +42,67 @@ describe('LoggerRenderer', () => {
         };
     }
 
-    it('buildLoggerHtml mostra última batida e histórico', () => {
-        const vm = makeVm({
-            historyTimelineEntries: [
-                { dateKey: '2026-07-06', time: '08:00', isToday: true },
-                { dateKey: '2026-07-06', time: '17:00', isToday: true }
-            ]
-        });
-        const html = buildLoggerHtml(vm);
+    function monthHistory(days) {
+        return { months: [
+            { key: '2026-11', label: 'novembro 2026', isCurrent: true, days },
+            { key: '2026-10', label: 'outubro 2026', isCurrent: false, days: [] }
+        ] };
+    }
+
+    it('buildLoggerHtml mostra última batida e o histórico do mês com ajuste manual marcado', () => {
+        const html = buildLoggerHtml(makeVm({
+            monthHistory: monthHistory([
+                { dateKey: '2026-11-09', label: 'seg 09/11', isToday: true, punches: ['08:00', '17:00'], basePunches: ['08:00', '17:00'], manual: false },
+                { dateKey: '2026-11-06', label: 'sex 06/11', isToday: false, punches: ['09:00', '18:30'], basePunches: ['09:00', '18:00'], manual: true }
+            ])
+        }));
         expect(html).toContain('Logger');
         expect(html).toContain('17:00');
         expect(html).toContain('sincronizado');
-        expect(html).toContain('08:00');
+        expect(html).toContain('novembro 2026');
+        expect(html).not.toContain('· hoje');
+        expect(html).toContain('ahg-hist-day is-today');
+        expect(html).toContain('ahg-hist-day is-manual');
+        expect(html).toContain('Ajustado manualmente');
+        expect(html).toContain('data-date-key="2026-11-06"');
+        expect(html).not.toContain('outubro 2026'); // mês sem dias não aparece
     });
 
-    it('buildLoggerHtml inclui atalho para abrir o espelho', () => {
-        const html = buildLoggerHtml(makeVm(), false, { mirrorUrl: 'https://app.ahgora.com.br/externo/index/a935336' });
-        expect(html).toContain('id="ahg-logger-open-mirror"');
-        expect(html).toContain('href="https://app.ahgora.com.br/externo/index/a935336"');
-        expect(html).toContain('target="_blank"');
+    it('não há mais Salvar última / Desfazer; status do espelho vai no próprio botão', () => {
+        const ok = buildLoggerHtml(makeVm());
+        expect(ok).not.toContain('ahg-logger-save');
+        expect(ok).not.toContain('ahg-logger-delete');
+        expect(ok).not.toContain('id="ahg-logger-source"');
+        expect(ok).toContain('ahg-sync--ok');
+        expect(ok).not.toContain('ahg-sync-label');
+
+        const stale = buildLoggerHtml(makeVm({ mirrorSource: null, hasMirrorData: false, hasSharedStaleCache: true }));
+        expect(stale).toContain('ahg-sync--stale');
+        expect(stale).toContain('outro dia');
+    });
+
+    it('lápis do histórico abre o Punch Editor do dia', () => {
+        renderLoggerContainer(makeVm({
+            monthHistory: monthHistory([
+                { dateKey: '2026-11-06', label: 'sex 06/11', isToday: false, punches: ['09:00', '18:00'], basePunches: ['09:00', '18:00'], manual: false }
+            ])
+        }));
+        document.querySelector('.ahg-hist-edit[data-date-key="2026-11-06"]').click();
+        const editor = document.getElementById('ahg-punch-editor-2026-11-06');
+        expect(editor).not.toBeNull();
+        expect(editor.textContent).toContain('18:00');
+    });
+
+    it('re-render preserva os grupos do histórico que o usuário fechou', () => {
+        const vm = makeVm({
+            monthHistory: monthHistory([
+                { dateKey: '2026-11-06', label: 'sex 06/11', isToday: false, punches: ['09:00'], basePunches: ['09:00'], manual: false }
+            ])
+        });
+        renderLoggerContainer(vm);
+        document.getElementById('ahg-logger-hist-2026-11').open = false;
+        renderLoggerContainer(vm);
+        expect(document.getElementById('ahg-logger-hist-2026-11').open).toBe(false);
     });
 
     it('buildLoggerHtml distingue fonte sincronizada, cache e sem dados', () => {
@@ -161,5 +203,46 @@ describe('LoggerRenderer', () => {
 
         const stored = JSON.parse(global.localStorage.getItem('ahgora_logger_alarm_v1'));
         expect(stored.enabled).toBe(false);
+    });
+    it('Modo Zen enxuga o painel: sem Hoje, Histórico e Alarme', () => {
+        global.localStorage.setItem('@ahgora-panel/config', JSON.stringify({ modoZen: true }));
+        renderLoggerContainer(makeVm());
+        const panel = document.getElementById('ahg-batida-panel');
+        expect(panel.querySelector('#ahg-assistant')).not.toBeNull();
+        expect(panel.querySelector('#ahg-logger-open-mirror')).not.toBeNull();
+        expect(panel.querySelector('#ahg-logger-history')).toBeNull();
+        expect(panel.querySelector('#ahg-logger-alarm-toggle')).toBeNull();
+        expect(panel.textContent).toContain('Modo Zen');
+    });
+});
+
+describe('Logger: pílula fixada com os 4 horários', () => {
+    it('fixado no topo mostra os 4 horários e a saída da meta publicada pelo Mirror', async () => {
+        const { setDockEdge } = await import('../../src/shared/ui-components.js');
+        const { STORAGE_KEYS, gmSetJsonCrossOrigin } = await import('../../src/core/storage-adapter.js');
+        const { formatDateKey } = await import('../../src/core/time-utils.js');
+        const { ConfigStore } = await import('../../src/core/config.js');
+        ConfigStore.patch({ modoZen: false });
+        document.body.innerHTML = '';
+        setDockEdge('logger-panel', 'top');
+        gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, {
+            dateKey: formatDateKey(), active: true, targetBalance: 600, direction: 'late', targetReduction: 59,
+            achievableMinutes: 59, feasible: true, todayExit: 16 * 60 + 30, todayAdjustment: 30,
+            days: [{ dateKey: formatDateKey(), weekdayLabel: 'seg', isToday: true, adjustmentMinutes: 30 }]
+        });
+        renderLoggerContainer({
+            combinedLastPunch: '08:00', combinedPunches: ['08:00'], hasMirrorData: true, mirrorSource: 'truth',
+            pendingLocalHistoryEntries: [], monthHistory: { months: [] }, weekBalance: 0
+        });
+        const bar = document.querySelector('#ahg-dock-bar');
+        expect(bar.classList.contains('ahg-dock-bar--full')).toBe(true);
+        expect(bar.querySelectorAll('.ahg-dock-step')).toHaveLength(4);
+        expect(bar.querySelector('.is-goal').textContent).toContain('16:30');
+
+        // Seção "Meta do banco" no painel expandido.
+        const text = document.querySelector('#ahg-logger-panel, .ahg-panel').textContent;
+        expect(text).toContain('Meta do banco');
+        expect(text).toContain('Saia até 16:30');
+        expect(text).toContain('ficar a mais');
     });
 });

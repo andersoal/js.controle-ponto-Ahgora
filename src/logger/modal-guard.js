@@ -34,31 +34,46 @@ export function getClockingInIntervalState(nextTime, lastMinute) {
     return { nextMinute, lastMinute, minMinute, diff, isBlocked, noReference: false };
 }
 
+/**
+ * Onde o aviso entra: como banner de cabeçalho, logo antes do título do modal
+ * (MUI real: `#server-modal-title`). Sem título reconhecível, cai para antes
+ * do botão de confirmar, como antes.
+ */
+export function findModalBannerSlot(modal, confirmBtn) {
+    const title = modal?.querySelector?.('[id$="modal-title"], h1, h2, h3, .v-card__title');
+    if (title?.parentElement) return { parent: title.parentElement, before: title };
+    return { parent: confirmBtn.parentElement, before: confirmBtn };
+}
+
 export function upsertClockingInModalHint(confirmBtn, state) {
     if (!confirmBtn) return;
     const modal = confirmBtn.closest('[role="dialog"]') || confirmBtn.closest('.v-dialog--active') || confirmBtn.closest('[role="presentation"]') || document.body;
+    const slot = findModalBannerSlot(modal, confirmBtn);
     let hint = modal.querySelector('.ahg-modal-hint');
     if (!hint) {
         hint = document.createElement('div');
-        hint.className = 'ahg-modal-hint';
-        confirmBtn.parentElement.insertBefore(hint, confirmBtn);
+        hint.setAttribute('role', 'status');
+    }
+    // Re-render do host pode mover/recriar o título — mantém o banner no topo.
+    if (hint.parentElement !== slot.parent || hint.nextSibling !== slot.before) {
+        slot.parent.insertBefore(hint, slot.before);
     }
 
     if (state.noReference) {
         hint.textContent = '⚠️ Sem referência de última batida';
-        hint.className = 'ahg-modal-hint ahg-modal-hint--info';
+        hint.className = 'ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--info';
         confirmBtn.style.pointerEvents = '';
         confirmBtn.style.opacity = '';
         confirmBtn.removeAttribute('aria-disabled');
     } else if (state.isBlocked) {
         hint.textContent = `⛔ Intervalo mínimo de 30min não atingido. Aguarde até ${String(Math.floor(state.minMinute / 60)).padStart(2, '0')}:${String(state.minMinute % 60).padStart(2, '0')}.`;
-        hint.className = 'ahg-modal-hint ahg-modal-hint--error';
+        hint.className = 'ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--error';
         confirmBtn.style.pointerEvents = 'none';
         confirmBtn.style.opacity = '0.55';
         confirmBtn.setAttribute('aria-disabled', 'true');
     } else {
         hint.textContent = `✅ Intervalo OK (${state.diff}min)`;
-        hint.className = 'ahg-modal-hint ahg-modal-hint--ok';
+        hint.className = 'ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--ok';
         confirmBtn.style.pointerEvents = '';
         confirmBtn.style.opacity = '';
         confirmBtn.removeAttribute('aria-disabled');

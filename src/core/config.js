@@ -83,6 +83,10 @@ export const ConfigStore = {
             cardsAtivos: ['interjornada', 'intrajornada', 'alarme', 'saldo', 'historico'],
             modoZen: false,
             modoMinimalista: false,
+            // Hora em feriado vale N vezes no banco (convenção da empresa).
+            multFeriado: 1.4,
+            // Entrada habitual: sugestão de entrada de amanhã (respeitado o descanso de 11h).
+            horarioEntrada: '08:00',
             gcalUserPath: CONFIG.GCAL_USER_PATH,
             flags: {},
             _migrated: false

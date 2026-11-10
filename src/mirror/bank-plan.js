@@ -10,7 +10,7 @@
 import { CONFIG } from '../core/config.js';
 import { STORAGE_KEYS, gmGetJson, gmSetJson } from '../core/storage-adapter.js';
 import { escapeHtml, formatDateKey, nowMin } from '../core/time-utils.js';
-import { saldoComTolerancia } from './calculator.js';
+import { holidayMultiplier, saldoComTolerancia } from './calculator.js';
 import { renderClock, renderMinutes } from '../core/privacy-engine.js';
 import { icon } from '../shared/icons.js';
 
@@ -54,11 +54,14 @@ export function clearManualBalance() {
 
 export function normalizeBankGoal(raw) {
     if (!raw) return null;
-    const mode = raw.mode === 'amount' ? 'amount' : 'zero';
+    const mode = ['amount', 'target'].includes(raw.mode) ? raw.mode : 'zero';
+    const target = Number(raw.targetMinutes);
     const deadlineType = raw.deadlineType === 'date' ? 'date' : 'days';
     return {
         mode,
         amountMinutes: mode === 'amount' ? Math.max(0, Number(raw.amountMinutes) || 0) : null,
+        // Saldo-alvo (com sinal): +10:00 para acumular, -2:00 para gastar até lá.
+        targetMinutes: mode === 'target' && Number.isFinite(target) ? Math.round(target) : null,
         deadlineType,
         deadlineDays: deadlineType === 'days' ? Math.max(1, Math.round(Number(raw.deadlineDays) || 1)) : null,
         deadlineDate: deadlineType === 'date' ? (raw.deadlineDate || null) : null,
@@ -91,6 +94,22 @@ export function clearBankGoal() {
  * projetado para hoje a partir do trabalhado real nos dias desde que foi
  * informado (aproximação — sem leitura oficial não há como confirmar).
  */
+/**
+ * Feriados trabalhados (com batida) no período raspado: prévia do crédito no
+ * banco (trabalhado × multiplicador). Feriado sem batida não aparece — o
+ * normal é não trabalhar; só entra quando houve trabalho em caráter especial.
+ */
+export function workedHolidayCredits(dias = [], hoje = new Date(), multiplier = holidayMultiplier()) {
+    return (dias || [])
+        .filter((d) => d.isHoliday && !d.isFuture && d.data <= hoje && (d.batidas?.length || 0) > 0)
+        .map((d) => ({
+            dateKey: d.dateKey,
+            trabalhado: d.trabalhado || 0,
+            creditado: Math.round((d.trabalhado || 0) * multiplier),
+            multiplier
+        }));
+}
+
 export function effectiveBalance({ officialBalance = null, manualBalance = null, dias = [], hoje = new Date() } = {}) {
     if (officialBalance !== null && officialBalance !== undefined) {
         return { value: officialBalance, source: 'oficial' };
@@ -119,7 +138,10 @@ function businessDaysWindow(goal, dias, hoje) {
         const scrapedDay = scraped.get(dateKey);
         const isBusiness = scrapedDay ? scrapedDay.isBusinessDay : isWeekdayBusiness(cursor);
 
-        if (isBusiness) {
+        // Feriado não entra na distribuição da meta: trabalhar nele é exceção
+        // (o crédito ×multiplicador aparece à parte, só se houve batida).
+        const isHoliday = scrapedDay?.isHoliday === true;
+        if (isBusiness && !isHoliday) {
             days.push({
                 dateKey,
                 weekdayLabel: WEEKDAY_LABELS[cursor.getDay()],
@@ -153,20 +175,25 @@ export function buildBankPlan({
     todayPlannedExit = null
 } = {}) {
     const balanceInfo = effectiveBalance({ officialBalance, manualBalance, dias, hoje });
+    const holidayCredits = workedHolidayCredits(dias, hoje);
 
-    if (!goal) return { active: false, balanceInfo };
+    if (!goal) return { active: false, balanceInfo, holidayCredits };
     if (balanceInfo.value === null) return { active: true, feasible: false, balanceInfo, noBalance: true };
 
     const balance = balanceInfo.value;
-    const targetReduction = goal.mode === 'zero'
-        ? Math.abs(balance)
-        : Math.min(goal.amountMinutes, Math.abs(balance));
+    // delta = quanto o banco precisa variar: < 0 sair mais cedo, > 0 ficar mais.
+    let delta;
+    if (goal.mode === 'target') delta = (goal.targetMinutes ?? 0) - balance;
+    else if (goal.mode === 'amount') delta = -Math.sign(balance) * Math.min(goal.amountMinutes, Math.abs(balance));
+    else delta = -balance;
+    const targetReduction = Math.abs(delta);
+    const targetBalance = balance + delta;
 
     if (targetReduction <= CONFIG.TOLERANCIA) {
-        return { active: true, completed: true, balanceInfo, remaining: 0, targetReduction: 0 };
+        return { active: true, completed: true, balanceInfo, remaining: 0, targetReduction: 0, targetBalance, holidayCredits };
     }
 
-    const direction = balance > 0 ? 'early' : 'late';
+    const direction = delta < 0 ? 'early' : 'late';
     const window = businessDaysWindow(goal, dias, hoje);
     const capacity = direction === 'early'
         ? Math.max(0, planMinutes - goal.floorMinutes)
@@ -199,10 +226,39 @@ export function buildBankPlan({
         balanceInfo,
         direction,
         targetReduction,
+        targetBalance,
         achievableMinutes,
         shortfallMinutes: Math.max(0, targetReduction - achievableMinutes),
         feasible: achievableMinutes >= targetReduction,
-        days
+        days,
+        holidayCredits
+    };
+}
+
+/**
+ * Resumo serializável do plano para o Logger (que não tem os dias do mês para
+ * calcular sozinho). `todayExit`: saída de hoje sugerida pela meta.
+ */
+export function buildBankPlanSnapshot(bankPlan, dateKey) {
+    if (!bankPlan?.active) return { dateKey, active: false };
+    const today = bankPlan.days?.find((d) => d.isToday) || null;
+    return {
+        dateKey,
+        active: true,
+        completed: !!bankPlan.completed,
+        noBalance: !!bankPlan.noBalance,
+        balance: bankPlan.balanceInfo?.value ?? null,
+        balanceSource: bankPlan.balanceInfo?.source || 'indisponivel',
+        targetBalance: bankPlan.targetBalance ?? null,
+        direction: bankPlan.direction || null,
+        targetReduction: bankPlan.targetReduction ?? 0,
+        achievableMinutes: bankPlan.achievableMinutes ?? 0,
+        feasible: bankPlan.feasible !== false,
+        todayExit: today?.suggestedExit ?? null,
+        todayAdjustment: today?.adjustmentMinutes ?? null,
+        days: (bankPlan.days || []).map((d) => ({
+            dateKey: d.dateKey, weekdayLabel: d.weekdayLabel, isToday: !!d.isToday, adjustmentMinutes: d.adjustmentMinutes
+        }))
     };
 }
 
@@ -215,7 +271,7 @@ export function buildBankSummaryLabel(balanceInfo, bankPlan) {
     if (!bankPlan?.active || !bankPlan.days) {
         return renderMinutes(balanceInfo?.value ?? null);
     }
-    const verbo = bankPlan.direction === 'early' ? 'reduzindo' : 'compensando';
+    const verbo = bankPlan.direction === 'early' ? 'reduzindo' : 'acumulando';
     return `${verbo} ${renderMinutes(bankPlan.achievableMinutes)} em ${bankPlan.days.length} dia${bankPlan.days.length > 1 ? 's' : ''}`;
 }
 
@@ -234,10 +290,19 @@ function buildGoalFormHtml() {
     return `
     <div class="ahg-bank-goal-form">
         <div class="ahg-bank-form-row">
-            <label class="ahg-toggle"><input type="radio" name="ahg-bank-mode" value="zero" checked> Zerar</label>
-            <label class="ahg-toggle"><input type="radio" name="ahg-bank-mode" value="amount"> Reduzir em
-                <input type="text" id="ahg-bank-amount" class="ahg-bank-input ahg-bank-input-sm" placeholder="2:00" aria-label="Quantidade a reduzir">
-            </label>
+            <div class="ahg-as-presets" id="ahg-bank-mode-toggle" role="group" aria-label="Tipo de meta">
+                <button type="button" class="ahg-as-preset active" data-bank-mode="zero" aria-pressed="true" title="Levar o banco a 0">Zerar</button>
+                <button type="button" class="ahg-as-preset" data-bank-mode="amount" aria-pressed="false" title="Diminuir o saldo em X (aproxima de zero)">Reduzir em</button>
+                <button type="button" class="ahg-as-preset" data-bank-mode="target" aria-pressed="false" title="Saldo final desejado: positivo para acumular, negativo para gastar">Chegar a</button>
+            </div>
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-amount-row" hidden>
+            <span class="ahg-config-label">Reduzir</span>
+            <input type="text" id="ahg-bank-amount" class="ahg-bank-input ahg-bank-input-sm" placeholder="2:00" aria-label="Quantidade a reduzir">
+        </div>
+        <div class="ahg-bank-form-row" id="ahg-bank-target-row" hidden>
+            <span class="ahg-config-label">Saldo final</span>
+            <input type="text" id="ahg-bank-target" class="ahg-bank-input" placeholder="+10:00 ou -2:00" aria-label="Saldo-alvo do banco de horas">
         </div>
         <div class="ahg-bank-form-row">
             <div class="ahg-as-presets" id="ahg-bank-deadline-toggle" role="group" aria-label="Formato do prazo">
@@ -278,15 +343,31 @@ function buildActivePlanHtml(bankPlan) {
     const shortfall = !bankPlan.feasible
         ? `<div class="ahg-bank-hint ahg-bank-hint--warn">${icon('triangle-alert', { size: 11 })} Dentro do prazo e do piso informados, chega a reduzir ${renderMinutes(bankPlan.achievableMinutes)} de ${renderMinutes(bankPlan.targetReduction)} — faltam ${renderMinutes(bankPlan.shortfallMinutes)}.</div>`
         : '';
+    const verbo = bankPlan.direction === 'early' ? 'sair mais cedo' : 'ficar a mais';
+    const objetivo = `<div class="ahg-bank-hint">${icon('target', { size: 11 })} Objetivo: banco em <b>${renderMinutes(bankPlan.targetBalance)}</b> — ${verbo} ${renderMinutes(bankPlan.targetReduction)} no total</div>`;
     return `
     <div class="ahg-bank-plan">
+        ${objetivo}
         ${shortfall}
         <div class="ahg-bank-days">${rows}</div>
         <button type="button" class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-bank-goal-cancel">Cancelar meta</button>
     </div>`;
 }
 
+function buildHolidayCreditsHtml(credits = []) {
+    if (!credits.length) return '';
+    return credits.map((c) => {
+        const mult = String(c.multiplier).replace('.', ',');
+        const date = `${c.dateKey.slice(8, 10)}/${c.dateKey.slice(5, 7)}`;
+        return `<div class="ahg-bank-hint" title="Feriado trabalhado em caráter especial — cada hora vale ×${mult} no banco (Configurações)">${icon('calendar', { size: 11 })} Feriado ${date} trabalhado: ${renderMinutes(c.trabalhado)} × ${mult} = <b>+${renderMinutes(c.creditado)}</b> no banco</div>`;
+    }).join('');
+}
+
 export function buildBankPlanHtml(bankPlan) {
+    return buildHolidayCreditsHtml(bankPlan.holidayCredits) + buildBankPlanBodyHtml(bankPlan);
+}
+
+function buildBankPlanBodyHtml(bankPlan) {
     if (bankPlan.completed) {
         return `<div class="ahg-bank-hint ahg-bank-hint--ok">${icon('circle-check', { size: 11 })} Meta de banco de horas concluída.</div>`;
     }

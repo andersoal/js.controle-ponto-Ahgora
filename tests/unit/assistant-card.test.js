@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildAssistantPlan, buildWeekPlan } from '../../src/mirror/assistant-engine.js';
-import { buildAssistantCardHtml, buildWeekViewHtml } from '../../src/shared/assistant-card.js';
+import { buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml, interjornadaLabel } from '../../src/shared/assistant-card.js';
 import { setPrivacyHidden } from '../../src/core/privacy-engine.js';
 
 // Simula o storage do Tampermonkey (privacidade lê GM_getValue).
@@ -138,5 +138,91 @@ describe('WeekView', () => {
         expect(title).not.toMatch(/\d{1,2}:\d{2}/);
         expect(title).toContain('••:••');
         setPrivacyHidden(false);
+    });
+    it('jornada encerrada mostra o motivo da entrada de amanhã (Intervalo 11h)', () => {
+        const assistant = buildAssistantPlan({
+            batidas: ['08:00', '12:00', '13:00', '17:00'],
+            planMinutes: 480,
+            now: min(17, 30)
+        });
+        const el = render(buildAssistantCardHtml(assistant, { presetId: 'p8', minutes: 480 }));
+        const text = el.querySelector('.ahg-as-next-window').textContent;
+        expect(text).toContain('amanhã a partir de 04:00 (Intervalo 11h)');
+    });
+
+    it('interjornadaLabel segue a regra configurada', () => {
+        expect(interjornadaLabel()).toBe('Intervalo 11h');
+        expect(interjornadaLabel(11 * 60 + 30)).toBe('Intervalo 11:30');
+    });
+    describe('pílula compacta', () => {
+        it('minimalista mostra a sequência dos próximos horários da jornada', () => {
+            const assistant = buildAssistantPlan({ batidas: ['08:00'], planMinutes: 480, now: min(9) });
+            const el = render(buildDockBarHtml(assistant, '', { zen: false }));
+            const steps = el.querySelectorAll('.ahg-dock-step');
+            expect(steps.length).toBe(3);
+            expect(steps[0].classList.contains('is-next')).toBe(true);
+            expect(steps[0].textContent).toContain('Saída');
+            expect(el.textContent).toContain('Retorno');
+        });
+
+        it('zen mostra só o próximo horário', () => {
+            const assistant = buildAssistantPlan({ batidas: ['08:00'], planMinutes: 480, now: min(9) });
+            const el = render(buildDockBarHtml(assistant, '', { zen: true }));
+            expect(el.querySelectorAll('.ahg-dock-step')).toHaveLength(0);
+            expect(el.querySelector('.ahg-dock-bar-label').textContent).toBe('Saída p/ intervalo');
+        });
+
+        it('jornada encerrada: previsão da entrada de amanhã pela rotina', () => {
+            const assistant = buildAssistantPlan({ batidas: ['08:00', '12:00', '13:00', '17:00'], planMinutes: 480, now: min(17, 30) });
+            const el = render(buildDockBarHtml(assistant, '', { zen: false }));
+            expect(el.querySelector('.ahg-dock-bar-time').textContent).toBe('08:00');
+            expect(el.querySelector('.ahg-dock-bar-label').textContent).toBe('Entrada amanhã');
+        });
+
+        it('jornada encerrada tarde: previsão respeita o descanso de 11h', () => {
+            const assistant = buildAssistantPlan({ batidas: ['08:00', '12:00', '13:00', '22:00'], planMinutes: 480, now: min(22, 30) });
+            const el = render(buildDockBarHtml(assistant, '', { zen: true }));
+            expect(el.querySelector('.ahg-dock-bar-time').textContent).toBe('09:00');
+            expect(el.querySelector('.ahg-dock-bar-label').textContent).toBe('Entrada amanhã · Intervalo 11h');
+        });
+    });
+});
+
+describe('card: calendário da entrada de amanhã', () => {
+    it('interjornada 03:07 com entrada configurada 08:00 → calendário às 08:00', () => {
+        const assistant = { next: null, stage: 'done', schedule: [], enforcement: [], nextDayEntry: 1440 + 187, nextEntryForecast: { time: 1440 + 480, reason: 'configured' } };
+        const html = buildAssistantCardHtml(assistant, { presetId: 'p8', minutes: 480 }, { alarmConfig: { quickGcalEnabled: true, quickCalendarProvider: 'google', quickGcalOffsetMinutes: 0 } });
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        expect(div.textContent).toContain('amanhã a partir de 03:07 (Intervalo 11h) · entrada 08:00');
+        const href = div.querySelector('.ahg-as-next-window .ahg-as-cal').getAttribute('href');
+        expect(decodeURIComponent(href)).toMatch(/T080000/);
+    });
+});
+
+describe('pílula fixada: os 4 horários + meta do banco', () => {
+    const plan = () => buildAssistantPlan({ batidas: ['08:00', '12:00'], planMinutes: 480, now: 12 * 60 + 10 });
+    const parse = (html) => { const d = document.createElement('div'); d.innerHTML = html; return d; };
+
+    it('topo/rodapé: 4 horários numa linha, batidos esmaecidos', () => {
+        const el = parse(buildDockBarHtml(plan(), '', { zen: false, full: true, edge: 'top' }));
+        expect(el.querySelectorAll('.ahg-dock-step')).toHaveLength(4);
+        expect(el.querySelectorAll('.ahg-dock-step.is-done')).toHaveLength(2);
+        expect(el.querySelector('.ahg-dock-bar--stack')).toBeNull();
+        expect(el.querySelectorAll('.ahg-dock-sep').length).toBe(3);
+    });
+    it('esquerda/direita empilha', () => {
+        const el = parse(buildDockBarHtml(plan(), '', { zen: false, full: true, edge: 'right' }));
+        expect(el.querySelector('.ahg-dock-bar--stack')).not.toBeNull();
+    });
+    it('meta ativa troca a saída final pela sugerida', () => {
+        const el = parse(buildDockBarHtml(plan(), '', { zen: false, full: true, edge: 'top', exitOverride: { time: 16 * 60 + 30 } }));
+        const goal = el.querySelector('.ahg-dock-step.is-goal');
+        expect(goal.textContent).toContain('16:30');
+        expect(goal.textContent).toContain('meta');
+    });
+    it('Zen continua só com o próximo', () => {
+        const el = parse(buildDockBarHtml(plan(), '', { zen: true, full: true, edge: 'top' }));
+        expect(el.querySelectorAll('.ahg-dock-step')).toHaveLength(0);
     });
 });

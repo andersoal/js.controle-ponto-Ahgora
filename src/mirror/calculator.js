@@ -3,7 +3,7 @@
  * Calcula horas trabalhadas, saldo e totais para um dia ou período.
  */
 
-import { CONFIG } from '../core/config.js';
+import { CONFIG, ConfigStore } from '../core/config.js';
 import { calcularTrabalhado, fmtHour, nowMin, sameWeek, toMin } from '../core/time-utils.js';
 
 export function saldoComTolerancia(dia) {
@@ -137,8 +137,29 @@ export function calcularInterjornadaMirror(ultimaBatidaHoje, primeiraBatidaAmanh
     };
 }
 
-export function computeDayBalance(batidas, isBusinessDay, now = nowMin()) {
+/** Multiplicador configurado para hora em feriado (≥ 1; inválido → 1). */
+export function holidayMultiplier() {
+    const m = Number(ConfigStore.get().multFeriado);
+    return Number.isFinite(m) && m >= 1 ? m : 1;
+}
+
+/** Opções de computeDayBalance para um dia raspado (fim de semana/feriado, multiplicador). */
+export function dayBalanceOptions(dia) {
+    return {
+        restDay: !!dia?.isRestDay,
+        multiplier: dia?.isHoliday ? holidayMultiplier() : 1
+    };
+}
+
+/**
+ * Saldo do dia. Fim de semana/feriado (`restDay`): carga 0, todo o trabalhado
+ * é crédito. Feriado: o crédito é o trabalhado × `multiplier` (ex.: 7h × 1,4
+ * = 9h48). `trabalhado` continua sendo o tempo real.
+ */
+export function computeDayBalance(batidas, isBusinessDay, now = nowMin(), { restDay = false, multiplier = 1 } = {}) {
     const trabalhado = batidas.length > 0 ? calcularTrabalhado(batidas, now) : 0;
-    const saldo = isBusinessDay ? trabalhado - CONFIG.CARGA_DIARIA : 0;
+    const carga = restDay ? 0 : CONFIG.CARGA_DIARIA;
+    const creditado = restDay ? Math.round(trabalhado * multiplier) : trabalhado;
+    const saldo = isBusinessDay ? creditado - carga : 0;
     return { trabalhado, saldo };
 }
