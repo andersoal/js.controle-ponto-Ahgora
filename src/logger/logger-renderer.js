@@ -272,14 +272,15 @@ export function renderLoggerContainer(vm) {
         saldoSemana: vm.weekBalance || 0,
         yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
+    const bankTodayExit = readBankTodayExit();
     const view = {
-        assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
+        assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
         // Fixado numa borda: os 4 horários do dia; a saída final segue a meta
         // de banco de horas publicada pelo Mirror (só vale a de hoje).
         dockBarHtml: buildDockBarHtml(assistant, '', {
             full: !!getDockEdge(PERSIST_KEY),
             edge: getDockEdge(PERSIST_KEY),
-            exitOverride: { time: readBankTodayExit() }
+            exitOverride: { time: bankTodayExit }
         }),
         dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY)),
         zen: !!ConfigStore.get().modoZen

@@ -124,7 +124,7 @@ function buildAlertsHtml(assistant) {
 
 export function buildAssistantCardHtml(assistant, plan, opts = {}) {
     if (!assistant) return '';
-    const { alarmConfig = null } = opts;
+    const { alarmConfig = null, bankExit = null } = opts;
     const title = STAGE_TITLES[assistant.stage] || 'Próxima batida';
 
     let body = '';
@@ -156,6 +156,10 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
         ? `<div class="ahg-as-ideal">${icon('flag', { size: 11 })} Saída ideal <b>${renderClock(assistant.idealExit)}</b> <small>compensa o saldo da semana</small></div>`
         : '';
 
+    const bankIdeal = bankExit !== null && bankExit !== undefined
+        ? `<div class="ahg-as-ideal">${icon('hourglass', { size: 11 })} Saída ideal <b>${renderClock(bankExit)}</b> <small>compensa a meta do banco de horas</small><span class="ahg-as-step-cal">${buildCalendarLinksHtml({ label: 'Saída ideal · meta banco', time: bankExit }, alarmConfig)}</span></div>`
+        : '';
+
     return `
     <div class="ahg-assistant" id="ahg-assistant" data-stage="${escapeHtml(assistant.stage)}">
         <div class="ahg-as-head">
@@ -166,6 +170,7 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
         ${buildAlertsHtml(assistant)}
         ${buildScheduleHtml(assistant, alarmConfig)}
         ${ideal}
+        ${bankIdeal}
     </div>`;
 }
 

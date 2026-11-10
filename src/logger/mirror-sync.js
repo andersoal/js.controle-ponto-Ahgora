@@ -119,6 +119,11 @@ export function buildSharedTruth(resumo) {
         todayPunches: resumo.hoje?.batidas || [],
         workedToday: resumo.hoje?.trabalhado || 0,
         dayBalance: resumo.hoje?.saldo || 0,
+        // Contexto para o Logger recalcular trabalhado/saldo do dia ao vivo
+        // (o valor acima congela no instante da última publicação do Mirror).
+        isBusinessDay: resumo.hoje?.isBusinessDay !== false,
+        isRestDay: !!resumo.hoje?.isRestDay,
+        isHoliday: !!resumo.hoje?.isHoliday,
         weekWorked: resumo.totalSemana || 0,
         weekBalance: resumo.saldoSemana || 0,
         monthWorked: resumo.totalMes || 0,

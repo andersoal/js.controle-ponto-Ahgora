@@ -5,6 +5,8 @@
  */
 
 import { STORAGE_KEYS, gmGetJson, gmGetJsonCrossOrigin } from '../core/storage-adapter.js';
+import { nowMin } from '../core/time-utils.js';
+import { computeDayBalance, dayBalanceOptions } from '../mirror/calculator.js';
 import { buildMonthHistory, getMirrorDays } from './month-history.js';
 import { getAlarmConfig } from './alarm-engine.js';
 import { buildLoggerPunchTimeline, getMirrorTodayContext, getTodayBounds, getYesterdayContext } from './mirror-sync.js';
@@ -45,6 +47,13 @@ export function getLoggerVm() {
     // mostra zeros/neutro (a fonte segue sinalizando "Cache de outro dia").
     const isTruthFresh = sharedTruth?.todayKey === bounds.todayKey;
 
+    // Trabalhado/saldo do dia recalculados a cada render (não o valor
+    // publicado pelo Mirror, que congela até a próxima visita ao espelho) —
+    // assim acompanham o relógio e as batidas locais enquanto o dia avança.
+    const liveDayBalance = isTruthFresh
+        ? computeDayBalance(timeline.combinedPunches, sharedTruth.isBusinessDay !== false, nowMin(), dayBalanceOptions(sharedTruth))
+        : { trabalhado: 0, saldo: 0 };
+
     const alarmConfig = getAlarmConfig();
     return {
         ...timeline,
@@ -52,8 +61,8 @@ export function getLoggerVm() {
         ...yesterdayCtx,
         todayManual: todayOverride.length > 0,
         monthHistory,
-        workedToday: (isTruthFresh && sharedTruth?.workedToday) || 0,
-        dayBalance: (isTruthFresh && sharedTruth?.dayBalance) || 0,
+        workedToday: liveDayBalance.trabalhado,
+        dayBalance: liveDayBalance.saldo,
         weekBalance: (isTruthFresh && sharedTruth?.weekBalance) || 0,
         monthBalance: (isTruthFresh && sharedTruth?.monthBalance) || 0,
         // Banco total muda devagar: o último publicado vale mesmo de outro dia.

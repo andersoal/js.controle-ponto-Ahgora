@@ -284,7 +284,7 @@ export function renderMirrorPanel(resumo) {
     gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null));
 
     const view = {
-        assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
+        assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
         weekHtml: buildWeekViewHtml(weekPlan),
         // Fixado numa borda: pílula com os 4 horários; a saída final segue a
         // meta de banco de horas, se houver.
