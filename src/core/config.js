@@ -87,6 +87,8 @@ export const ConfigStore = {
             multFeriado: 1.4,
             // Entrada habitual: sugestão de entrada de amanhã (respeitado o descanso de 11h).
             horarioEntrada: '08:00',
+            // Reload periódico da página (complemento opcional ao refresh reativo) — desligado por padrão.
+            autoReloadAtivo: false,
             gcalUserPath: CONFIG.GCAL_USER_PATH,
             flags: {},
             _migrated: false

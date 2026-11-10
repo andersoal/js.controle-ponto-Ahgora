@@ -209,6 +209,8 @@
         multFeriado: 1.4,
         // Entrada habitual: sugestão de entrada de amanhã (respeitado o descanso de 11h).
         horarioEntrada: "08:00",
+        // Reload periódico da página (complemento opcional ao refresh reativo) — desligado por padrão.
+        autoReloadAtivo: false,
         gcalUserPath: CONFIG.GCAL_USER_PATH,
         flags: {},
         _migrated: false
@@ -4375,7 +4377,7 @@
   }
   function buildAssistantCardHtml(assistant, plan, opts = {}) {
     if (!assistant) return "";
-    const { alarmConfig = null } = opts;
+    const { alarmConfig = null, bankExit = null } = opts;
     const title = STAGE_TITLES[assistant.stage] || "Pr\xF3xima batida";
     let body = "";
     if (assistant.next) {
@@ -4400,6 +4402,7 @@
         </div>`;
     }
     const ideal = assistant.idealExit !== null && assistant.idealExit !== void 0 ? `<div class="ahg-as-ideal">${icon("flag", { size: 11 })} Sa\xEDda ideal <b>${renderClock(assistant.idealExit)}</b> <small>compensa o saldo da semana</small></div>` : "";
+    const bankIdeal = bankExit !== null && bankExit !== void 0 ? `<div class="ahg-as-ideal">${icon("hourglass", { size: 11 })} Sa\xEDda ideal <b>${renderClock(bankExit)}</b> <small>compensa a meta do banco de horas</small><span class="ahg-as-step-cal">${buildCalendarLinksHtml({ label: "Sa\xEDda ideal \xB7 meta banco", time: bankExit }, alarmConfig)}</span></div>` : "";
     return `
     <div class="ahg-assistant" id="ahg-assistant" data-stage="${escapeHtml(assistant.stage)}">
         <div class="ahg-as-head">
@@ -4410,6 +4413,7 @@
         ${buildAlertsHtml(assistant)}
         ${buildScheduleHtml(assistant, alarmConfig)}
         ${ideal}
+        ${bankIdeal}
     </div>`;
   }
   var DOCK_SHORT_LABELS = { entry: "Entrada", exit1: "Sa\xEDda", return: "Retorno", exitFinal: "Sa\xEDda" };
@@ -4650,6 +4654,9 @@
             <div class="ahg-config-item"><span class="ahg-config-label">Hora em feriado vale</span>
                 <input class="ahg-config-select" type="number" id="ahg-mult-feriado" min="1" max="3" step="0.1" value="${Number(cfg.multFeriado) || 1.4}" title="Multiplicador do banco para horas trabalhadas em feriado (ex.: 1,4)">
             </div>
+            <div class="ahg-config-item ahg-items-center ahg-gap-8"><span class="ahg-config-label">Recarregar p\xE1gina a cada ${CONFIG.AUTO_REFRESH_MINUTES}min</span>
+                <input type="checkbox" id="ahg-auto-reload-toggle" ${cfg.autoReloadAtivo ? "checked" : ""} title="Complemento opcional ao refresh reativo: recarrega a aba periodicamente. Desligado por padr\xE3o.">
+            </div>
         </div>
     </details>`;
     html += `</div><div class="a-foot">Atualizado ${fmtHour(nowMin())}</div>`;
@@ -4687,7 +4694,7 @@
     const bankTodayExit = bankPlan.days?.find((d) => d.isToday)?.suggestedExit ?? null;
     gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null));
     const view = {
-      assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
+      assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
       weekHtml: buildWeekViewHtml(weekPlan),
       // Fixado numa borda: pílula com os 4 horários; a saída final segue a
       // meta de banco de horas, se houver.
@@ -4865,6 +4872,12 @@
         }
         ConfigStore.patch({ multFeriado: Math.round(value * 100) / 100 });
         bus.emit("config:holiday-multiplier");
+      });
+    }
+    const autoReloadToggle = panel.querySelector("#ahg-auto-reload-toggle");
+    if (autoReloadToggle) {
+      autoReloadToggle.addEventListener("change", () => {
+        ConfigStore.patch({ autoReloadAtivo: autoReloadToggle.checked });
       });
     }
     bus.emit("panel:rendered", { page: "mirror" });
@@ -5108,6 +5121,11 @@
       todayPunches: resumo.hoje?.batidas || [],
       workedToday: resumo.hoje?.trabalhado || 0,
       dayBalance: resumo.hoje?.saldo || 0,
+      // Contexto para o Logger recalcular trabalhado/saldo do dia ao vivo
+      // (o valor acima congela no instante da última publicação do Mirror).
+      isBusinessDay: resumo.hoje?.isBusinessDay !== false,
+      isRestDay: !!resumo.hoje?.isRestDay,
+      isHoliday: !!resumo.hoje?.isHoliday,
       weekWorked: resumo.totalSemana || 0,
       weekBalance: resumo.saldoSemana || 0,
       monthWorked: resumo.totalMes || 0,
@@ -5150,6 +5168,7 @@
       timeline.combinedLastPunch = todayOverride[todayOverride.length - 1];
     }
     const isTruthFresh = sharedTruth?.todayKey === bounds.todayKey;
+    const liveDayBalance = isTruthFresh ? computeDayBalance(timeline.combinedPunches, sharedTruth.isBusinessDay !== false, nowMin(), dayBalanceOptions(sharedTruth)) : { trabalhado: 0, saldo: 0 };
     const alarmConfig = getAlarmConfig();
     return {
       ...timeline,
@@ -5157,8 +5176,8 @@
       ...yesterdayCtx,
       todayManual: todayOverride.length > 0,
       monthHistory,
-      workedToday: isTruthFresh && sharedTruth?.workedToday || 0,
-      dayBalance: isTruthFresh && sharedTruth?.dayBalance || 0,
+      workedToday: liveDayBalance.trabalhado,
+      dayBalance: liveDayBalance.saldo,
       weekBalance: isTruthFresh && sharedTruth?.weekBalance || 0,
       monthBalance: isTruthFresh && sharedTruth?.monthBalance || 0,
       // Banco total muda devagar: o último publicado vale mesmo de outro dia.
@@ -5380,14 +5399,15 @@
       saldoSemana: vm.weekBalance || 0,
       yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
+    const bankTodayExit = readBankTodayExit();
     const view = {
-      assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig }),
+      assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
       // Fixado numa borda: os 4 horários do dia; a saída final segue a meta
       // de banco de horas publicada pelo Mirror (só vale a de hoje).
       dockBarHtml: buildDockBarHtml(assistant, "", {
         full: !!getDockEdge(PERSIST_KEY2),
         edge: getDockEdge(PERSIST_KEY2),
-        exitOverride: { time: readBankTodayExit() }
+        exitOverride: { time: bankTodayExit }
       }),
       dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY2), getDockMini(PERSIST_KEY2)),
       zen: !!ConfigStore.get().modoZen
@@ -5730,6 +5750,12 @@
     });
     bus.on("privacy:changed", () => tryRenderMirror());
     bus.on("config:holiday-multiplier", () => tryRenderMirror());
+    setInterval(() => {
+      if (ConfigStore.get().autoReloadAtivo) {
+        console.log("[AHGORA PANEL] auto-reload periodico (configuravel) executando.");
+        window.location.reload();
+      }
+    }, CONFIG.AUTO_REFRESH_MINUTES * CONFIG.MS_PER_MINUTE);
   }
   function renderLogger(vm) {
     renderLoggerContainer(vm);

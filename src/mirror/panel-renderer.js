@@ -237,6 +237,9 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
             <div class="ahg-config-item"><span class="ahg-config-label">Hora em feriado vale</span>
                 <input class="ahg-config-select" type="number" id="ahg-mult-feriado" min="1" max="3" step="0.1" value="${Number(cfg.multFeriado) || 1.4}" title="Multiplicador do banco para horas trabalhadas em feriado (ex.: 1,4)">
             </div>
+            <div class="ahg-config-item ahg-items-center ahg-gap-8"><span class="ahg-config-label">Recarregar página a cada ${CONFIG.AUTO_REFRESH_MINUTES}min</span>
+                <input type="checkbox" id="ahg-auto-reload-toggle" ${cfg.autoReloadAtivo ? 'checked' : ''} title="Complemento opcional ao refresh reativo: recarrega a aba periodicamente. Desligado por padrão.">
+            </div>
         </div>
     </details>`;
 
@@ -491,6 +494,13 @@ export function renderMirrorPanel(resumo) {
             ConfigStore.patch({ multFeriado: Math.round(value * 100) / 100 });
             // Saldos dependem do multiplicador: recalcula o resumo inteiro.
             bus.emit('config:holiday-multiplier');
+        });
+    }
+
+    const autoReloadToggle = panel.querySelector('#ahg-auto-reload-toggle');
+    if (autoReloadToggle) {
+        autoReloadToggle.addEventListener('change', () => {
+            ConfigStore.patch({ autoReloadAtivo: autoReloadToggle.checked });
         });
     }
 

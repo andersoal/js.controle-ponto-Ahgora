@@ -108,6 +108,7 @@ Catalogo completo, verificado em 2026-11-10 lendo integralmente o monolito antig
 - Atualizacao entre abas sem polling quando o navegador/Tampermonkey suporta — `storage-adapter.js`.
 - Plano de jornada (8h ou 10h) escolhido pelo usuario e compartilhado entre Espelho e Logger — `journey-plan.js`.
 - Modo privacidade: mascara todos os horarios visiveis nos dois paineis com um clique — `privacy-engine.js`.
+- Reload periodico opcional da pagina do Espelho a cada `AUTO_REFRESH_MINUTES` (15 min), complementar ao refresh reativo — toggle em "Configuracoes", desligado por padrao — `config.js` (`autoReloadAtivo`), `main.js`.
 
 ### Espelho / calendario (`src/mirror/`)
 - Badge de total trabalhado e de violacao (intervalo longo, turno longo, dia longo, limite absoluto de 12h) em cada dia do calendario — `calendar-decorator.js`, `compliance-engine.js`.
@@ -143,11 +144,11 @@ Catalogo completo, verificado em 2026-11-10 lendo integralmente o monolito antig
 - Helper de console `window.ahgDiagnostico()` com versao, pagina detectada e timestamp — `main.js`.
 
 ## Diferencas conhecidas desde a reescrita modular (dev → src/)
-Verificado em 2026-11-10 lendo o monolito antigo e o `src/` atual na integra (nao apenas grep). Tres diferencas de comportamento reais, as tres parecendo decisao deliberada de arquitetura e nao esquecimento — mas sem migracao explicita registrada antes desta nota, o que o AGENTS.md pede ("nao quebrar comportamento atual sem migracao explicita"):
+Verificado em 2026-11-10 lendo o monolito antigo e o `src/` atual na integra (nao apenas grep). Tres diferencas de comportamento reais encontradas, revisadas com o usuario em 2026-11-10:
 
-1. **Reload automatico da pagina a cada 15 min foi removido.** O monolito antigo forcava `location.reload()`/navegacao a cada `CONFIG.AUTO_REFRESH_MINUTES` (15) incondicionalmente. O `src/` substitui isso por refresh reativo (`MutationObserver`/`hashchange`/eventos — `logger/live-refresh.js`), o que resolve staleness de dados sem recarregar a pagina. Se o reload antigo tambem renovava uma sessao/cookie do Ahgora numa aba aberta por muitas horas, esse efeito colateral some. Vale confirmar em uso real de sessao longa.
-2. **Notificacoes de desktop dos marcos 6h/8h/10h/saida-ideal direto do Espelho foram removidas.** Antes, o Espelho disparava `Notification` sozinho, independente do Logger, e pedia permissao de notificacao assim que a pagina carregava. Hoje essas notificacoes so saem do alarme do Logger (`logger/alarm-engine.js`), e a permissao e pedida so quando um alarme de fato dispara. Quem mantem so a aba do Espelho aberta (sem abrir a pagina de bater ponto) deixa de receber esses avisos.
-3. **Badge de total arredondado para o quarto de hora (ex.: "8.25") no calendario foi removido**, sem substituto — hoje so resta o badge `HH:MM` simples.
+1. **Resolvido — reload automatico da pagina a cada 15 min.** O monolito antigo forcava `location.reload()`/navegacao a cada `CONFIG.AUTO_REFRESH_MINUTES` (15) incondicionalmente; o `src/` tinha substituido isso so pelo refresh reativo (`MutationObserver`/`hashchange`/eventos — `logger/live-refresh.js`). Por decisao explicita, o reload periodico foi reintroduzido como **complemento opcional** ao refresh reativo (nao substitui): toggle "Recarregar pagina a cada 15min" em Espelho → Configuracoes, **desligado por padrao** — `core/config.js` (`autoReloadAtivo`), `main.js`.
+2. **Aceito como esta — notificacoes de desktop dos marcos 6h/8h/10h/saida-ideal direto do Espelho.** Antes, o Espelho disparava `Notification` sozinho, independente do Logger. Hoje essas notificacoes so saem do alarme do Logger (`logger/alarm-engine.js`). Decisao do usuario: nao e uma falta sentida, nao sera reintroduzido.
+3. **Aceito como esta — badge de total arredondado para o quarto de hora (ex.: "8.25") no calendario.** Removido sem substituto, so resta o badge `HH:MM` simples. Decisao do usuario: ok permanecer removido.
 
 Nenhuma exportacao CSV, calculo, badge de calendario/alarme/privacidade ou funcionalidade do editor de batidas alem dessas tres foi encontrada faltando.
 

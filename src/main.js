@@ -202,6 +202,15 @@ function startMirror() {
     // mascaramento real (não só blur) aos badges do calendário também.
     bus.on('privacy:changed', () => tryRenderMirror());
     bus.on('config:holiday-multiplier', () => tryRenderMirror());
+
+    // Reload periódico opcional (complemento ao refresh reativo, desligado por padrão
+    // — ver "Configurações" no painel). Lê o toggle a cada tick, não precisa reiniciar o timer.
+    setInterval(() => {
+        if (ConfigStore.get().autoReloadAtivo) {
+            console.log('[AHGORA PANEL] auto-reload periodico (configuravel) executando.');
+            window.location.reload();
+        }
+    }, CONFIG.AUTO_REFRESH_MINUTES * CONFIG.MS_PER_MINUTE);
 }
 
 function renderLogger(vm) {
