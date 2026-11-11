@@ -15,7 +15,6 @@ import { buildMirrorSummary } from './mirror/mirror-summary.js';
 import { renderMirrorPanel } from './mirror/panel-renderer.js';
 import { getLocalDayPunches, openPunchEditor } from './mirror/punch-editor.js';
 import { persistMirrorDays } from './logger/month-history.js';
-import { syncDayLocalHistory } from './logger/punch-history.js';
 import { startLoggerLiveRefresh } from './logger/live-refresh.js';
 import { buildSharedTruth, getYesterdayContext } from './logger/mirror-sync.js';
 import { getLoggerGuidance, getLoggerVm } from './logger/logger-vm.js';
@@ -102,12 +101,8 @@ function tryRenderMirror(hoje = new Date()) {
     if (!dias.length) return null;
 
     // Batidas cruas do espelho (antes dos ajustes locais) alimentam o
-    // histórico mensal do Logger e reconciliam capturas locais pendentes de hoje.
+    // histórico mensal do Logger.
     persistMirrorDays(dias, hoje);
-    const rawToday = dias.find((d) => d.isToday);
-    if (rawToday?.dateKey) {
-        syncDayLocalHistory(rawToday.dateKey, rawToday.batidas || []);
-    }
 
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);

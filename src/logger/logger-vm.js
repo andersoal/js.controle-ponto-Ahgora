@@ -30,8 +30,7 @@ export function getLoggerVm() {
         rawHistory,
         mirrorCtx.mirrorPunches,
         bounds.startMs,
-        bounds.endMs,
-        { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+        bounds.endMs
     );
     if (removedCount > 0) {
         gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history);
@@ -40,8 +39,7 @@ export function getLoggerVm() {
         history,
         mirrorCtx.mirrorPunches,
         bounds.startMs,
-        bounds.endMs,
-        { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+        bounds.endMs
     );
 
     // Ajuste manual de hoje (Punch Editor, no Logger ou no Mirror) manda na

@@ -80,24 +80,22 @@ describe('getLoggerVm (caracterização)', () => {
         expect(vm.yesterdayLastPunch).toBeNull();
     });
 
-    it('reconciliação com Mirror: batida local que não apareceu no Mirror após sync mais novo é removida do PUNCH_HISTORY', () => {
+    it('reconciliação com Mirror: batida local já presente no Mirror é removida do PUNCH_HISTORY', () => {
         const today = new Date();
         const todayKey = formatDateKey(today);
-        const punchTs = today.getTime() - 4 * 60000; // 4 min atrás (ex.: 08:56)
-        const syncTs = today.getTime(); // agora (ex.: 09:00)
 
         localStorage.setItem(STORAGE_KEYS.PUNCH_HISTORY, JSON.stringify([
-            { time: '08:56', dateKey: todayKey, timestamp: punchTs }
+            { time: '08:56', dateKey: todayKey, timestamp: today.getTime() }
         ]));
         seedTruth({
             ...STALE_TRUTH,
             todayKey,
-            todayPunches: [],
-            updatedAt: new Date(syncTs).toISOString()
+            todayPunches: ['08:56'],
+            updatedAt: today.toISOString()
         });
 
         const vm = getLoggerVm();
-        expect(vm.combinedPunches).toEqual([]);
+        expect(vm.combinedPunches).toEqual(['08:56']);
         expect(vm.pendingLocalHistoryEntries).toEqual([]);
         expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.PUNCH_HISTORY))).toEqual([]);
     });

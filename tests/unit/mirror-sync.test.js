@@ -39,19 +39,6 @@ describe('MirrorSync', () => {
         expect(timeline.localOnlyPunches).toEqual(['13:00']);
     });
 
-    it('buildLoggerPunchTimeline descarta batida local que não entrou no Mirror após sync mais recente', () => {
-        const tPunch = new Date('2026-11-11T08:56:00').getTime();
-        const tSync = new Date('2026-11-11T09:00:00').getTime();
-        const history = [
-            { time: '08:56', dateKey: '2026-11-11', timestamp: tPunch }
-        ];
-        const bounds = getTodayBounds(new Date('2026-11-11T09:00:00'));
-        const timeline = buildLoggerPunchTimeline(history, [], bounds.startMs, bounds.endMs, { mirrorSyncedAtMs: tSync });
-        expect(timeline.combinedPunches).toEqual([]);
-        expect(timeline.localOnlyPunches).toEqual([]);
-        expect(timeline.pendingLocalHistoryEntries).toEqual([]);
-    });
-
     it('buildSharedTruth monta objeto completo', () => {
         const resumo = {
             hoje: { dateKey: '2026-07-06', batidas: ['08:00', '12:00'], trabalhado: 240, saldo: -240 },

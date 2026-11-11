@@ -5059,15 +5059,10 @@
     const yesterdayLastPunch = candidates.reduce((a, b) => toMin(b) > toMin(a) ? b : a);
     return { yesterdayLastPunch };
   }
-  function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs, { mirrorSyncedAtMs = null } = {}) {
+  function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);
     const mirrorSet = new Set(mirrorPunches || []);
-    const hasFreshMirrorSync = Number.isFinite(mirrorSyncedAtMs);
-    const reconciled = todayHistory.filter((entry) => {
-      if (mirrorSet.has(entry.time)) return false;
-      if (hasFreshMirrorSync && entry.timestamp <= mirrorSyncedAtMs) return false;
-      return true;
-    });
+    const reconciled = todayHistory.filter((entry) => !mirrorSet.has(entry.time));
     const localOnlyPunches = reconciled.map((entry) => entry.time);
     const combined = [
       ...mirrorPunches || [],
@@ -5132,8 +5127,7 @@
       rawHistory,
       mirrorCtx.mirrorPunches,
       bounds.startMs,
-      bounds.endMs,
-      { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+      bounds.endMs
     );
     if (removedCount > 0) {
       gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history);
@@ -5142,8 +5136,7 @@
       history,
       mirrorCtx.mirrorPunches,
       bounds.startMs,
-      bounds.endMs,
-      { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+      bounds.endMs
     );
     const overrides = gmGetJson(STORAGE_KEYS.LOCAL_DAY_PUNCHES, {}) || {};
     const todayOverride = overrides[bounds.todayKey] || [];
@@ -5675,9 +5668,11 @@
       confirmBtn.removeAttribute("aria-disabled");
     }
   }
-  var PUNCH_MODAL_TEXT_RE = /punch-?in|batida|ponto/i;
+  var PUNCH_MODAL_TEXT_RE = /punch-?in|batida|ponto|successfully\s+registered|registrad[oa]\s+com\s+sucesso/i;
   var CONFIRM_BTN_TEXT_RE = /confirmar|bater|registrar|clocking\s*in|confirm|punch/i;
-  var CANCEL_BTN_TEXT_RE = /cancel/i;
+  var CANCEL_BTN_TEXT_RE = /^\s*cancel(?:ar)?\s*$/i;
+  var OK_CONFIRM_BTN_TEXT_RE = /^\s*(?:ok|okay|confirmar|confirm|fechar|close|entendi|concluir)\s*$/i;
+  var PUNCH_SUCCESS_TEXT_RE = /successfully\s+registered|registrad[oa]\s+com\s+sucesso|batida\s+registrada|ponto\s+registrado|realizada\s+com\s+sucesso/i;
   function findPunchModal(root = document) {
     const direct = root.querySelector('[role="dialog"], .v-dialog--active');
     if (direct) return direct;
@@ -5706,15 +5701,6 @@
     }
     return null;
   }
-  function findCancelButton(modal = null) {
-    const scope = modal || document;
-    const candidates = modal ? scope.querySelectorAll("button") : scope.querySelectorAll('[role="dialog"] button, .v-dialog--active button, [role="presentation"] button');
-    for (const btn of candidates) {
-      const text = (btn.textContent || "").trim();
-      if (CANCEL_BTN_TEXT_RE.test(text)) return btn;
-    }
-    return null;
-  }
   var HOST_ERROR_TEXT_RE = /colaborador\s+n[aã]o\s+cadastrado|n[aã]o\s+cadastrado\s+no\s+dispositivo|dispositivo\s+n[aã]o\s+(?:cadastrado|autorizado|habilitado)|employee\s+not\s+registered|not\s+registered\s+(?:on|in)\s+(?:this\s+)?device|erro\s+ao\s+registrar|falha\s+ao\s+registrar|n[aã]o\s+foi\s+poss[ií]vel|error\s+registering|failed\s+to\s+register|unable\s+to\s+register|sess[aã]o\s+expirada|session\s+expired|unauthorized|tente\s+novamente/i;
   function hasHostPunchError(modal = null, root = document) {
     const candidates = root.querySelectorAll(
@@ -5725,7 +5711,7 @@
       const clone = el2.cloneNode(true);
       clone.querySelectorAll?.(".ahg-modal-hint, .ahg-panel, .ahg-toast-region").forEach((n) => n.remove());
       const text = (clone.textContent || "").trim();
-      if (HOST_ERROR_TEXT_RE.test(text) || el2.classList.contains("MuiAlert-standardError") || el2.classList.contains("error")) {
+      if (HOST_ERROR_TEXT_RE.test(text) || el2.classList.contains("MuiAlert-standardError")) {
         return true;
       }
     }
@@ -5733,6 +5719,22 @@
       const clone = modal.cloneNode(true);
       clone.querySelectorAll(".ahg-modal-hint").forEach((h) => h.remove());
       if (HOST_ERROR_TEXT_RE.test(clone.textContent || "")) return true;
+    }
+    return false;
+  }
+  function isPunchSuccessModal(modal = null, root = document) {
+    if (hasHostPunchError(modal, root)) return false;
+    if (modal) {
+      const clone = modal.cloneNode(true);
+      clone.querySelectorAll?.(".ahg-modal-hint").forEach((h) => h.remove());
+      if (PUNCH_SUCCESS_TEXT_RE.test(clone.textContent || "")) return true;
+    }
+    const candidates = root.querySelectorAll('[role="dialog"], [role="presentation"], .v-dialog--active, .MuiDialog-root, [role="alert"], .MuiSnackbarContent-root');
+    for (const el2 of candidates) {
+      if (el2.classList.contains("ahg-modal-hint") || el2.closest(".ahg-panel, .ahg-toast-region")) continue;
+      const clone = el2.cloneNode(true);
+      clone.querySelectorAll?.(".ahg-modal-hint, .ahg-panel, .ahg-toast-region").forEach((n) => n.remove());
+      if (PUNCH_SUCCESS_TEXT_RE.test(clone.textContent || "")) return true;
     }
     return false;
   }
@@ -5765,16 +5767,40 @@
   }
   function monitorModal(timelineGetter, intervalMs = LOGGER_MONITOR_INTERVAL_MS) {
     let pendingAttemptTime = null;
-    function rollbackPendingAttempt(reasonToast) {
+    let pendingAttemptEvent = null;
+    function commitPendingAttempt() {
       if (!pendingAttemptTime) return false;
-      const timeToRemove = pendingAttemptTime;
+      const timeToSave = pendingAttemptTime;
       pendingAttemptTime = null;
-      const bounds = getTodayBounds();
-      const res = removeTodayLocalPunch(timeToRemove, bounds.startMs, bounds.endMs);
-      if (res.ok && reasonToast) {
-        showLoggerToast(reasonToast);
-      }
-      return res.ok;
+      pendingAttemptEvent = null;
+      return savePunch(timeToSave);
+    }
+    function clearPendingAttempt(reasonToast = null) {
+      if (!pendingAttemptTime) return;
+      pendingAttemptTime = null;
+      pendingAttemptEvent = null;
+      if (reasonToast) showLoggerToast(reasonToast);
+    }
+    function hookModalContainer(modal) {
+      if (!modal || modal.dataset.ahgModalClickHooked) return;
+      modal.dataset.ahgModalClickHooked = "true";
+      modal.addEventListener("click", (e) => {
+        if (!pendingAttemptTime || e === pendingAttemptEvent) return;
+        const btn = e.target?.closest?.("button");
+        if (!btn || btn.closest(".ahg-modal-hint, .ahg-panel, .ahg-toast-region")) return;
+        const btnText = (btn.textContent || "").trim();
+        if (CANCEL_BTN_TEXT_RE.test(btnText)) {
+          clearPendingAttempt();
+          return;
+        }
+        if (hasHostPunchError(modal)) {
+          clearPendingAttempt("Batida n\xE3o registrada no Ahgora \u2014 ignorada pelo painel.");
+          return;
+        }
+        if (isPunchSuccessModal(modal) || OK_CONFIRM_BTN_TEXT_RE.test(btnText) && !findModalTime(modal)) {
+          commitPendingAttempt();
+        }
+      }, true);
     }
     function refreshModalState(modal, confirmBtn) {
       const nextTime = findModalTime(modal);
@@ -5802,45 +5828,54 @@
     }
     return setInterval(() => {
       const modal = findPunchModal();
-      if (!modal) {
-        if (pendingAttemptTime && hasHostPunchError(null)) {
-          rollbackPendingAttempt("Erro na batida detectado \u2014 registro local descartado.");
-        } else {
-          pendingAttemptTime = null;
+      if (pendingAttemptTime) {
+        if (hasHostPunchError(modal)) {
+          clearPendingAttempt("Batida n\xE3o registrada no Ahgora \u2014 ignorada pelo painel.");
+          removeHint();
+          return;
         }
+        if (isPunchSuccessModal(modal)) {
+          commitPendingAttempt();
+          removeHint();
+          return;
+        }
+      }
+      if (!modal) {
         removeHint();
         return;
       }
-      if (pendingAttemptTime && hasHostPunchError(modal)) {
-        rollbackPendingAttempt("Erro na batida detectado \u2014 registro local descartado.");
-      }
+      hookModalContainer(modal);
       const confirmBtn = findConfirmButton(modal);
       if (!confirmBtn) return;
+      const nextTime = findModalTime(modal);
+      if (!nextTime) {
+        removeHint();
+        return;
+      }
       refreshModalState(modal, confirmBtn);
       if (!confirmBtn.dataset.ahgHooked) {
         confirmBtn.dataset.ahgHooked = "true";
         confirmBtn.addEventListener("click", (e) => {
+          const btnText = (confirmBtn.textContent || "").trim();
+          if (pendingAttemptTime && !findModalTime(findPunchModal())) {
+            if (!hasHostPunchError(findPunchModal()) && (isPunchSuccessModal(findPunchModal()) || OK_CONFIRM_BTN_TEXT_RE.test(btnText))) {
+              commitPendingAttempt();
+            }
+            return;
+          }
           const liveModal = findPunchModal();
+          hookModalContainer(liveModal);
           const liveTime = findModalTime(liveModal);
+          if (!liveTime) return;
           const currentState = getClockingInIntervalState(liveTime, getLatestTodayKnownPunchMinute(timelineGetter()));
           if (currentState && currentState.isBlocked) {
             e.preventDefault();
             e.stopImmediatePropagation();
             window.alert("Intervalo m\xEDnimo de 30min n\xE3o atingido.");
             showLoggerToast("Intervalo m\xEDnimo de 30min n\xE3o atingido.");
-          } else if (liveTime) {
-            if (savePunch(liveTime)) {
-              pendingAttemptTime = liveTime;
-            }
-          }
-        }, true);
-      }
-      const cancelBtn = findCancelButton(modal);
-      if (cancelBtn && !cancelBtn.dataset.ahgCancelHooked) {
-        cancelBtn.dataset.ahgCancelHooked = "true";
-        cancelBtn.addEventListener("click", () => {
-          if (pendingAttemptTime) {
-            rollbackPendingAttempt("Batida cancelada \u2014 registro local descartado.");
+          } else {
+            pendingAttemptTime = liveTime;
+            pendingAttemptEvent = e;
           }
         }, true);
       }
@@ -5907,10 +5942,6 @@
     const dias = extrairDados(hoje);
     if (!dias.length) return null;
     persistMirrorDays(dias, hoje);
-    const rawToday = dias.find((d) => d.isToday);
-    if (rawToday?.dateKey) {
-      syncDayLocalHistory(rawToday.dateKey, rawToday.batidas || []);
-    }
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
     const sharedTruthPrev = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);

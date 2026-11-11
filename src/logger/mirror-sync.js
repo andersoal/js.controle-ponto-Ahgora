@@ -83,18 +83,11 @@ export function getYesterdayContext(sharedTruth, todayDate = new Date()) {
     return { yesterdayLastPunch };
 }
 
-export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs, { mirrorSyncedAtMs = null } = {}) {
+export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);
     const mirrorSet = new Set(mirrorPunches || []);
-    const hasFreshMirrorSync = Number.isFinite(mirrorSyncedAtMs);
 
-    const reconciled = todayHistory.filter((entry) => {
-        if (mirrorSet.has(entry.time)) return false;
-        // Se o Mirror foi sincronizado DEPOIS desta batida local e ela não está
-        // em mirrorPunches, a batida não foi concluída/registrada no espelho.
-        if (hasFreshMirrorSync && entry.timestamp <= mirrorSyncedAtMs) return false;
-        return true;
-    });
+    const reconciled = todayHistory.filter((entry) => !mirrorSet.has(entry.time));
 
     const localOnlyPunches = reconciled.map((entry) => entry.time);
 

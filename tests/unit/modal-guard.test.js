@@ -239,7 +239,41 @@ describe('ModalGuard', () => {
         vi.useRealTimers();
     });
 
-    it('se o usuário clicar em Cancel após Clocking in travar no modal, desfaz o registro local', async () => {
+    it('clicar em Clocking in aguarda confirmação de sucesso ("Your punch-in was successfully registered!" / botão OK) e não cancela ao clicar em OK mesmo quando o React reutiliza o botão Cancel', async () => {
+        vi.useFakeTimers();
+        const { getPunchHistory } = await import('../../src/logger/punch-history.js');
+        const { overlay, confirmBtn, cancelBtn } = buildRealMuiModal(); // 14:23
+        const timelineGetter = () => ({ combinedPunches: [] });
+
+        const id = monitorModal(timelineGetter, LOGGER_MONITOR_INTERVAL_MS);
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+
+        // 1º passo: clicar em Clocking in prepara a batida mas ainda não salva (evita salvar se travar/der erro)
+        confirmBtn.click();
+        expect(getPunchHistory()).toHaveLength(0);
+
+        // 2º passo: React reutiliza o modal e o primeiro <button> (que era "Cancel") vira "OK"
+        const box = overlay.querySelector('.MuiBox-root');
+        box.querySelector('h2').textContent = 'Your punch-in was successfully registered!';
+        box.querySelector('div').remove(); // remove os dígitos 14 h 23 m
+        confirmBtn.remove();
+        cancelBtn.textContent = 'OK';
+
+        // Usuário clica no botão OK (mesmo nó DOM que antes era Cancel)
+        cancelBtn.click();
+        expect(getPunchHistory()).toHaveLength(1);
+        expect(getPunchHistory()[0].time).toBe('14:23');
+
+        // Mesmo após próximo tick do monitorModal, a batida continua salva
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+        expect(getPunchHistory()).toHaveLength(1);
+        expect(getPunchHistory()[0].time).toBe('14:23');
+
+        clearInterval(id);
+        vi.useRealTimers();
+    });
+
+    it('se o usuário clicar em Cancel após Clocking in travar no modal, não grava no histórico local', async () => {
         vi.useFakeTimers();
         const { getPunchHistory } = await import('../../src/logger/punch-history.js');
         const { confirmBtn, cancelBtn } = buildRealMuiModal(); // 14:23
@@ -249,8 +283,7 @@ describe('ModalGuard', () => {
         vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
 
         confirmBtn.click();
-        expect(getPunchHistory()).toHaveLength(1);
-        expect(getPunchHistory()[0].time).toBe('14:23');
+        expect(getPunchHistory()).toHaveLength(0);
 
         // Modal travou e o usuário clicou em Cancel:
         cancelBtn.click();
@@ -260,7 +293,7 @@ describe('ModalGuard', () => {
         vi.useRealTimers();
     });
 
-    it('se o host exibir alerta de erro após Clocking in, desfaz o registro local automaticamente', async () => {
+    it('se o host exibir alerta de erro após Clocking in, ignora a batida e não grava no histórico local', async () => {
         vi.useFakeTimers();
         const { getPunchHistory } = await import('../../src/logger/punch-history.js');
         const { overlay, confirmBtn } = buildRealMuiModal(); // 14:23
@@ -270,7 +303,7 @@ describe('ModalGuard', () => {
         vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
 
         confirmBtn.click();
-        expect(getPunchHistory()).toHaveLength(1);
+        expect(getPunchHistory()).toHaveLength(0);
 
         const errAlert = document.createElement('div');
         errAlert.setAttribute('role', 'alert');
@@ -284,7 +317,7 @@ describe('ModalGuard', () => {
         vi.useRealTimers();
     });
 
-    it('se o modal de confirmação trocar para o modal "Colaborador não cadastrado no dispositivo", desfaz o registro local', async () => {
+    it('se o modal de confirmação trocar para o modal "Colaborador não cadastrado no dispositivo", não grava no histórico local nem ao clicar em OK', async () => {
         vi.useFakeTimers();
         const { getPunchHistory } = await import('../../src/logger/punch-history.js');
         const { overlay, confirmBtn } = buildRealMuiModal(); // 14:23
@@ -294,14 +327,11 @@ describe('ModalGuard', () => {
         vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
 
         confirmBtn.click();
-        expect(getPunchHistory()).toHaveLength(1);
+        expect(getPunchHistory()).toHaveLength(0);
 
-        // O modal de confirmação fecha e o Ahgora abre o modal de erro do dispositivo:
-        overlay.remove();
-        const deviceErrModal = document.createElement('div');
-        deviceErrModal.setAttribute('role', 'presentation');
-        deviceErrModal.innerHTML = '<div class="MuiBox-root"><h2>Atenção</h2><p>Colaborador não cadastrado no dispositivo.</p><button>OK</button></div>';
-        document.body.appendChild(deviceErrModal);
+        // O modal de confirmação troca para o modal de erro do dispositivo:
+        overlay.innerHTML = '<div class="MuiBox-root"><h2>Atenção</h2><p>Colaborador não cadastrado no dispositivo.</p><button id="err-ok">OK</button></div>';
+        overlay.querySelector('#err-ok').click();
 
         vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
         expect(getPunchHistory()).toHaveLength(0);
