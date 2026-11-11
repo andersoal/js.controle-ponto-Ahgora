@@ -59,7 +59,7 @@ describe('PanelRenderer', () => {
     });
 
     it('assistente lidera o painel, antes do status', () => {
-        const html = buildPanelHtml(resumoStub(), { tema: 'auto', modoZen: false, flags: {} }, false, makeView());
+        const html = buildPanelHtml(resumoStub(), { tema: 'auto', modoZen: false, flags: {} }, makeView());
         const idxAssistant = html.indexOf('ahg-assistant');
         const idxStatus = html.indexOf('Status atual');
         expect(idxAssistant).toBeGreaterThan(-1);
@@ -85,7 +85,7 @@ describe('PanelRenderer', () => {
     });
 
     it('semana traz a visão semanal junto do saldo quando fornecida', () => {
-        const html = buildPanelHtml(resumoStub(), { tema: 'auto', modoZen: false, flags: {} }, false, makeView());
+        const html = buildPanelHtml(resumoStub(), { tema: 'auto', modoZen: false, flags: {} }, makeView());
         expect(html).toContain('ahg-week-view');
         expect(html.indexOf('Saldo semanal')).toBeLessThan(html.indexOf('ahg-week-view'));
     });
@@ -104,16 +104,9 @@ describe('PanelRenderer', () => {
         expect(html).not.toContain('Banco de Horas');
     });
 
-    it('inclui seção de calendário quando hasCalendar é true', () => {
+    it('não inclui mais a seção de calendário (atalhos ficaram só no quadro de próxima batida)', () => {
         const r = resumoStub();
-        const html = buildPanelHtml(r, { tema: 'auto', modoZen: false, flags: {} }, true);
-        expect(html).toContain('Calendário');
-        expect(html).toContain('ahg-mirror-calendar-row');
-    });
-
-    it('não inclui seção de calendário quando hasCalendar é false', () => {
-        const r = resumoStub();
-        const html = buildPanelHtml(r, { tema: 'auto', modoZen: false, flags: {} }, false);
+        const html = buildPanelHtml(r, { tema: 'auto', modoZen: false, flags: {} });
         expect(html).not.toContain('ahg-mirror-calendar-row');
     });
 });

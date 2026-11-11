@@ -119,7 +119,9 @@ export function buildAssistantPlan({
             const message = binding === 'BR-005'
                 ? 'Sugestão limitada ao dia máximo de 10h.'
                 : 'Sugestão limitada ao turno contínuo máximo de 6h.';
-            if (!enforcement.some((e) => e.ruleId === binding && e.appliesTo === appliesTo)) {
+            // Dedup por ruleId: exitFinal e idealExit chamam capExit com o
+            // mesmo teto e geravam o mesmo aviso duas vezes (appliesTo diferente).
+            if (!enforcement.some((e) => e.ruleId === binding)) {
                 enforcement.push(rule(binding, 'hard-block', message, appliesTo));
             }
         }

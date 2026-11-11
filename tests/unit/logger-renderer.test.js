@@ -226,7 +226,7 @@ describe('Logger: pílula fixada com os 4 horários', () => {
         document.body.innerHTML = '';
         setDockEdge('logger-panel', 'top');
         gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, {
-            dateKey: formatDateKey(), active: true, targetBalance: 600, direction: 'late', targetReduction: 59,
+            dateKey: formatDateKey(), planMinutes: 8 * 60, active: true, targetBalance: 600, direction: 'late', targetReduction: 59,
             achievableMinutes: 59, feasible: true, todayExit: 16 * 60 + 30, todayAdjustment: 30,
             days: [{ dateKey: formatDateKey(), weekdayLabel: 'seg', isToday: true, adjustmentMinutes: 30 }]
         });
@@ -244,5 +244,34 @@ describe('Logger: pílula fixada com os 4 horários', () => {
         expect(text).toContain('Meta do banco');
         expect(text).toContain('Saia até 16:30');
         expect(text).toContain('ficar a mais');
+    });
+
+    it('ignora a saída da meta quando o preset local (8h/10h) diverge do usado no cálculo publicado pelo Mirror', async () => {
+        const { setDockEdge } = await import('../../src/shared/ui-components.js');
+        const { STORAGE_KEYS, gmSetJsonCrossOrigin } = await import('../../src/core/storage-adapter.js');
+        const { formatDateKey } = await import('../../src/core/time-utils.js');
+        const { ConfigStore } = await import('../../src/core/config.js');
+        const { setJourneyPlan } = await import('../../src/core/journey-plan.js');
+        ConfigStore.patch({ modoZen: false });
+        document.body.innerHTML = '';
+        setDockEdge('logger-panel', 'top');
+        setJourneyPlan('p10');
+        gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, {
+            dateKey: formatDateKey(), planMinutes: 8 * 60, active: true, targetBalance: 600, direction: 'late', targetReduction: 59,
+            achievableMinutes: 59, feasible: true, todayExit: 16 * 60 + 30, todayAdjustment: 30,
+            days: [{ dateKey: formatDateKey(), weekdayLabel: 'seg', isToday: true, adjustmentMinutes: 30 }]
+        });
+        renderLoggerContainer({
+            combinedLastPunch: '08:00', combinedPunches: ['08:00'], hasMirrorData: true, mirrorSource: 'truth',
+            pendingLocalHistoryEntries: [], monthHistory: { months: [] }, weekBalance: 0
+        });
+        const bar = document.querySelector('#ahg-dock-bar');
+        expect(bar.querySelector('.is-goal')).toBeNull();
+
+        const text = document.querySelector('#ahg-logger-panel, .ahg-panel').textContent;
+        expect(text).toContain('Plano desatualizado');
+        expect(text).not.toContain('Saia até 16:30');
+
+        setJourneyPlan('p8');
     });
 });

@@ -210,8 +210,11 @@ export function buildBankPlan({
         const allocation = Math.min(capacity, base + (remainder > 0 ? 1 : 0));
         if (remainder > 0) remainder--;
 
+        // Jornada de hoje planejada acima do padrão de 8h (preset 10h) já
+        // embute o excedente no banco de propósito — sugerir ajuste em cima
+        // disso (sair bem mais cedo para "reduzir") contradiz a escolha do dia.
         let suggestedExit = null;
-        if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== undefined) {
+        if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== undefined && planMinutes <= CONFIG.CARGA_DIARIA) {
             suggestedExit = direction === 'early'
                 ? Math.max(now, todayPlannedExit - allocation)
                 : todayPlannedExit + allocation;
@@ -238,12 +241,16 @@ export function buildBankPlan({
 /**
  * Resumo serializável do plano para o Logger (que não tem os dias do mês para
  * calcular sozinho). `todayExit`: saída de hoje sugerida pela meta.
+ * `planMinutes`: preset (8h/10h) usado neste cálculo — o Logger ignora a
+ * saída sugerida se o usuário já trocou de preset localmente (ela ficaria
+ * incoerente até o Mirror recalcular com o preset novo).
  */
-export function buildBankPlanSnapshot(bankPlan, dateKey) {
+export function buildBankPlanSnapshot(bankPlan, dateKey, planMinutes = null) {
     if (!bankPlan?.active) return { dateKey, active: false };
     const today = bankPlan.days?.find((d) => d.isToday) || null;
     return {
         dateKey,
+        planMinutes,
         active: true,
         completed: !!bankPlan.completed,
         noBalance: !!bankPlan.noBalance,

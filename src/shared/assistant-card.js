@@ -127,17 +127,30 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
     const { alarmConfig = null, bankExit = null } = opts;
     const title = STAGE_TITLES[assistant.stage] || 'Próxima batida';
 
+    // Com meta de banco de horas ativa, quem deve guiar a próxima batida é a
+    // saída que compensa o banco, não a saída normal do turno (que só
+    // respeita os tetos de turno/dia) — ela vira destaque e a normal passa a
+    // referência, junto da janela legal.
+    const hasBankOverride = assistant.next?.id === 'exitFinal'
+        && bankExit !== null && bankExit !== undefined
+        && bankExit !== assistant.next.time;
+    const headlineNext = hasBankOverride ? { ...assistant.next, time: bankExit } : assistant.next;
+
     let body = '';
-    if (assistant.next) {
-        const windowHtml = assistant.next.windowMin !== null || assistant.next.windowMax !== null
-            ? `<div class="ahg-as-next-window">janela ${renderClock(assistant.next.windowMin)} – ${renderClock(assistant.next.windowMax)}</div>`
+    if (headlineNext) {
+        const windowHtml = headlineNext.windowMin !== null || headlineNext.windowMax !== null
+            ? `<div class="ahg-as-next-window">janela ${renderClock(headlineNext.windowMin)} – ${renderClock(headlineNext.windowMax)}</div>`
+            : '';
+        const normalHtml = hasBankOverride
+            ? `<div class="ahg-as-next-window">normal <b>${renderClock(assistant.next.time)}</b> <small>respeita turno/dia</small></div>`
             : '';
         body = `
         <div class="ahg-as-next">
-            <div class="ahg-as-next-time">${renderClock(assistant.next.time)}</div>
+            <div class="ahg-as-next-time">${renderClock(headlineNext.time)}</div>
             <div class="ahg-as-next-info">
-                <span class="ahg-as-next-label">${escapeHtml(assistant.next.label)}</span>
+                <span class="ahg-as-next-label">${escapeHtml(headlineNext.label)}${hasBankOverride ? ' · meta' : ''}</span>
                 ${windowHtml}
+                ${normalHtml}
             </div>
         </div>`;
     } else {

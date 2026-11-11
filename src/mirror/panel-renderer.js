@@ -33,7 +33,6 @@ import {
 import { abrirDetalhes, exportarCsvBatidas, exportarCsvMensal } from './details-modal.js';
 import { openPunchEditor } from './punch-editor.js';
 import { getAlarmConfig } from '../logger/alarm-engine.js';
-import { buildAutoGcalMaxMinusLink, buildQuickCalendarButtons } from '../logger/quick-actions.js';
 import { getJourneyPlan, setJourneyPlan } from '../core/journey-plan.js';
 import { buildAssistantPlan, buildWeekPlan } from './assistant-engine.js';
 import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml } from '../shared/assistant-card.js';
@@ -111,7 +110,7 @@ function buildShiftPairsHtml(turnos = []) {
     }).join('');
 }
 
-export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
+export function buildPanelHtml(resumo, cfg, view = {}) {
     const r = resumo;
     const state = privacyButtonState();
     // Dias com contagem ímpar de batidas: data + contagem (nunca formatar contagem como hora).
@@ -164,11 +163,6 @@ export function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
 
     if (r.alerta) {
         html += `<div class="a-row danger"><span class="a-lbl">Alerta</span><span class="a-val neg">${renderText(r.alerta)}</span></div>`;
-    }
-
-    if (hasCalendar) {
-        html += `<hr class="a-div"><div class="a-sec">Calendário</div>
-            <div id="ahg-mirror-calendar-row" class="a-row infos ahg-flex-wrap ahg-gap-4"></div>`;
     }
 
     html += `<hr class="a-div"><div class="a-sec">Semanal — sem. ${getWeekNumber(new Date())}</div>
@@ -254,8 +248,6 @@ export function renderMirrorPanel(resumo) {
     const { panel, fab } = ensurePanelContainer();
 
     const alarmConfig = getAlarmConfig();
-    const autoLink = buildAutoGcalMaxMinusLink(resumo.guidance, alarmConfig);
-    const calendarButtons = buildQuickCalendarButtons(autoLink, alarmConfig);
 
     const plan = getJourneyPlan();
     const assistant = buildAssistantPlan({
@@ -284,7 +276,7 @@ export function renderMirrorPanel(resumo) {
     // O plano do banco só existe no Mirror: publica a saída de hoje para a
     // pílula do Logger (null quando não há meta).
     const bankTodayExit = bankPlan.days?.find((d) => d.isToday)?.suggestedExit ?? null;
-    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null));
+    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null, plan.minutes));
 
     const view = {
         assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
@@ -315,7 +307,7 @@ export function renderMirrorPanel(resumo) {
         else if (active.dataset?.preset) focusSelector = `.ahg-as-preset[data-preset="${active.dataset.preset}"]`;
     }
 
-    panel.innerHTML = buildPanelHtml(resumo, cfg, !!calendarButtons, view);
+    panel.innerHTML = buildPanelHtml(resumo, cfg, view);
     setFloatingPanelVisible(panel, fab, !keepMinimized);
 
     openDetailIds.forEach((id) => {
@@ -332,11 +324,6 @@ export function renderMirrorPanel(resumo) {
             renderMirrorPanel(resumo);
         }
     });
-
-    if (calendarButtons) {
-        const calendarRow = panel.querySelector('#ahg-mirror-calendar-row');
-        if (calendarRow) calendarRow.appendChild(calendarButtons);
-    }
 
     applyTheme(cfg.tema);
     const dragHandle = getDockMini(PERSIST_KEY) ? '#ahg-dock-bar' : '.a-tit';

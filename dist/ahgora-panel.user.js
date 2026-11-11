@@ -697,11 +697,29 @@
     const footprint = measureDockFootprint(panel);
     if (layoutAnchoredDock(panel, edge, anchorEl, footprint)) {
       state.mode = "anchored";
+      restoreHiddenOverlap(state);
     } else {
       state.mode = "edge";
       applyDockReflow(axes, footprint.w, footprint.h);
+      applyHiddenOverlap(state);
     }
     snapshotDock(panel, state);
+  }
+  function applyHiddenOverlap(state) {
+    if (typeof state.hideOverlap !== "function") return;
+    const el2 = state.hideOverlap();
+    if (state.hiddenEl && state.hiddenEl !== el2) restoreHiddenOverlap(state);
+    if (el2 && !state.hiddenEl) {
+      state.hiddenDisplay = el2.style.display;
+      el2.style.display = "none";
+      state.hiddenEl = el2;
+    }
+  }
+  function restoreHiddenOverlap(state) {
+    if (state.hiddenEl) {
+      state.hiddenEl.style.display = state.hiddenDisplay || "";
+      state.hiddenEl = null;
+    }
   }
   var DOCK_POS_PROPS = ["left", "right", "top", "bottom"];
   var DOCK_LAYOUT_CLASSES = ["ahg-dock-anchored", "ahg-dock-strip"];
@@ -775,6 +793,7 @@
       window.removeEventListener("scroll", state.onWindowChange, { capture: true });
     }
     state.observer?.disconnect();
+    restoreHiddenOverlap(state);
     delete panel._ahgDockState;
     panel.classList.remove("ahg-dock-anchored", "ahg-dock-strip");
   }
@@ -805,6 +824,7 @@
     state.edge = edge;
     state.key = key;
     state.anchor = typeof options.anchor === "function" ? options.anchor : null;
+    state.hideOverlap = typeof options.hideOverlap === "function" ? options.hideOverlap : null;
     panel._ahgDockState = state;
     ensureDockObservers(panel, state);
     layoutPanelDock(panel);
@@ -1704,7 +1724,7 @@
       const allocation = Math.min(capacity, base + (remainder > 0 ? 1 : 0));
       if (remainder > 0) remainder--;
       let suggestedExit = null;
-      if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== void 0) {
+      if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== void 0 && planMinutes <= CONFIG.CARGA_DIARIA) {
         suggestedExit = direction === "early" ? Math.max(now, todayPlannedExit - allocation) : todayPlannedExit + allocation;
       }
       return { ...day, adjustmentMinutes: allocation, suggestedExit };
@@ -1723,11 +1743,12 @@
       holidayCredits
     };
   }
-  function buildBankPlanSnapshot(bankPlan, dateKey) {
+  function buildBankPlanSnapshot(bankPlan, dateKey, planMinutes = null) {
     if (!bankPlan?.active) return { dateKey, active: false };
     const today = bankPlan.days?.find((d) => d.isToday) || null;
     return {
       dateKey,
+      planMinutes,
       active: true,
       completed: !!bankPlan.completed,
       noBalance: !!bankPlan.noBalance,
@@ -3832,174 +3853,6 @@
     return fired;
   }
 
-  // src/logger/calendar-links.js
-  function normalizeGoogleCalendarUserPath(value) {
-    if (value === null || value === void 0 || value === "") return "0";
-    const str = String(value).trim();
-    if (/^\d+$/.test(str)) return str;
-    const match = str.match(/\/u\/(\d+)\//);
-    if (match) return match[1];
-    return "0";
-  }
-  function resolveCalendarEventWindow(startMinute, endMinute, baseDate = /* @__PURE__ */ new Date()) {
-    const startDate = minuteToDate(baseDate, startMinute);
-    if (!startDate) return null;
-    const endDate = minuteToDate(baseDate, endMinute) || new Date(startDate.getTime() + CONFIG.GCAL_EVENT_DURATION_MIN * 6e4);
-    return { startDate, endDate };
-  }
-  function buildCalendarEventTitle(title) {
-    return `${CONFIG.GCAL_TITLE_PREFIX}${title || ""}`;
-  }
-  function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate, userPath }) {
-    const path = normalizeGoogleCalendarUserPath(userPath);
-    const window2 = resolveCalendarEventWindow(startMinute, endMinute, baseDate);
-    if (!window2) return null;
-    const dates = `${fmtGoogleCalendarDate(window2.startDate)}/${fmtGoogleCalendarDate(window2.endDate)}`;
-    const params = new URLSearchParams({
-      action: "TEMPLATE",
-      text: buildCalendarEventTitle(title),
-      details: details || "",
-      ctz: CONFIG.GCAL_TIMEZONE,
-      dates
-    });
-    return `https://calendar.google.com/calendar/u/${path}/event?${params.toString()}`;
-  }
-  function fmtOutlookCalendarDate(date) {
-    const { yyyy, mm, dd, hh, min, ss } = dateParts(date);
-    return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
-  }
-  function buildOutlookCalendarUrl({ title, details, startMinute, endMinute, baseDate }) {
-    const window2 = resolveCalendarEventWindow(startMinute, endMinute, baseDate);
-    if (!window2) return null;
-    const params = new URLSearchParams({
-      path: "/calendar/action/compose",
-      rru: "addevent",
-      subject: buildCalendarEventTitle(title),
-      body: details || "",
-      startdt: fmtOutlookCalendarDate(window2.startDate),
-      enddt: fmtOutlookCalendarDate(window2.endDate),
-      allday: "false"
-    });
-    return `https://outlook.live.com/calendar/0/deeplink/compose?${params.toString()}`;
-  }
-
-  // src/logger/quick-actions.js
-  var LOGGER_GCAL_AUTOPEN_MAX_ENTRIES = 120;
-  var DEFAULT_DEVICE_PATTERN = /^[A-Za-z0-9_-]+$/;
-  function readDefaultDevice(href) {
-    if (!href) return null;
-    try {
-      const value = new URL(href).searchParams.get("defaultDevice");
-      const code = (value || "").trim();
-      return DEFAULT_DEVICE_PATTERN.test(code) ? code : null;
-    } catch {
-      return null;
-    }
-  }
-  function buildMirrorUrl(href = typeof window !== "undefined" ? window.location.href : "") {
-    const code = readDefaultDevice(href);
-    return code ? `${CONFIG.URL_MIRROR_DEVICE_BASE}${code}` : CONFIG.URL_MIRROR_FALLBACK;
-  }
-  function readLoggerGcalAutoOpenState() {
-    return gmGetJson(STORAGE_KEYS.LOGGER_GCAL_AUTOPEN, {});
-  }
-  function hasLoggerGcalAutoOpenToken(token) {
-    const state = readLoggerGcalAutoOpenState();
-    return !!state[token];
-  }
-  function markLoggerGcalAutoOpenToken(token, status) {
-    const state = readLoggerGcalAutoOpenState();
-    state[token] = { status, at: (/* @__PURE__ */ new Date()).toISOString() };
-    const keys = Object.keys(state).sort();
-    while (keys.length > LOGGER_GCAL_AUTOPEN_MAX_ENTRIES) {
-      delete state[keys.shift()];
-    }
-    gmSetJson(STORAGE_KEYS.LOGGER_GCAL_AUTOPEN, state);
-  }
-  function buildAutoGcalMaxMinusLink(guidance, alarmConfig) {
-    if (!guidance || !alarmConfig) return null;
-    const cfg = { ...DEFAULT_ALARM_CONFIG, ...alarmConfig || {} };
-    if (!cfg.quickGcalEnabled) return null;
-    const stage = guidance.stage || "entry";
-    let maxMinute = null;
-    let maxLabel = "";
-    if (stage === "interval") {
-      maxMinute = guidance.firstExitMax;
-      maxLabel = "Sa\xEDda m\xE1xima";
-    } else if (stage === "return") {
-      maxMinute = guidance.intervalMax;
-      maxLabel = "Retorno m\xE1ximo";
-    } else if (stage === "exit") {
-      maxMinute = guidance.day10h;
-      maxLabel = "Sa\xEDda 10h";
-    } else {
-      return null;
-    }
-    if (maxMinute === null || maxMinute === void 0) return null;
-    const lead = cfg.quickGcalOffsetMinutes ?? DEFAULT_ALARM_CONFIG.quickGcalOffsetMinutes;
-    const startMinute = maxMinute - lead;
-    const baseDate = /* @__PURE__ */ new Date();
-    const title = maxLabel;
-    const details = `Evento criado pelo Ahgora Panel - ${maxLabel}`;
-    const userPath = cfg.gcalUserPath;
-    const gcal = buildGoogleCalendarUrl({ title, details, startMinute, endMinute: maxMinute, baseDate, userPath });
-    const outlook = buildOutlookCalendarUrl({ title, details, startMinute, endMinute: maxMinute, baseDate });
-    return {
-      gcal,
-      outlook,
-      leadMinutes: lead,
-      startMinute,
-      maxMinute,
-      maxLabel,
-      stage
-    };
-  }
-  function buildCalendarLink(label, url) {
-    return el("a", {
-      className: "ahg-btn ahg-btn-sm",
-      attrs: { href: url, target: "_blank", rel: "noopener noreferrer" },
-      html: `${icon("calendar", { size: 11 })} ${escapeHtml(label)}`
-    });
-  }
-  function buildQuickCalendarButtons(autoLink, alarmConfig) {
-    if (!autoLink) return null;
-    const cfg = { ...DEFAULT_ALARM_CONFIG, ...alarmConfig || {} };
-    const provider = cfg.quickCalendarProvider || "google";
-    const labelSuffix = `-${autoLink.leadMinutes}m`;
-    const fragment = document.createDocumentFragment();
-    if ((provider === "google" || provider === "both") && autoLink.gcal) {
-      fragment.appendChild(buildCalendarLink(`Google ${labelSuffix}`, autoLink.gcal));
-    }
-    if ((provider === "outlook" || provider === "both") && autoLink.outlook) {
-      fragment.appendChild(buildCalendarLink(`Outlook ${labelSuffix}`, autoLink.outlook));
-    }
-    return fragment;
-  }
-  function canAutoOpenQuickGcal(autoLink, alarmConfig) {
-    if (!autoLink || !autoLink.gcal) return false;
-    const cfg = { ...DEFAULT_ALARM_CONFIG, ...alarmConfig || {} };
-    if (!cfg.quickGcalAutoOpenEnabled) return false;
-    if (cfg.quickCalendarProvider === "outlook") return false;
-    const desiredStage = cfg.quickGcalAutoOpenStage || "off";
-    if (desiredStage === "off") return false;
-    if (desiredStage !== "any" && desiredStage !== autoLink.stage) return false;
-    return true;
-  }
-  function maybeAutoOpenQuickCalendar(vm, autoLink) {
-    if (!canAutoOpenQuickGcal(autoLink, vm?.alarmConfig)) return false;
-    const todayKey = formatDateKey();
-    const token = `${todayKey}:${autoLink.stage}:${vm.alarmConfig.quickGcalAutoOpenStage}:${autoLink.maxMinute}:${autoLink.leadMinutes}`;
-    if (hasLoggerGcalAutoOpenToken(token)) return false;
-    const message = `Abrir Google Calendar para "${autoLink.maxLabel}" (${fmtHour(autoLink.startMinute)}\u2013${fmtHour(autoLink.maxMinute)})?`;
-    if (typeof window !== "undefined" && window.confirm(message)) {
-      openInNewTab(autoLink.gcal);
-      markLoggerGcalAutoOpenToken(token, "accepted");
-      return true;
-    }
-    markLoggerGcalAutoOpenToken(token, "dismissed");
-    return false;
-  }
-
   // src/core/journey-plan.js
   var JOURNEY_PRESETS = Object.freeze([
     Object.freeze({ id: "p8", label: "8h", minutes: 8 * 60 }),
@@ -4105,7 +3958,7 @@
       if (capped < desired) {
         const binding = dayCap <= shiftCap ? "BR-005" : "BR-004";
         const message = binding === "BR-005" ? "Sugest\xE3o limitada ao dia m\xE1ximo de 10h." : "Sugest\xE3o limitada ao turno cont\xEDnuo m\xE1ximo de 6h.";
-        if (!enforcement.some((e) => e.ruleId === binding && e.appliesTo === appliesTo)) {
+        if (!enforcement.some((e) => e.ruleId === binding)) {
           enforcement.push(rule(binding, "hard-block", message, appliesTo));
         }
       }
@@ -4288,6 +4141,57 @@
     return { days, balance, workedTotal, targetTotal, remaining: Math.max(0, targetTotal - workedTotal) };
   }
 
+  // src/logger/calendar-links.js
+  function normalizeGoogleCalendarUserPath(value) {
+    if (value === null || value === void 0 || value === "") return "0";
+    const str = String(value).trim();
+    if (/^\d+$/.test(str)) return str;
+    const match = str.match(/\/u\/(\d+)\//);
+    if (match) return match[1];
+    return "0";
+  }
+  function resolveCalendarEventWindow(startMinute, endMinute, baseDate = /* @__PURE__ */ new Date()) {
+    const startDate = minuteToDate(baseDate, startMinute);
+    if (!startDate) return null;
+    const endDate = minuteToDate(baseDate, endMinute) || new Date(startDate.getTime() + CONFIG.GCAL_EVENT_DURATION_MIN * 6e4);
+    return { startDate, endDate };
+  }
+  function buildCalendarEventTitle(title) {
+    return `${CONFIG.GCAL_TITLE_PREFIX}${title || ""}`;
+  }
+  function buildGoogleCalendarUrl({ title, details, startMinute, endMinute, baseDate, userPath }) {
+    const path = normalizeGoogleCalendarUserPath(userPath);
+    const window2 = resolveCalendarEventWindow(startMinute, endMinute, baseDate);
+    if (!window2) return null;
+    const dates = `${fmtGoogleCalendarDate(window2.startDate)}/${fmtGoogleCalendarDate(window2.endDate)}`;
+    const params = new URLSearchParams({
+      action: "TEMPLATE",
+      text: buildCalendarEventTitle(title),
+      details: details || "",
+      ctz: CONFIG.GCAL_TIMEZONE,
+      dates
+    });
+    return `https://calendar.google.com/calendar/u/${path}/event?${params.toString()}`;
+  }
+  function fmtOutlookCalendarDate(date) {
+    const { yyyy, mm, dd, hh, min, ss } = dateParts(date);
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
+  }
+  function buildOutlookCalendarUrl({ title, details, startMinute, endMinute, baseDate }) {
+    const window2 = resolveCalendarEventWindow(startMinute, endMinute, baseDate);
+    if (!window2) return null;
+    const params = new URLSearchParams({
+      path: "/calendar/action/compose",
+      rru: "addevent",
+      subject: buildCalendarEventTitle(title),
+      body: details || "",
+      startdt: fmtOutlookCalendarDate(window2.startDate),
+      enddt: fmtOutlookCalendarDate(window2.endDate),
+      allday: "false"
+    });
+    return `https://outlook.live.com/calendar/0/deeplink/compose?${params.toString()}`;
+  }
+
   // src/shared/assistant-card.js
   function interjornadaLabel(minutes = CONFIG.DESCANSO_MINIMO) {
     const amount = minutes % 60 === 0 ? `${minutes / 60}h` : fmtMin(minutes);
@@ -4379,15 +4283,19 @@
     if (!assistant) return "";
     const { alarmConfig = null, bankExit = null } = opts;
     const title = STAGE_TITLES[assistant.stage] || "Pr\xF3xima batida";
+    const hasBankOverride = assistant.next?.id === "exitFinal" && bankExit !== null && bankExit !== void 0 && bankExit !== assistant.next.time;
+    const headlineNext = hasBankOverride ? { ...assistant.next, time: bankExit } : assistant.next;
     let body = "";
-    if (assistant.next) {
-      const windowHtml = assistant.next.windowMin !== null || assistant.next.windowMax !== null ? `<div class="ahg-as-next-window">janela ${renderClock(assistant.next.windowMin)} \u2013 ${renderClock(assistant.next.windowMax)}</div>` : "";
+    if (headlineNext) {
+      const windowHtml = headlineNext.windowMin !== null || headlineNext.windowMax !== null ? `<div class="ahg-as-next-window">janela ${renderClock(headlineNext.windowMin)} \u2013 ${renderClock(headlineNext.windowMax)}</div>` : "";
+      const normalHtml = hasBankOverride ? `<div class="ahg-as-next-window">normal <b>${renderClock(assistant.next.time)}</b> <small>respeita turno/dia</small></div>` : "";
       body = `
         <div class="ahg-as-next">
-            <div class="ahg-as-next-time">${renderClock(assistant.next.time)}</div>
+            <div class="ahg-as-next-time">${renderClock(headlineNext.time)}</div>
             <div class="ahg-as-next-info">
-                <span class="ahg-as-next-label">${escapeHtml(assistant.next.label)}</span>
+                <span class="ahg-as-next-label">${escapeHtml(headlineNext.label)}${hasBankOverride ? " \xB7 meta" : ""}</span>
                 ${windowHtml}
+                ${normalHtml}
             </div>
         </div>`;
     } else {
@@ -4549,7 +4457,7 @@
       return `<div class="a-row ${t.classe}"><span class="a-lbl">${label}</span><span class="a-val neu">${entrada} \u2192 ${saida}<small class="a-cap">${notas.join(" \xB7 ")}</small></span></div>`;
     }).join("");
   }
-  function buildPanelHtml(resumo, cfg, hasCalendar = false, view = {}) {
+  function buildPanelHtml(resumo, cfg, view = {}) {
     const r = resumo;
     const state = privacyButtonState();
     const fmtAnomalyDay = (x) => {
@@ -4592,10 +4500,6 @@
     }
     if (r.alerta) {
       html += `<div class="a-row danger"><span class="a-lbl">Alerta</span><span class="a-val neg">${renderText(r.alerta)}</span></div>`;
-    }
-    if (hasCalendar) {
-      html += `<hr class="a-div"><div class="a-sec">Calend\xE1rio</div>
-            <div id="ahg-mirror-calendar-row" class="a-row infos ahg-flex-wrap ahg-gap-4"></div>`;
     }
     html += `<hr class="a-div"><div class="a-sec">Semanal \u2014 sem. ${getWeekNumber(/* @__PURE__ */ new Date())}</div>
         <div class="a-row ${r.saldoSemana >= 0 ? "ok" : "warn"}"><span class="a-lbl">Saldo semanal</span>
@@ -4667,8 +4571,6 @@
     const cfg = ConfigStore.get();
     const { panel, fab } = ensurePanelContainer();
     const alarmConfig = getAlarmConfig();
-    const autoLink = buildAutoGcalMaxMinusLink(resumo.guidance, alarmConfig);
-    const calendarButtons = buildQuickCalendarButtons(autoLink, alarmConfig);
     const plan = getJourneyPlan();
     const assistant = buildAssistantPlan({
       batidas: resumo.hoje.batidasJornada || resumo.hoje.batidas,
@@ -4692,7 +4594,7 @@
     });
     if (bankPlan.completed) clearBankGoal();
     const bankTodayExit = bankPlan.days?.find((d) => d.isToday)?.suggestedExit ?? null;
-    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null));
+    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null, plan.minutes));
     const view = {
       assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
       weekHtml: buildWeekViewHtml(weekPlan),
@@ -4716,7 +4618,7 @@
       if (active.id) focusSelector = `#${CSS.escape(active.id)}`;
       else if (active.dataset?.preset) focusSelector = `.ahg-as-preset[data-preset="${active.dataset.preset}"]`;
     }
-    panel.innerHTML = buildPanelHtml(resumo, cfg, !!calendarButtons, view);
+    panel.innerHTML = buildPanelHtml(resumo, cfg, view);
     setFloatingPanelVisible(panel, fab, !keepMinimized);
     openDetailIds.forEach((id) => {
       const details = panel.querySelector(`#${CSS.escape(id)}`);
@@ -4731,10 +4633,6 @@
         renderMirrorPanel(resumo);
       }
     });
-    if (calendarButtons) {
-      const calendarRow = panel.querySelector("#ahg-mirror-calendar-row");
-      if (calendarRow) calendarRow.appendChild(calendarButtons);
-    }
     applyTheme(cfg.tema);
     const dragHandle = getDockMini(PERSIST_KEY) ? "#ahg-dock-bar" : ".a-tit";
     makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY });
@@ -5190,6 +5088,102 @@
     };
   }
 
+  // src/logger/quick-actions.js
+  var LOGGER_GCAL_AUTOPEN_MAX_ENTRIES = 120;
+  var DEFAULT_DEVICE_PATTERN = /^[A-Za-z0-9_-]+$/;
+  function readDefaultDevice(href) {
+    if (!href) return null;
+    try {
+      const value = new URL(href).searchParams.get("defaultDevice");
+      const code = (value || "").trim();
+      return DEFAULT_DEVICE_PATTERN.test(code) ? code : null;
+    } catch {
+      return null;
+    }
+  }
+  function buildMirrorUrl(href = typeof window !== "undefined" ? window.location.href : "") {
+    const code = readDefaultDevice(href);
+    return code ? `${CONFIG.URL_MIRROR_DEVICE_BASE}${code}` : CONFIG.URL_MIRROR_FALLBACK;
+  }
+  function readLoggerGcalAutoOpenState() {
+    return gmGetJson(STORAGE_KEYS.LOGGER_GCAL_AUTOPEN, {});
+  }
+  function hasLoggerGcalAutoOpenToken(token) {
+    const state = readLoggerGcalAutoOpenState();
+    return !!state[token];
+  }
+  function markLoggerGcalAutoOpenToken(token, status) {
+    const state = readLoggerGcalAutoOpenState();
+    state[token] = { status, at: (/* @__PURE__ */ new Date()).toISOString() };
+    const keys = Object.keys(state).sort();
+    while (keys.length > LOGGER_GCAL_AUTOPEN_MAX_ENTRIES) {
+      delete state[keys.shift()];
+    }
+    gmSetJson(STORAGE_KEYS.LOGGER_GCAL_AUTOPEN, state);
+  }
+  function buildAutoGcalMaxMinusLink(guidance, alarmConfig) {
+    if (!guidance || !alarmConfig) return null;
+    const cfg = { ...DEFAULT_ALARM_CONFIG, ...alarmConfig || {} };
+    if (!cfg.quickGcalEnabled) return null;
+    const stage = guidance.stage || "entry";
+    let maxMinute = null;
+    let maxLabel = "";
+    if (stage === "interval") {
+      maxMinute = guidance.firstExitMax;
+      maxLabel = "Sa\xEDda m\xE1xima";
+    } else if (stage === "return") {
+      maxMinute = guidance.intervalMax;
+      maxLabel = "Retorno m\xE1ximo";
+    } else if (stage === "exit") {
+      maxMinute = guidance.day10h;
+      maxLabel = "Sa\xEDda 10h";
+    } else {
+      return null;
+    }
+    if (maxMinute === null || maxMinute === void 0) return null;
+    const lead = cfg.quickGcalOffsetMinutes ?? DEFAULT_ALARM_CONFIG.quickGcalOffsetMinutes;
+    const startMinute = maxMinute - lead;
+    const baseDate = /* @__PURE__ */ new Date();
+    const title = maxLabel;
+    const details = `Evento criado pelo Ahgora Panel - ${maxLabel}`;
+    const userPath = cfg.gcalUserPath;
+    const gcal = buildGoogleCalendarUrl({ title, details, startMinute, endMinute: maxMinute, baseDate, userPath });
+    const outlook = buildOutlookCalendarUrl({ title, details, startMinute, endMinute: maxMinute, baseDate });
+    return {
+      gcal,
+      outlook,
+      leadMinutes: lead,
+      startMinute,
+      maxMinute,
+      maxLabel,
+      stage
+    };
+  }
+  function canAutoOpenQuickGcal(autoLink, alarmConfig) {
+    if (!autoLink || !autoLink.gcal) return false;
+    const cfg = { ...DEFAULT_ALARM_CONFIG, ...alarmConfig || {} };
+    if (!cfg.quickGcalAutoOpenEnabled) return false;
+    if (cfg.quickCalendarProvider === "outlook") return false;
+    const desiredStage = cfg.quickGcalAutoOpenStage || "off";
+    if (desiredStage === "off") return false;
+    if (desiredStage !== "any" && desiredStage !== autoLink.stage) return false;
+    return true;
+  }
+  function maybeAutoOpenQuickCalendar(vm, autoLink) {
+    if (!canAutoOpenQuickGcal(autoLink, vm?.alarmConfig)) return false;
+    const todayKey = formatDateKey();
+    const token = `${todayKey}:${autoLink.stage}:${vm.alarmConfig.quickGcalAutoOpenStage}:${autoLink.maxMinute}:${autoLink.leadMinutes}`;
+    if (hasLoggerGcalAutoOpenToken(token)) return false;
+    const message = `Abrir Google Calendar para "${autoLink.maxLabel}" (${fmtHour(autoLink.startMinute)}\u2013${fmtHour(autoLink.maxMinute)})?`;
+    if (typeof window !== "undefined" && window.confirm(message)) {
+      openInNewTab(autoLink.gcal);
+      markLoggerGcalAutoOpenToken(token, "accepted");
+      return true;
+    }
+    markLoggerGcalAutoOpenToken(token, "dismissed");
+    return false;
+  }
+
   // src/logger/host-anchors.js
   var PUNCH_CTA_TEXT_RE = /punch-?in|registr\w*\s+(seu\s+)?ponto|bater\s+ponto|marcar\s+ponto/i;
   var EXCLUDED_SCOPES = '[role="presentation"], [role="dialog"], .ahg-panel, .ahg-toast-region';
@@ -5206,6 +5200,22 @@
     const container = cta.closest(".MuiGrid-container");
     if (!container) return null;
     return container.parentElement?.closest(".MuiGrid-item") || container;
+  }
+  var PROMO_CTA_TEXT_RE = /i want to know more|quero saber mais|saiba\s+mais/i;
+  function findPromoBanner(root = document) {
+    for (const btn of root.querySelectorAll("button, a")) {
+      if (btn.closest(EXCLUDED_SCOPES)) continue;
+      if (!PROMO_CTA_TEXT_RE.test((btn.textContent || "").trim())) continue;
+      let el2 = btn;
+      for (let i = 0; i < 5 && el2.parentElement; i++) {
+        el2 = el2.parentElement;
+        const rect = el2.getBoundingClientRect();
+        const bg = getComputedStyle(el2).backgroundColor;
+        if (rect.width > 300 && bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") return el2;
+      }
+      return btn.parentElement || btn;
+    }
+    return null;
   }
 
   // src/logger/logger-renderer.js
@@ -5305,7 +5315,7 @@
     }
     return null;
   }
-  function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
+  function buildLoggerHtml(vm, view = {}) {
     const state = vm;
     const lastPunch = state.combinedLastPunch;
     const pendingCount = state.pendingLocalHistoryEntries?.length || 0;
@@ -5340,30 +5350,30 @@
       const bankHint = state.bankSource === "manual" ? "informado + acumulado" : "oficial Ahgora";
       html += `<div class="a-row infos" title="Banco de horas total (inclui meses anteriores) \u2014 ${bankHint}"><span class="a-lbl">Banco total</span><span class="a-val ${state.bankBalance >= 0 ? "pos" : "neg"}">${renderMinutes(state.bankBalance)}<small class="a-cap">${bankHint}</small></span></div>`;
     }
-    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl());
+    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl(), view.planMinutes);
     html += buildHistoryHtml(state.monthHistory);
     html += `<hr class="a-div"><div class="a-sec">Alarme</div>
         <div class="a-row infos ahg-items-center ahg-gap-8">
             <input type="checkbox" id="ahg-logger-alarm-toggle" ${state.alarmEnabled ? "checked" : ""}>
             <label for="ahg-logger-alarm-toggle" class="ahg-label-inline">Ativar alarmes</label>
         </div>`;
-    if (hasCalendar) {
-      html += `<hr class="a-div"><div class="a-sec">Calend\xE1rio</div>
-            <div id="ahg-logger-calendar-row" class="a-row infos ahg-flex-wrap ahg-gap-4"></div>`;
-    }
     html += `</div><div class="a-foot">Atualizado ${fmtHour((/* @__PURE__ */ new Date()).getHours() * 60 + (/* @__PURE__ */ new Date()).getMinutes())}</div>`;
     return html;
   }
   function readBankPlanSnapshot() {
     return gmGetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, null);
   }
-  function readBankTodayExit() {
-    const snap = readBankPlanSnapshot();
-    return snap?.active && snap.dateKey === formatDateKey() ? snap.todayExit ?? null : null;
+  function isBankSnapshotFresh(snap, planMinutes) {
+    if (!snap?.active || snap.dateKey !== formatDateKey()) return false;
+    return snap.planMinutes === planMinutes;
   }
-  function buildBankGoalHtml(snap, mirrorUrl) {
+  function readBankTodayExit(planMinutes) {
+    const snap = readBankPlanSnapshot();
+    return isBankSnapshotFresh(snap, planMinutes) ? snap.todayExit ?? null : null;
+  }
+  function buildBankGoalHtml(snap, mirrorUrl, planMinutes) {
     if (!snap?.active) return "";
-    const fresh = snap.dateKey === formatDateKey();
+    const fresh = isBankSnapshotFresh(snap, planMinutes);
     let html = `<hr class="a-div"><div class="a-sec ahg-sec-action">Meta do banco</div>`;
     if (snap.completed) {
       return html + `<div class="a-row ok"><span class="a-lbl">${icon("circle-check")} Meta conclu\xEDda</span></div>`;
@@ -5382,7 +5392,7 @@
       html += `<div class="a-row warn"><span class="a-lbl">${icon("triangle-alert")} Prazo curto</span><span class="a-val warn"><small>chega a ${renderMinutes(snap.achievableMinutes)} de ${renderMinutes(snap.targetReduction)}</small></span></div>`;
     }
     if (!fresh) {
-      html += `<div class="a-row neu"><span class="a-lbl">Plano de outro dia</span><span class="a-val"><a class="ahg-mirror-link" href="${escapeHtml(mirrorUrl)}" target="_blank" rel="noopener noreferrer">atualizar no espelho</a></span></div>`;
+      html += `<div class="a-row neu"><span class="a-lbl">Plano desatualizado</span><span class="a-val"><a class="ahg-mirror-link" href="${escapeHtml(mirrorUrl)}" target="_blank" rel="noopener noreferrer">atualizar no espelho</a></span></div>`;
     }
     return html;
   }
@@ -5390,8 +5400,6 @@
     const { panel, fab } = ensureLoggerContainer();
     const rerender = () => renderLoggerContainer(vm);
     const alarmConfig = getAlarmConfig();
-    const autoLink = buildAutoGcalMaxMinusLink(vm.guidance, alarmConfig);
-    const calendarButtons = buildQuickCalendarButtons(autoLink, alarmConfig);
     const plan = getJourneyPlan();
     const assistant = buildAssistantPlan({
       batidas: vm.combinedPunches || [],
@@ -5399,23 +5407,25 @@
       saldoSemana: vm.weekBalance || 0,
       yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
-    const bankTodayExit = readBankTodayExit();
+    const bankTodayExit = readBankTodayExit(plan.minutes);
     const view = {
       assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
       // Fixado numa borda: os 4 horários do dia; a saída final segue a meta
-      // de banco de horas publicada pelo Mirror (só vale a de hoje).
+      // de banco de horas publicada pelo Mirror (só vale a de hoje, e só se
+      // ainda for do mesmo preset 8h/10h usado aqui).
       dockBarHtml: buildDockBarHtml(assistant, "", {
         full: !!getDockEdge(PERSIST_KEY2),
         edge: getDockEdge(PERSIST_KEY2),
         exitOverride: { time: bankTodayExit }
       }),
       dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY2), getDockMini(PERSIST_KEY2)),
+      planMinutes: plan.minutes,
       zen: !!ConfigStore.get().modoZen
     };
     const keepMinimized = panel.dataset.ahgRendered === "true" && !panel.classList.contains("active");
     panel.dataset.ahgRendered = "true";
     const detailsState = captureDetailsState(panel);
-    panel.innerHTML = buildLoggerHtml(vm, !!calendarButtons, view);
+    panel.innerHTML = buildLoggerHtml(vm, view);
     restoreDetailsState(panel, detailsState);
     setFloatingPanelVisible(panel, fab, !keepMinimized);
     bindAssistantCard(panel, {
@@ -5439,14 +5449,10 @@
         });
       });
     });
-    if (calendarButtons) {
-      const calendarRow = panel.querySelector("#ahg-logger-calendar-row");
-      if (calendarRow) calendarRow.appendChild(calendarButtons);
-    }
     const dragHandle = getDockMini(PERSIST_KEY2) ? "#ahg-dock-bar" : ".a-tit";
     makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY2 });
     applySavedPanelPosition(panel, PERSIST_KEY2);
-    applyPanelDock(panel, PERSIST_KEY2, { anchor: () => findLoggerContentAnchor() });
+    applyPanelDock(panel, PERSIST_KEY2, { anchor: () => findLoggerContentAnchor(), hideOverlap: () => findPromoBanner() });
     bindDockMenu(panel, PERSIST_KEY2, rerender);
     bindDockBarExpand(panel);
     bindDockMinimizeButton(panel, fab, "#ahg-logger-min");

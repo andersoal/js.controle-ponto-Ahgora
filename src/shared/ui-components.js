@@ -311,11 +311,40 @@ export function layoutPanelDock(panel) {
 
     if (layoutAnchoredDock(panel, edge, anchorEl, footprint)) {
         state.mode = 'anchored';
+        restoreHiddenOverlap(state);
     } else {
         state.mode = 'edge';
         applyDockReflow(axes, footprint.w, footprint.h);
+        applyHiddenOverlap(state);
     }
     snapshotDock(panel, state);
+}
+
+/**
+ * Some host elements (ex.: banner promocional do novabatidaonline) ficam em
+ * fluxo normal mas sem responsividade real: a margem do reflow encolhe o
+ * container, mas o conteúdo interno (texto + botão lado a lado) não se
+ * reorganiza e vaza por cima, ficando sob o painel. Sem como "empurrar" algo
+ * que não é um problema de posição, a saída é esconder esse elemento
+ * específico enquanto o painel ocupa a borda (`options.hideOverlap` devolve
+ * o elemento, achado por texto — como host-anchors.js já faz pro CTA).
+ */
+function applyHiddenOverlap(state) {
+    if (typeof state.hideOverlap !== 'function') return;
+    const el = state.hideOverlap();
+    if (state.hiddenEl && state.hiddenEl !== el) restoreHiddenOverlap(state);
+    if (el && !state.hiddenEl) {
+        state.hiddenDisplay = el.style.display;
+        el.style.display = 'none';
+        state.hiddenEl = el;
+    }
+}
+
+function restoreHiddenOverlap(state) {
+    if (state.hiddenEl) {
+        state.hiddenEl.style.display = state.hiddenDisplay || '';
+        state.hiddenEl = null;
+    }
 }
 
 const DOCK_POS_PROPS = ['left', 'right', 'top', 'bottom'];
@@ -397,6 +426,7 @@ function teardownPanelDock(panel) {
         window.removeEventListener('scroll', state.onWindowChange, { capture: true });
     }
     state.observer?.disconnect();
+    restoreHiddenOverlap(state);
     delete panel._ahgDockState;
     panel.classList.remove('ahg-dock-anchored', 'ahg-dock-strip');
 }
@@ -444,6 +474,7 @@ export function applyPanelDock(panel, key, options = {}) {
     state.edge = edge;
     state.key = key;
     state.anchor = typeof options.anchor === 'function' ? options.anchor : null;
+    state.hideOverlap = typeof options.hideOverlap === 'function' ? options.hideOverlap : null;
     panel._ahgDockState = state;
     ensureDockObservers(panel, state);
     layoutPanelDock(panel);

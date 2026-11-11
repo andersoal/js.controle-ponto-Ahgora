@@ -32,9 +32,9 @@ import {
     togglePrivacyHidden
 } from '../core/privacy-engine.js';
 import { getAlarmConfig, setAlarmConfig } from './alarm-engine.js';
-import { buildAutoGcalMaxMinusLink, buildMirrorUrl, buildQuickCalendarButtons } from './quick-actions.js';
+import { buildMirrorUrl } from './quick-actions.js';
 import { icon } from '../shared/icons.js';
-import { findLoggerContentAnchor } from './host-anchors.js';
+import { findLoggerContentAnchor, findPromoBanner } from './host-anchors.js';
 import { openPunchEditor } from '../mirror/punch-editor.js';
 
 const PERSIST_KEY = 'logger-panel';
@@ -157,7 +157,7 @@ function findHistoryDay(vm, dateKey) {
     return null;
 }
 
-export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
+export function buildLoggerHtml(vm, view = {}) {
     const state = vm;
     const lastPunch = state.combinedLastPunch;
     const pendingCount = state.pendingLocalHistoryEntries?.length || 0;
@@ -198,7 +198,7 @@ export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
         html += `<div class="a-row infos" title="Banco de horas total (inclui meses anteriores) — ${bankHint}"><span class="a-lbl">Banco total</span><span class="a-val ${state.bankBalance >= 0 ? 'pos' : 'neg'}">${renderMinutes(state.bankBalance)}<small class="a-cap">${bankHint}</small></span></div>`;
     }
 
-    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl());
+    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl(), view.planMinutes);
     html += buildHistoryHtml(state.monthHistory);
 
     html += `<hr class="a-div"><div class="a-sec">Alarme</div>
@@ -206,11 +206,6 @@ export function buildLoggerHtml(vm, hasCalendar = false, view = {}) {
             <input type="checkbox" id="ahg-logger-alarm-toggle" ${state.alarmEnabled ? 'checked' : ''}>
             <label for="ahg-logger-alarm-toggle" class="ahg-label-inline">Ativar alarmes</label>
         </div>`;
-
-    if (hasCalendar) {
-        html += `<hr class="a-div"><div class="a-sec">Calendário</div>
-            <div id="ahg-logger-calendar-row" class="a-row infos ahg-flex-wrap ahg-gap-4"></div>`;
-    }
 
 
     html += `</div><div class="a-foot">Atualizado ${fmtHour(new Date().getHours() * 60 + new Date().getMinutes())}</div>`;
@@ -221,19 +216,29 @@ function readBankPlanSnapshot() {
     return gmGetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, null);
 }
 
-function readBankTodayExit() {
+// Snapshot fresco por dia E por preset: se o usuário já trocou 8h/10h aqui no
+// Logger, a saída sugerida pelo Mirror foi calculada com o preset antigo e
+// deixou de valer até o Mirror recalcular com o atual. Snapshot sem
+// `planMinutes` (formato anterior a essa checagem, ainda em cache) também
+// conta como desatualizado — não dá pra confirmar que bate com o preset local.
+function isBankSnapshotFresh(snap, planMinutes) {
+    if (!snap?.active || snap.dateKey !== formatDateKey()) return false;
+    return snap.planMinutes === planMinutes;
+}
+
+function readBankTodayExit(planMinutes) {
     const snap = readBankPlanSnapshot();
-    return snap?.active && snap.dateKey === formatDateKey() ? snap.todayExit ?? null : null;
+    return isBankSnapshotFresh(snap, planMinutes) ? snap.todayExit ?? null : null;
 }
 
 /**
  * Meta de banco de horas criada no Mirror. O plano é calculado lá (precisa
- * dos dias do mês); aqui só o resumo publicado. De outro dia: mostra a meta,
- * mas sem a saída de hoje, pedindo para abrir o espelho.
+ * dos dias do mês); aqui só o resumo publicado. De outro dia (ou outro
+ * preset): mostra a meta, mas sem a saída de hoje, pedindo para abrir o espelho.
  */
-function buildBankGoalHtml(snap, mirrorUrl) {
+function buildBankGoalHtml(snap, mirrorUrl, planMinutes) {
     if (!snap?.active) return '';
-    const fresh = snap.dateKey === formatDateKey();
+    const fresh = isBankSnapshotFresh(snap, planMinutes);
     let html = `<hr class="a-div"><div class="a-sec ahg-sec-action">Meta do banco</div>`;
     if (snap.completed) {
         return html + `<div class="a-row ok"><span class="a-lbl">${icon('circle-check')} Meta concluída</span></div>`;
@@ -252,7 +257,7 @@ function buildBankGoalHtml(snap, mirrorUrl) {
         html += `<div class="a-row warn"><span class="a-lbl">${icon('triangle-alert')} Prazo curto</span><span class="a-val warn"><small>chega a ${renderMinutes(snap.achievableMinutes)} de ${renderMinutes(snap.targetReduction)}</small></span></div>`;
     }
     if (!fresh) {
-        html += `<div class="a-row neu"><span class="a-lbl">Plano de outro dia</span><span class="a-val"><a class="ahg-mirror-link" href="${escapeHtml(mirrorUrl)}" target="_blank" rel="noopener noreferrer">atualizar no espelho</a></span></div>`;
+        html += `<div class="a-row neu"><span class="a-lbl">Plano desatualizado</span><span class="a-val"><a class="ahg-mirror-link" href="${escapeHtml(mirrorUrl)}" target="_blank" rel="noopener noreferrer">atualizar no espelho</a></span></div>`;
     }
     return html;
 }
@@ -262,8 +267,6 @@ export function renderLoggerContainer(vm) {
     const rerender = () => renderLoggerContainer(vm);
 
     const alarmConfig = getAlarmConfig();
-    const autoLink = buildAutoGcalMaxMinusLink(vm.guidance, alarmConfig);
-    const calendarButtons = buildQuickCalendarButtons(autoLink, alarmConfig);
 
     const plan = getJourneyPlan();
     const assistant = buildAssistantPlan({
@@ -272,17 +275,19 @@ export function renderLoggerContainer(vm) {
         saldoSemana: vm.weekBalance || 0,
         yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
-    const bankTodayExit = readBankTodayExit();
+    const bankTodayExit = readBankTodayExit(plan.minutes);
     const view = {
         assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
         // Fixado numa borda: os 4 horários do dia; a saída final segue a meta
-        // de banco de horas publicada pelo Mirror (só vale a de hoje).
+        // de banco de horas publicada pelo Mirror (só vale a de hoje, e só se
+        // ainda for do mesmo preset 8h/10h usado aqui).
         dockBarHtml: buildDockBarHtml(assistant, '', {
             full: !!getDockEdge(PERSIST_KEY),
             edge: getDockEdge(PERSIST_KEY),
             exitOverride: { time: bankTodayExit }
         }),
         dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY)),
+        planMinutes: plan.minutes,
         zen: !!ConfigStore.get().modoZen
     };
 
@@ -291,7 +296,7 @@ export function renderLoggerContainer(vm) {
     panel.dataset.ahgRendered = 'true';
 
     const detailsState = captureDetailsState(panel);
-    panel.innerHTML = buildLoggerHtml(vm, !!calendarButtons, view);
+    panel.innerHTML = buildLoggerHtml(vm, view);
     restoreDetailsState(panel, detailsState);
     setFloatingPanelVisible(panel, fab, !keepMinimized);
 
@@ -320,15 +325,10 @@ export function renderLoggerContainer(vm) {
         });
     });
 
-    if (calendarButtons) {
-        const calendarRow = panel.querySelector('#ahg-logger-calendar-row');
-        if (calendarRow) calendarRow.appendChild(calendarButtons);
-    }
-
     const dragHandle = getDockMini(PERSIST_KEY) ? '#ahg-dock-bar' : '.a-tit';
     makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY });
     applySavedPanelPosition(panel, PERSIST_KEY);
-    applyPanelDock(panel, PERSIST_KEY, { anchor: () => findLoggerContentAnchor() });
+    applyPanelDock(panel, PERSIST_KEY, { anchor: () => findLoggerContentAnchor(), hideOverlap: () => findPromoBanner() });
 
     bindDockMenu(panel, PERSIST_KEY, rerender);
     bindDockBarExpand(panel);

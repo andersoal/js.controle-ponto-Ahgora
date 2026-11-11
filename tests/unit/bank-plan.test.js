@@ -208,6 +208,25 @@ describe('BankPlan', () => {
             expect(today.suggestedExit).toBeGreaterThanOrEqual(9 * 60);
         });
 
+        it('jornada de hoje planejada para 10h não sugere ajuste de saída (já embute o excedente no banco)', () => {
+            const goal = normalizeBankGoal({ mode: 'zero', deadlineType: 'days', deadlineDays: 2, floorMinutes: 240 });
+            const dias = [
+                dia(2026, 1, 5),
+                dia(2026, 1, 6)
+            ];
+            const plan = buildBankPlan({
+                officialBalance: 300,
+                goal,
+                dias,
+                hoje: localDate(2026, 1, 5),
+                planMinutes: 600,
+                now: 9 * 60,
+                todayPlannedExit: 19 * 60
+            });
+            const today = plan.days.find((d) => d.isToday);
+            expect(today.suggestedExit).toBeNull();
+        });
+
         it('saldo negativo distribui saída mais tarde, limitada ao teto de 10h', () => {
             const goal = normalizeBankGoal({ mode: 'zero', deadlineType: 'days', deadlineDays: 1 });
             const dias = [dia(2026, 1, 5)];

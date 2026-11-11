@@ -31,3 +31,28 @@ export function findLoggerContentAnchor(root = document) {
     if (!container) return null;
     return container.parentElement?.closest('.MuiGrid-item') || container;
 }
+
+// "I want to know more" (EN) / "Quero saber mais", "Saiba mais" (PT) — botão
+// do banner promocional do app mobile ("Be sure to check out...").
+const PROMO_CTA_TEXT_RE = /i want to know more|quero saber mais|saiba\s+mais/i;
+
+/**
+ * Banner promocional (texto + botão) que fica em fluxo normal mas não
+ * reflui com a margem reservada pro painel — sobe do botão até o bloco com
+ * fundo próprio (o "cartão" do banner) pra poder escondê-lo por inteiro.
+ */
+export function findPromoBanner(root = document) {
+    for (const btn of root.querySelectorAll('button, a')) {
+        if (btn.closest(EXCLUDED_SCOPES)) continue;
+        if (!PROMO_CTA_TEXT_RE.test((btn.textContent || '').trim())) continue;
+        let el = btn;
+        for (let i = 0; i < 5 && el.parentElement; i++) {
+            el = el.parentElement;
+            const rect = el.getBoundingClientRect();
+            const bg = getComputedStyle(el).backgroundColor;
+            if (rect.width > 300 && bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return el;
+        }
+        return btn.parentElement || btn;
+    }
+    return null;
+}
