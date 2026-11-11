@@ -123,6 +123,54 @@ describe('LoggerRenderer', () => {
         const html = buildLoggerHtml(vm);
         expect(html).toContain('Sem dados do Mirror');
         expect(html).toContain('1 local');
+        expect(html).toContain('id="ahg-logger-clear-pending"');
+    });
+
+    it('botão de descartar pendentes locais limpa o histórico local de hoje', async () => {
+        const { savePunch, getPunchHistory } = await import('../../src/logger/punch-history.js');
+        savePunch('08:56');
+        expect(getPunchHistory()).toHaveLength(1);
+
+        renderLoggerContainer(makeVm({
+            pendingLocalHistoryEntries: [{ time: '08:56' }]
+        }));
+        const clearBtn = document.getElementById('ahg-logger-clear-pending');
+        expect(clearBtn).not.toBeNull();
+        clearBtn.click();
+
+        expect(getPunchHistory()).toHaveLength(0);
+    });
+
+    it('lápis do histórico em dia só com batida local abre Punch Editor com a batida como local (não mirror) e permite excluí-la', async () => {
+        const { savePunch, getPunchHistory } = await import('../../src/logger/punch-history.js');
+        savePunch('08:56', new Date(2026, 10, 11, 8, 56), new Date(2026, 10, 11, 8, 56).getTime());
+
+        renderLoggerContainer(makeVm({
+            monthHistory: monthHistory([
+                {
+                    dateKey: '2026-11-11',
+                    label: 'qua 11/11',
+                    isToday: true,
+                    punches: ['08:56'],
+                    basePunches: ['08:56'],
+                    mirrorPunches: [],
+                    localPunches: ['08:56'],
+                    manual: false
+                }
+            ])
+        }));
+
+        document.querySelector('.ahg-hist-edit[data-date-key="2026-11-11"]').click();
+        const editor = document.getElementById('ahg-punch-editor-2026-11-11');
+        expect(editor).not.toBeNull();
+        expect(editor.querySelector('.ahg-pe-meta').textContent).toContain('0 no mirror');
+        expect(editor.querySelector('.ahg-pe-punch-src').textContent).toContain('local');
+
+        // Remove 08:56 e salva — deve sumir do PUNCH_HISTORY e não voltar como mirror.
+        editor.querySelector('.ahg-pe-remove').click();
+        editor.querySelector('#ahg-pe-save-2026-11-11').click();
+        expect(getPunchHistory()).toHaveLength(0);
+        expect(editor.querySelector('.ahg-pe-empty')).not.toBeNull();
     });
 
     it('buildLoggerHtml renderiza toggle de alarme marcado quando ativado', () => {

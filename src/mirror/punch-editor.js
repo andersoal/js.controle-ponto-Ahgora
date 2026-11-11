@@ -11,6 +11,7 @@ import { renderMinutes, renderText } from '../core/privacy-engine.js';
 import { computeDayBalance } from './calculator.js';
 import { classifyShiftDuration, getDayRuleViolations } from './compliance-engine.js';
 import { showLoggerToast, makePanelDraggable } from '../shared/ui-components.js';
+import { syncDayLocalHistory } from '../logger/punch-history.js';
 import { el } from '../shared/dom-builder.js';
 import { icon } from '../shared/icons.js';
 
@@ -86,15 +87,12 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
     }
 
     let working = localPunches.length > 0 ? [...localPunches] : [...mirrorPunches];
+    let committed = [...working];
     let editingIdx = null;
     let confirmingClose = false;
 
-    // Estado efetivo persistido: overrides locais, ou o mirror quando não há ajuste.
-    const baselinePunches = () => {
-        const saved = getOverridesForDay(dateKey);
-        return saved.length > 0 ? saved : mirrorPunches;
-    };
-    const isDirty = () => JSON.stringify(working) !== JSON.stringify(baselinePunches());
+    // Estado efetivo persistido: compara com o último estado salvo/inicial do editor.
+    const isDirty = () => JSON.stringify(working) !== JSON.stringify(committed);
 
     // Redimensionar a janela não move o editor (posição é left/top fixos) —
     // sem isto ele pode ficar inacessível fora da viewport nova. Só clampa
@@ -277,9 +275,15 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
             html: `${icon('save', { size: 11 })} Salvar`
         });
         saveBtn.addEventListener('click', () => {
-            saveOverridesForDay(dateKey, working);
+            syncDayLocalHistory(dateKey, working);
+            if (JSON.stringify(working) === JSON.stringify(mirrorPunches)) {
+                saveOverridesForDay(dateKey, []);
+            } else {
+                saveOverridesForDay(dateKey, working);
+            }
             // Salvar lista vazia remove o override: o dia volta aos dados do mirror.
             if (working.length === 0) working = [...mirrorPunches];
+            committed = [...working];
             confirmingClose = false;
             showLoggerToast(`Batidas de ${dateLabel || dateKey} salvas.`);
             if (typeof onSave === 'function') onSave(working);
@@ -297,8 +301,10 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
             });
             resetBtn.addEventListener('click', () => {
                 const previous = getOverridesForDay(dateKey);
+                syncDayLocalHistory(dateKey, mirrorPunches);
                 saveOverridesForDay(dateKey, []);
                 working = [...mirrorPunches];
+                committed = [...working];
                 editingIdx = null;
                 confirmingClose = false;
                 showLoggerToast(`${dateLabel || dateKey}: resetado para dados do mirror.`, {
@@ -307,6 +313,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
                         onClick: () => {
                             saveOverridesForDay(dateKey, previous);
                             working = [...previous];
+                            committed = [...working];
                             if (typeof onSave === 'function') onSave(previous);
                             if (document.body.contains(editor)) render();
                         }
@@ -347,9 +354,10 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
         // Reconstrução total do DOM: devolve o foco do teclado ao controle equivalente.
         const active = document.activeElement;
         let focusSelector = null;
-        if (active && editor.contains(active)) {
+        if (active && editor.contains(active) && active !== editor) {
             if (active.id) {
-                focusSelector = `#${CSS.escape(active.id)}`;
+                const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(active.id) : active.id;
+                focusSelector = `#${escapedId}`;
             } else if (active.dataset && active.dataset.idx !== undefined) {
                 const cls = [...active.classList].find((c) => c.startsWith('ahg-pe-'));
                 if (cls) focusSelector = `.${cls}[data-idx="${active.dataset.idx}"]`;

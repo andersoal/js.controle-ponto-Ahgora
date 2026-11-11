@@ -8,8 +8,10 @@
  */
 
 import { CONFIG } from '../core/config.js';
+import { renderText } from '../core/privacy-engine.js';
 import { toMin } from '../core/time-utils.js';
-import { savePunch } from './punch-history.js';
+import { getTodayBounds } from './mirror-sync.js';
+import { removeTodayLocalPunch, savePunch } from './punch-history.js';
 import { showLoggerToast } from '../shared/ui-components.js';
 
 export const LOGGER_MONITOR_INTERVAL_MS = 500;
@@ -18,6 +20,14 @@ export function getLatestTodayKnownPunchMinute(timeline) {
     const combined = timeline?.combinedPunches || [];
     if (combined.length === 0) return null;
     return toMin(combined[combined.length - 1]);
+}
+
+export function isLatestPunchLocalOnly(timeline) {
+    const combined = timeline?.combinedPunches || [];
+    if (combined.length === 0 || timeline?.todayManual) return false;
+    const lastPunch = combined[combined.length - 1];
+    const localOnly = timeline?.localOnlyPunches || [];
+    return localOnly.includes(lastPunch);
 }
 
 export function getClockingInIntervalState(nextTime, lastMinute) {
@@ -45,8 +55,8 @@ export function findModalBannerSlot(modal, confirmBtn) {
     return { parent: confirmBtn.parentElement, before: confirmBtn };
 }
 
-export function upsertClockingInModalHint(confirmBtn, state) {
-    if (!confirmBtn) return;
+export function upsertClockingInModalHint(confirmBtn, state, options = {}) {
+    if (!confirmBtn || !state) return;
     const modal = confirmBtn.closest('[role="dialog"]') || confirmBtn.closest('.v-dialog--active') || confirmBtn.closest('[role="presentation"]') || document.body;
     const slot = findModalBannerSlot(modal, confirmBtn);
     let hint = modal.querySelector('.ahg-modal-hint');
@@ -59,20 +69,48 @@ export function upsertClockingInModalHint(confirmBtn, state) {
         slot.parent.insertBefore(hint, slot.before);
     }
 
+    const canDiscardLocal = !!(state.isBlocked && options.isLastPunchLocalOnly && typeof options.onDiscardLocalPunch === 'function');
+    const lastPunchLabel = options.lastPunchTime ? renderText(options.lastPunchTime) : '';
+    const stateKey = `${state.noReference}:${state.isBlocked}:${state.minMinute}:${state.diff}:${canDiscardLocal}:${lastPunchLabel}`;
+
     if (state.noReference) {
-        hint.textContent = '⚠️ Sem referência de última batida';
+        if (hint.dataset.ahgStateKey !== stateKey) {
+            hint.textContent = '⚠️ Sem referência de última batida';
+            hint.dataset.ahgStateKey = stateKey;
+        }
         hint.className = 'ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--info';
         confirmBtn.style.pointerEvents = '';
         confirmBtn.style.opacity = '';
         confirmBtn.removeAttribute('aria-disabled');
     } else if (state.isBlocked) {
-        hint.textContent = `⛔ Intervalo mínimo de 30min não atingido. Aguarde até ${String(Math.floor(state.minMinute / 60)).padStart(2, '0')}:${String(state.minMinute % 60).padStart(2, '0')}.`;
+        if (hint.dataset.ahgStateKey !== stateKey) {
+            const waitUntil = `${String(Math.floor(state.minMinute / 60)).padStart(2, '0')}:${String(state.minMinute % 60).padStart(2, '0')}`;
+            hint.textContent = `⛔ Intervalo mínimo de 30min não atingido. Aguarde até ${waitUntil}.`;
+            if (canDiscardLocal) {
+                const discardBtn = document.createElement('button');
+                discardBtn.type = 'button';
+                discardBtn.className = 'ahg-btn ahg-btn-sm ahg-btn-danger ahg-modal-discard-local';
+                discardBtn.style.marginLeft = '8px';
+                discardBtn.textContent = lastPunchLabel ? `Descartar ${lastPunchLabel} (local)` : 'Descartar batida local';
+                discardBtn.title = 'A batida anterior foi salva apenas localmente e ainda não consta no espelho. Clique para descartá-la se a batida falhou.';
+                discardBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    options.onDiscardLocalPunch();
+                });
+                hint.appendChild(discardBtn);
+            }
+            hint.dataset.ahgStateKey = stateKey;
+        }
         hint.className = 'ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--error';
         confirmBtn.style.pointerEvents = 'none';
         confirmBtn.style.opacity = '0.55';
         confirmBtn.setAttribute('aria-disabled', 'true');
     } else {
-        hint.textContent = `✅ Intervalo OK (${state.diff}min)`;
+        if (hint.dataset.ahgStateKey !== stateKey) {
+            hint.textContent = `✅ Intervalo OK (${state.diff}min)`;
+            hint.dataset.ahgStateKey = stateKey;
+        }
         hint.className = 'ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--ok';
         confirmBtn.style.pointerEvents = '';
         confirmBtn.style.opacity = '';
@@ -125,6 +163,41 @@ export function findConfirmButton(modal = null) {
     return null;
 }
 
+export function findCancelButton(modal = null) {
+    const scope = modal || document;
+    const candidates = modal
+        ? scope.querySelectorAll('button')
+        : scope.querySelectorAll('[role="dialog"] button, .v-dialog--active button, [role="presentation"] button');
+    for (const btn of candidates) {
+        const text = (btn.textContent || '').trim();
+        if (CANCEL_BTN_TEXT_RE.test(text)) return btn;
+    }
+    return null;
+}
+
+const HOST_ERROR_TEXT_RE = /colaborador\s+n[aã]o\s+cadastrado|n[aã]o\s+cadastrado\s+no\s+dispositivo|dispositivo\s+n[aã]o\s+(?:cadastrado|autorizado|habilitado)|employee\s+not\s+registered|not\s+registered\s+(?:on|in)\s+(?:this\s+)?device|erro\s+ao\s+registrar|falha\s+ao\s+registrar|n[aã]o\s+foi\s+poss[ií]vel|error\s+registering|failed\s+to\s+register|unable\s+to\s+register|sess[aã]o\s+expirada|session\s+expired|unauthorized|tente\s+novamente/i;
+
+export function hasHostPunchError(modal = null, root = document) {
+    const candidates = root.querySelectorAll(
+        '[role="alert"], [role="dialog"], [role="presentation"], .v-dialog--active, .MuiDialog-root, .MuiAlert-standardError, .MuiSnackbarContent-root, .v-snack--active'
+    );
+    for (const el of candidates) {
+        if (el.classList.contains('ahg-modal-hint') || el.closest('.ahg-panel, .ahg-toast-region')) continue;
+        const clone = el.cloneNode(true);
+        clone.querySelectorAll?.('.ahg-modal-hint, .ahg-panel, .ahg-toast-region').forEach((n) => n.remove());
+        const text = (clone.textContent || '').trim();
+        if (HOST_ERROR_TEXT_RE.test(text) || el.classList.contains('MuiAlert-standardError') || el.classList.contains('error')) {
+            return true;
+        }
+    }
+    if (modal) {
+        const clone = modal.cloneNode(true);
+        clone.querySelectorAll('.ahg-modal-hint').forEach((h) => h.remove());
+        if (HOST_ERROR_TEXT_RE.test(clone.textContent || '')) return true;
+    }
+    return false;
+}
+
 export function parsePunchTimeFromText(text) {
     if (!text) return null;
     // "14:23" direto…
@@ -159,22 +232,66 @@ function removeHint() {
 }
 
 export function monitorModal(timelineGetter, intervalMs = LOGGER_MONITOR_INTERVAL_MS) {
+    let pendingAttemptTime = null;
+
+    function rollbackPendingAttempt(reasonToast) {
+        if (!pendingAttemptTime) return false;
+        const timeToRemove = pendingAttemptTime;
+        pendingAttemptTime = null;
+        const bounds = getTodayBounds();
+        const res = removeTodayLocalPunch(timeToRemove, bounds.startMs, bounds.endMs);
+        if (res.ok && reasonToast) {
+            showLoggerToast(reasonToast);
+        }
+        return res.ok;
+    }
+
+    function refreshModalState(modal, confirmBtn) {
+        const nextTime = findModalTime(modal);
+        if (!nextTime) return;
+        const timeline = timelineGetter();
+        const lastMinute = getLatestTodayKnownPunchMinute(timeline);
+        const state = getClockingInIntervalState(nextTime, lastMinute);
+        const localOnly = isLatestPunchLocalOnly(timeline);
+        const combined = timeline?.combinedPunches || [];
+        const lastPunchTime = combined[combined.length - 1] || null;
+
+        upsertClockingInModalHint(confirmBtn, state, {
+            isLastPunchLocalOnly: localOnly,
+            lastPunchTime,
+            onDiscardLocalPunch: () => {
+                if (!lastPunchTime) return;
+                const bounds = getTodayBounds();
+                const res = removeTodayLocalPunch(lastPunchTime, bounds.startMs, bounds.endMs);
+                if (res.ok) {
+                    if (pendingAttemptTime === lastPunchTime) pendingAttemptTime = null;
+                    showLoggerToast(`Batida local ${renderText(lastPunchTime)} descartada.`);
+                    refreshModalState(modal, confirmBtn);
+                }
+            }
+        });
+    }
+
     return setInterval(() => {
         const modal = findPunchModal();
         if (!modal) {
+            if (pendingAttemptTime && hasHostPunchError(null)) {
+                rollbackPendingAttempt('Erro na batida detectado — registro local descartado.');
+            } else {
+                pendingAttemptTime = null;
+            }
             removeHint();
             return;
+        }
+
+        if (pendingAttemptTime && hasHostPunchError(modal)) {
+            rollbackPendingAttempt('Erro na batida detectado — registro local descartado.');
         }
 
         const confirmBtn = findConfirmButton(modal);
         if (!confirmBtn) return;
 
-        const nextTime = findModalTime(modal);
-        if (!nextTime) return;
-
-        const lastMinute = getLatestTodayKnownPunchMinute(timelineGetter());
-        const state = getClockingInIntervalState(nextTime, lastMinute);
-        upsertClockingInModalHint(confirmBtn, state);
+        refreshModalState(modal, confirmBtn);
 
         if (!confirmBtn.dataset.ahgHooked) {
             confirmBtn.dataset.ahgHooked = 'true';
@@ -188,7 +305,19 @@ export function monitorModal(timelineGetter, intervalMs = LOGGER_MONITOR_INTERVA
                     window.alert('Intervalo mínimo de 30min não atingido.');
                     showLoggerToast('Intervalo mínimo de 30min não atingido.');
                 } else if (liveTime) {
-                    savePunch(liveTime);
+                    if (savePunch(liveTime)) {
+                        pendingAttemptTime = liveTime;
+                    }
+                }
+            }, true);
+        }
+
+        const cancelBtn = findCancelButton(modal);
+        if (cancelBtn && !cancelBtn.dataset.ahgCancelHooked) {
+            cancelBtn.dataset.ahgCancelHooked = 'true';
+            cancelBtn.addEventListener('click', () => {
+                if (pendingAttemptTime) {
+                    rollbackPendingAttempt('Batida cancelada — registro local descartado.');
                 }
             }, true);
         }

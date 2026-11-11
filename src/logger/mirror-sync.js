@@ -34,12 +34,15 @@ export function getMirrorTodayContext(sharedTruth, todayKey) {
     const hasMirrorData = mirrorPunches.length > 0;
     const hasSharedStaleCache = sharedTruth?.todayKey && sharedTruth.todayKey !== todayKey;
     const hasMirrorStaleCache = mirrorTodayRef && mirrorTodayRef !== todayKey;
+    const parsedUpdatedAt = fromTruth && sharedTruth?.updatedAt ? Date.parse(sharedTruth.updatedAt) : NaN;
+    const mirrorSyncedAtMs = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : null;
 
     return {
         sharedTodayKey: sharedTruth?.todayKey || null,
         mirrorTodayKey: mirrorTodayRef || null,
         mirrorPunches,
         mirrorSource,
+        mirrorSyncedAtMs,
         hasMirrorData,
         hasSharedStaleCache,
         hasMirrorStaleCache
@@ -80,11 +83,18 @@ export function getYesterdayContext(sharedTruth, todayDate = new Date()) {
     return { yesterdayLastPunch };
 }
 
-export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
+export function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs, { mirrorSyncedAtMs = null } = {}) {
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);
     const mirrorSet = new Set(mirrorPunches || []);
+    const hasFreshMirrorSync = Number.isFinite(mirrorSyncedAtMs);
 
-    const reconciled = todayHistory.filter((entry) => !mirrorSet.has(entry.time));
+    const reconciled = todayHistory.filter((entry) => {
+        if (mirrorSet.has(entry.time)) return false;
+        // Se o Mirror foi sincronizado DEPOIS desta batida local e ela não está
+        // em mirrorPunches, a batida não foi concluída/registrada no espelho.
+        if (hasFreshMirrorSync && entry.timestamp <= mirrorSyncedAtMs) return false;
+        return true;
+    });
 
     const localOnlyPunches = reconciled.map((entry) => entry.time);
 

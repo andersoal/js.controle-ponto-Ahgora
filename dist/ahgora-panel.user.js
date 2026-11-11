@@ -3258,6 +3258,86 @@
     setTimeout(() => URL.revokeObjectURL(url), 5e3);
   }
 
+  // src/logger/punch-history.js
+  var LOGGER_HISTORY_MAX_ENTRIES = 100;
+  function getPunchHistory() {
+    return gmGetJson(STORAGE_KEYS.PUNCH_HISTORY, []);
+  }
+  function setPunchHistory(history) {
+    gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history.slice(0, LOGGER_HISTORY_MAX_ENTRIES));
+    bus.emit("punch-history:changed");
+  }
+  function savePunch(time, date = /* @__PURE__ */ new Date(), timestamp = Date.now()) {
+    const normalized = normalizePunchTime(time);
+    if (!normalized) return false;
+    const dateKey = formatDateKey(date);
+    const history = getPunchHistory();
+    const exists = history.some(
+      (entry) => entry.dateKey === dateKey && entry.time === normalized
+    );
+    if (exists) return false;
+    history.unshift({ time: normalized, dateKey, timestamp });
+    setPunchHistory(history);
+    return true;
+  }
+  function findTodayLocalPunchIndex(history, time, startMs, endMs) {
+    return history.findIndex((entry) => {
+      const ts = entry.timestamp;
+      return entry.time === time && ts >= startMs && ts <= endMs;
+    });
+  }
+  function removeTodayLocalPunch(time, startMs, endMs) {
+    const history = getPunchHistory();
+    const idx = findTodayLocalPunchIndex(history, time, startMs, endMs);
+    if (idx === -1) return { ok: false, message: "Batida n\xE3o encontrada" };
+    history.splice(idx, 1);
+    setPunchHistory(history);
+    return { ok: true, message: "Batida removida" };
+  }
+  function syncDayLocalHistory(dateKey, targetPunches = []) {
+    if (!dateKey) return false;
+    const keepSet = new Set((targetPunches || []).map((t) => normalizePunchTime(t)).filter(Boolean));
+    const history = getPunchHistory();
+    const filtered = history.filter((entry) => {
+      const entryDateKey = entry.dateKey || (Number.isFinite(entry.timestamp) ? formatDateKey(new Date(entry.timestamp)) : "");
+      if (entryDateKey !== dateKey) return true;
+      return keepSet.has(entry.time);
+    });
+    if (filtered.length === history.length) return false;
+    setPunchHistory(filtered);
+    return true;
+  }
+  function clearDayLocalHistory(dateKey = formatDateKey()) {
+    if (!dateKey) return [];
+    const history = getPunchHistory();
+    const removed = [];
+    const kept = [];
+    history.forEach((entry) => {
+      const entryDateKey = entry.dateKey || (Number.isFinite(entry.timestamp) ? formatDateKey(new Date(entry.timestamp)) : "");
+      if (entryDateKey === dateKey) removed.push(entry);
+      else kept.push(entry);
+    });
+    if (removed.length === 0) return [];
+    setPunchHistory(kept);
+    return removed;
+  }
+  function reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, todayStartMs, todayEndMs, { mirrorSyncedAtMs = null } = {}) {
+    const mirrorSet = new Set(mirrorPunches || []);
+    const hasFreshMirrorSync = Number.isFinite(mirrorSyncedAtMs);
+    const kept = [];
+    let removedCount = 0;
+    (history || []).forEach((entry) => {
+      const ts = entry.timestamp;
+      const isToday = ts >= todayStartMs && ts <= todayEndMs;
+      if (isToday && (mirrorSet.has(entry.time) || hasFreshMirrorSync && ts <= mirrorSyncedAtMs)) {
+        removedCount++;
+        return;
+      }
+      kept.push(entry);
+    });
+    return { history: kept, removedCount };
+  }
+
   // src/mirror/punch-editor.js
   var openEditors = /* @__PURE__ */ new Map();
   bus.on("privacy:changed", () => {
@@ -3316,13 +3396,10 @@
       editor.style.top = `${Math.max(rect.top, 10)}px`;
     }
     let working = localPunches.length > 0 ? [...localPunches] : [...mirrorPunches];
+    let committed = [...working];
     let editingIdx = null;
     let confirmingClose = false;
-    const baselinePunches = () => {
-      const saved = getOverridesForDay(dateKey);
-      return saved.length > 0 ? saved : mirrorPunches;
-    };
-    const isDirty = () => JSON.stringify(working) !== JSON.stringify(baselinePunches());
+    const isDirty = () => JSON.stringify(working) !== JSON.stringify(committed);
     function clampEditorToViewport() {
       const rect = editor.getBoundingClientRect();
       const maxLeft = Math.max(0, window.innerWidth - rect.width);
@@ -3491,8 +3568,14 @@
         html: `${icon("save", { size: 11 })} Salvar`
       });
       saveBtn.addEventListener("click", () => {
-        saveOverridesForDay(dateKey, working);
+        syncDayLocalHistory(dateKey, working);
+        if (JSON.stringify(working) === JSON.stringify(mirrorPunches)) {
+          saveOverridesForDay(dateKey, []);
+        } else {
+          saveOverridesForDay(dateKey, working);
+        }
         if (working.length === 0) working = [...mirrorPunches];
+        committed = [...working];
         confirmingClose = false;
         showLoggerToast(`Batidas de ${dateLabel || dateKey} salvas.`);
         if (typeof onSave === "function") onSave(working);
@@ -3508,8 +3591,10 @@
         });
         resetBtn.addEventListener("click", () => {
           const previous = getOverridesForDay(dateKey);
+          syncDayLocalHistory(dateKey, mirrorPunches);
           saveOverridesForDay(dateKey, []);
           working = [...mirrorPunches];
+          committed = [...working];
           editingIdx = null;
           confirmingClose = false;
           showLoggerToast(`${dateLabel || dateKey}: resetado para dados do mirror.`, {
@@ -3518,6 +3603,7 @@
               onClick: () => {
                 saveOverridesForDay(dateKey, previous);
                 working = [...previous];
+                committed = [...working];
                 if (typeof onSave === "function") onSave(previous);
                 if (document.body.contains(editor)) render();
               }
@@ -3562,9 +3648,10 @@
     function render() {
       const active = document.activeElement;
       let focusSelector = null;
-      if (active && editor.contains(active)) {
+      if (active && editor.contains(active) && active !== editor) {
         if (active.id) {
-          focusSelector = `#${CSS.escape(active.id)}`;
+          const escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(active.id) : active.id;
+          focusSelector = `#${escapedId}`;
         } else if (active.dataset && active.dataset.idx !== void 0) {
           const cls = [...active.classList].find((c) => c.startsWith("ahg-pe-"));
           if (cls) focusSelector = `.${cls}[data-idx="${active.dataset.idx}"]`;
@@ -4838,7 +4925,8 @@
     mirrorDays = {},
     overrides = {},
     history = [],
-    todayPunches = null
+    todayPunches = null,
+    todayMirrorPunches = null
   } = {}) {
     const startKey = historyWindowStartKey(hoje);
     const todayKey = formatDateKey(hoje);
@@ -4857,9 +4945,10 @@
     });
     const days = [...keys].sort().reverse().map((dateKey) => {
       const isToday = dateKey === todayKey;
-      const mirror = mirrorDays?.[dateKey] || [];
+      const rawMirror = mirrorDays?.[dateKey] || [];
+      const mirror = isToday && Array.isArray(todayMirrorPunches) && todayMirrorPunches.length ? sortPunches(todayMirrorPunches) : sortPunches(rawMirror);
       const local = sortPunches(localByDay[dateKey] || []);
-      const base = isToday && todayPunches?.length ? sortPunches(todayPunches) : mirror.length ? sortPunches(mirror) : local;
+      const base = isToday && todayPunches?.length ? sortPunches(todayPunches) : mirror.length ? mirror : local;
       const manualPunches = overrides?.[dateKey] || [];
       const manual = manualPunches.length > 0;
       const source = manual ? "manual" : mirror.length ? "mirror" : "local";
@@ -4869,6 +4958,8 @@
         isToday,
         punches: manual ? sortPunches(manualPunches) : base,
         basePunches: base,
+        mirrorPunches: mirror,
+        localPunches: local,
         manual,
         source
       };
@@ -4913,29 +5004,6 @@
     };
   }
 
-  // src/logger/punch-history.js
-  var LOGGER_HISTORY_MAX_ENTRIES = 100;
-  function getPunchHistory() {
-    return gmGetJson(STORAGE_KEYS.PUNCH_HISTORY, []);
-  }
-  function setPunchHistory(history) {
-    gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history.slice(0, LOGGER_HISTORY_MAX_ENTRIES));
-    bus.emit("punch-history:changed");
-  }
-  function savePunch(time, date = /* @__PURE__ */ new Date(), timestamp = Date.now()) {
-    const normalized = normalizePunchTime(time);
-    if (!normalized) return false;
-    const dateKey = formatDateKey(date);
-    const history = getPunchHistory();
-    const exists = history.some(
-      (entry) => entry.dateKey === dateKey && entry.time === normalized
-    );
-    if (exists) return false;
-    history.unshift({ time: normalized, dateKey, timestamp });
-    setPunchHistory(history);
-    return true;
-  }
-
   // src/logger/mirror-sync.js
   function getTodayBounds(date = /* @__PURE__ */ new Date()) {
     const start = new Date(date);
@@ -4958,11 +5026,14 @@
     const hasMirrorData = mirrorPunches.length > 0;
     const hasSharedStaleCache = sharedTruth?.todayKey && sharedTruth.todayKey !== todayKey;
     const hasMirrorStaleCache = mirrorTodayRef && mirrorTodayRef !== todayKey;
+    const parsedUpdatedAt = fromTruth && sharedTruth?.updatedAt ? Date.parse(sharedTruth.updatedAt) : NaN;
+    const mirrorSyncedAtMs = Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : null;
     return {
       sharedTodayKey: sharedTruth?.todayKey || null,
       mirrorTodayKey: mirrorTodayRef || null,
       mirrorPunches,
       mirrorSource,
+      mirrorSyncedAtMs,
       hasMirrorData,
       hasSharedStaleCache,
       hasMirrorStaleCache
@@ -4988,10 +5059,15 @@
     const yesterdayLastPunch = candidates.reduce((a, b) => toMin(b) > toMin(a) ? b : a);
     return { yesterdayLastPunch };
   }
-  function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs) {
+  function buildLoggerPunchTimeline(history, mirrorPunches, startMs, endMs, { mirrorSyncedAtMs = null } = {}) {
     const todayHistory = (history || []).filter((entry) => entry.timestamp >= startMs && entry.timestamp <= endMs);
     const mirrorSet = new Set(mirrorPunches || []);
-    const reconciled = todayHistory.filter((entry) => !mirrorSet.has(entry.time));
+    const hasFreshMirrorSync = Number.isFinite(mirrorSyncedAtMs);
+    const reconciled = todayHistory.filter((entry) => {
+      if (mirrorSet.has(entry.time)) return false;
+      if (hasFreshMirrorSync && entry.timestamp <= mirrorSyncedAtMs) return false;
+      return true;
+    });
     const localOnlyPunches = reconciled.map((entry) => entry.time);
     const combined = [
       ...mirrorPunches || [],
@@ -5051,15 +5127,32 @@
     const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
     const mirrorCtx = getMirrorTodayContext(sharedTruth, bounds.todayKey);
     const yesterdayCtx = getYesterdayContext(sharedTruth);
-    const history = getPunchHistory();
-    const timeline = buildLoggerPunchTimeline(history, mirrorCtx.mirrorPunches, bounds.startMs, bounds.endMs);
+    const rawHistory = getPunchHistory();
+    const { history, removedCount } = reconcileTodayLocalHistoryWithMirror(
+      rawHistory,
+      mirrorCtx.mirrorPunches,
+      bounds.startMs,
+      bounds.endMs,
+      { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+    );
+    if (removedCount > 0) {
+      gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history);
+    }
+    const timeline = buildLoggerPunchTimeline(
+      history,
+      mirrorCtx.mirrorPunches,
+      bounds.startMs,
+      bounds.endMs,
+      { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+    );
     const overrides = gmGetJson(STORAGE_KEYS.LOCAL_DAY_PUNCHES, {}) || {};
     const todayOverride = overrides[bounds.todayKey] || [];
     const monthHistory = buildMonthHistory({
       mirrorDays: getMirrorDays(),
       overrides,
       history,
-      todayPunches: timeline.combinedPunches
+      todayPunches: timeline.combinedPunches,
+      todayMirrorPunches: mirrorCtx.mirrorPunches
     });
     if (todayOverride.length) {
       timeline.combinedPunches = [...todayOverride];
@@ -5335,7 +5428,9 @@
         <div class="a-row infos"><span class="a-lbl">Hor\xE1rio</span><span class="a-val neu ahg-time-display">${lastPunch ? renderClock(toMin(lastPunch)) : "--:--"}</span></div>
     `;
     if (pendingCount > 0) {
-      html += `<div class="a-row warn"><span class="a-lbl">Pendentes</span><span class="a-val warn">${pendingCount} local</span></div>`;
+      const pendingTimes = state.pendingLocalHistoryEntries.map((e) => renderText(e.time)).filter(Boolean).join(", ");
+      const titleHint = pendingTimes ? ` (${escapeHtml(pendingTimes)})` : "";
+      html += `<div class="a-row warn"><span class="a-lbl" title="Batidas locais ainda n\xE3o confirmadas no espelho${titleHint}">Pendentes</span><span class="a-val warn ahg-items-center ahg-gap-4" style="display:inline-flex"><span>${pendingCount} local</span><button type="button" class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-clear-pending" title="Descartar batida(s) local(is) pendente(s)${titleHint}" aria-label="Descartar pendentes locais">${icon("trash", { size: 11 })}</button></span></div>`;
     }
     if (view.zen) {
       html += `</div><div class="a-foot">Modo Zen \xB7 Atualizado ${fmtHour((/* @__PURE__ */ new Date()).getHours() * 60 + (/* @__PURE__ */ new Date()).getMinutes())}</div>`;
@@ -5441,14 +5536,31 @@
         openPunchEditor({
           dateKey: day.dateKey,
           dateLabel: day.label,
-          mirrorPunches: day.basePunches,
-          localPunches: day.manual ? day.punches : [],
+          mirrorPunches: day.mirrorPunches ?? day.basePunches ?? [],
+          localPunches: day.manual ? day.punches : day.punches || [],
           targetEl: btn.closest(".ahg-hist-day"),
           // O live-refresh escuta este evento e re-renderiza com VM novo.
           onSave: () => bus.emit("punch-history:changed")
         });
       });
     });
+    const clearPendingBtn = panel.querySelector("#ahg-logger-clear-pending");
+    if (clearPendingBtn) {
+      clearPendingBtn.addEventListener("click", () => {
+        const previousHistory = getPunchHistory();
+        const removed = clearDayLocalHistory(formatDateKey());
+        if (!removed.length) return;
+        const removedLabel = removed.map((e) => renderText(e.time)).join(", ");
+        showLoggerToast(`Batida local descartada (${removedLabel}).`, {
+          action: {
+            label: "Desfazer",
+            onClick: () => {
+              setPunchHistory(previousHistory);
+            }
+          }
+        });
+      });
+    }
     const dragHandle = getDockMini(PERSIST_KEY2) ? "#ahg-dock-bar" : ".a-tit";
     makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY2 });
     applySavedPanelPosition(panel, PERSIST_KEY2);
@@ -5481,6 +5593,13 @@
     if (combined.length === 0) return null;
     return toMin(combined[combined.length - 1]);
   }
+  function isLatestPunchLocalOnly(timeline) {
+    const combined = timeline?.combinedPunches || [];
+    if (combined.length === 0 || timeline?.todayManual) return false;
+    const lastPunch = combined[combined.length - 1];
+    const localOnly = timeline?.localOnlyPunches || [];
+    return localOnly.includes(lastPunch);
+  }
   function getClockingInIntervalState(nextTime, lastMinute) {
     const nextMinute = toMin(nextTime);
     if (nextMinute === null) return null;
@@ -5497,8 +5616,8 @@
     if (title?.parentElement) return { parent: title.parentElement, before: title };
     return { parent: confirmBtn.parentElement, before: confirmBtn };
   }
-  function upsertClockingInModalHint(confirmBtn, state) {
-    if (!confirmBtn) return;
+  function upsertClockingInModalHint(confirmBtn, state, options = {}) {
+    if (!confirmBtn || !state) return;
     const modal = confirmBtn.closest('[role="dialog"]') || confirmBtn.closest(".v-dialog--active") || confirmBtn.closest('[role="presentation"]') || document.body;
     const slot = findModalBannerSlot(modal, confirmBtn);
     let hint = modal.querySelector(".ahg-modal-hint");
@@ -5509,20 +5628,47 @@
     if (hint.parentElement !== slot.parent || hint.nextSibling !== slot.before) {
       slot.parent.insertBefore(hint, slot.before);
     }
+    const canDiscardLocal = !!(state.isBlocked && options.isLastPunchLocalOnly && typeof options.onDiscardLocalPunch === "function");
+    const lastPunchLabel = options.lastPunchTime ? renderText(options.lastPunchTime) : "";
+    const stateKey = `${state.noReference}:${state.isBlocked}:${state.minMinute}:${state.diff}:${canDiscardLocal}:${lastPunchLabel}`;
     if (state.noReference) {
-      hint.textContent = "\u26A0\uFE0F Sem refer\xEAncia de \xFAltima batida";
+      if (hint.dataset.ahgStateKey !== stateKey) {
+        hint.textContent = "\u26A0\uFE0F Sem refer\xEAncia de \xFAltima batida";
+        hint.dataset.ahgStateKey = stateKey;
+      }
       hint.className = "ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--info";
       confirmBtn.style.pointerEvents = "";
       confirmBtn.style.opacity = "";
       confirmBtn.removeAttribute("aria-disabled");
     } else if (state.isBlocked) {
-      hint.textContent = `\u26D4 Intervalo m\xEDnimo de 30min n\xE3o atingido. Aguarde at\xE9 ${String(Math.floor(state.minMinute / 60)).padStart(2, "0")}:${String(state.minMinute % 60).padStart(2, "0")}.`;
+      if (hint.dataset.ahgStateKey !== stateKey) {
+        const waitUntil = `${String(Math.floor(state.minMinute / 60)).padStart(2, "0")}:${String(state.minMinute % 60).padStart(2, "0")}`;
+        hint.textContent = `\u26D4 Intervalo m\xEDnimo de 30min n\xE3o atingido. Aguarde at\xE9 ${waitUntil}.`;
+        if (canDiscardLocal) {
+          const discardBtn = document.createElement("button");
+          discardBtn.type = "button";
+          discardBtn.className = "ahg-btn ahg-btn-sm ahg-btn-danger ahg-modal-discard-local";
+          discardBtn.style.marginLeft = "8px";
+          discardBtn.textContent = lastPunchLabel ? `Descartar ${lastPunchLabel} (local)` : "Descartar batida local";
+          discardBtn.title = "A batida anterior foi salva apenas localmente e ainda n\xE3o consta no espelho. Clique para descart\xE1-la se a batida falhou.";
+          discardBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            options.onDiscardLocalPunch();
+          });
+          hint.appendChild(discardBtn);
+        }
+        hint.dataset.ahgStateKey = stateKey;
+      }
       hint.className = "ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--error";
       confirmBtn.style.pointerEvents = "none";
       confirmBtn.style.opacity = "0.55";
       confirmBtn.setAttribute("aria-disabled", "true");
     } else {
-      hint.textContent = `\u2705 Intervalo OK (${state.diff}min)`;
+      if (hint.dataset.ahgStateKey !== stateKey) {
+        hint.textContent = `\u2705 Intervalo OK (${state.diff}min)`;
+        hint.dataset.ahgStateKey = stateKey;
+      }
       hint.className = "ahg-modal-hint ahg-modal-hint--banner ahg-modal-hint--ok";
       confirmBtn.style.pointerEvents = "";
       confirmBtn.style.opacity = "";
@@ -5560,6 +5706,36 @@
     }
     return null;
   }
+  function findCancelButton(modal = null) {
+    const scope = modal || document;
+    const candidates = modal ? scope.querySelectorAll("button") : scope.querySelectorAll('[role="dialog"] button, .v-dialog--active button, [role="presentation"] button');
+    for (const btn of candidates) {
+      const text = (btn.textContent || "").trim();
+      if (CANCEL_BTN_TEXT_RE.test(text)) return btn;
+    }
+    return null;
+  }
+  var HOST_ERROR_TEXT_RE = /colaborador\s+n[aã]o\s+cadastrado|n[aã]o\s+cadastrado\s+no\s+dispositivo|dispositivo\s+n[aã]o\s+(?:cadastrado|autorizado|habilitado)|employee\s+not\s+registered|not\s+registered\s+(?:on|in)\s+(?:this\s+)?device|erro\s+ao\s+registrar|falha\s+ao\s+registrar|n[aã]o\s+foi\s+poss[ií]vel|error\s+registering|failed\s+to\s+register|unable\s+to\s+register|sess[aã]o\s+expirada|session\s+expired|unauthorized|tente\s+novamente/i;
+  function hasHostPunchError(modal = null, root = document) {
+    const candidates = root.querySelectorAll(
+      '[role="alert"], [role="dialog"], [role="presentation"], .v-dialog--active, .MuiDialog-root, .MuiAlert-standardError, .MuiSnackbarContent-root, .v-snack--active'
+    );
+    for (const el2 of candidates) {
+      if (el2.classList.contains("ahg-modal-hint") || el2.closest(".ahg-panel, .ahg-toast-region")) continue;
+      const clone = el2.cloneNode(true);
+      clone.querySelectorAll?.(".ahg-modal-hint, .ahg-panel, .ahg-toast-region").forEach((n) => n.remove());
+      const text = (clone.textContent || "").trim();
+      if (HOST_ERROR_TEXT_RE.test(text) || el2.classList.contains("MuiAlert-standardError") || el2.classList.contains("error")) {
+        return true;
+      }
+    }
+    if (modal) {
+      const clone = modal.cloneNode(true);
+      clone.querySelectorAll(".ahg-modal-hint").forEach((h) => h.remove());
+      if (HOST_ERROR_TEXT_RE.test(clone.textContent || "")) return true;
+    }
+    return false;
+  }
   function parsePunchTimeFromText(text) {
     if (!text) return null;
     let m = text.match(/(\d{1,2}):(\d{2})/);
@@ -5588,19 +5764,59 @@
     document.querySelectorAll(".ahg-modal-hint").forEach((el2) => el2.remove());
   }
   function monitorModal(timelineGetter, intervalMs = LOGGER_MONITOR_INTERVAL_MS) {
+    let pendingAttemptTime = null;
+    function rollbackPendingAttempt(reasonToast) {
+      if (!pendingAttemptTime) return false;
+      const timeToRemove = pendingAttemptTime;
+      pendingAttemptTime = null;
+      const bounds = getTodayBounds();
+      const res = removeTodayLocalPunch(timeToRemove, bounds.startMs, bounds.endMs);
+      if (res.ok && reasonToast) {
+        showLoggerToast(reasonToast);
+      }
+      return res.ok;
+    }
+    function refreshModalState(modal, confirmBtn) {
+      const nextTime = findModalTime(modal);
+      if (!nextTime) return;
+      const timeline = timelineGetter();
+      const lastMinute = getLatestTodayKnownPunchMinute(timeline);
+      const state = getClockingInIntervalState(nextTime, lastMinute);
+      const localOnly = isLatestPunchLocalOnly(timeline);
+      const combined = timeline?.combinedPunches || [];
+      const lastPunchTime = combined[combined.length - 1] || null;
+      upsertClockingInModalHint(confirmBtn, state, {
+        isLastPunchLocalOnly: localOnly,
+        lastPunchTime,
+        onDiscardLocalPunch: () => {
+          if (!lastPunchTime) return;
+          const bounds = getTodayBounds();
+          const res = removeTodayLocalPunch(lastPunchTime, bounds.startMs, bounds.endMs);
+          if (res.ok) {
+            if (pendingAttemptTime === lastPunchTime) pendingAttemptTime = null;
+            showLoggerToast(`Batida local ${renderText(lastPunchTime)} descartada.`);
+            refreshModalState(modal, confirmBtn);
+          }
+        }
+      });
+    }
     return setInterval(() => {
       const modal = findPunchModal();
       if (!modal) {
+        if (pendingAttemptTime && hasHostPunchError(null)) {
+          rollbackPendingAttempt("Erro na batida detectado \u2014 registro local descartado.");
+        } else {
+          pendingAttemptTime = null;
+        }
         removeHint();
         return;
       }
+      if (pendingAttemptTime && hasHostPunchError(modal)) {
+        rollbackPendingAttempt("Erro na batida detectado \u2014 registro local descartado.");
+      }
       const confirmBtn = findConfirmButton(modal);
       if (!confirmBtn) return;
-      const nextTime = findModalTime(modal);
-      if (!nextTime) return;
-      const lastMinute = getLatestTodayKnownPunchMinute(timelineGetter());
-      const state = getClockingInIntervalState(nextTime, lastMinute);
-      upsertClockingInModalHint(confirmBtn, state);
+      refreshModalState(modal, confirmBtn);
       if (!confirmBtn.dataset.ahgHooked) {
         confirmBtn.dataset.ahgHooked = "true";
         confirmBtn.addEventListener("click", (e) => {
@@ -5613,7 +5829,18 @@
             window.alert("Intervalo m\xEDnimo de 30min n\xE3o atingido.");
             showLoggerToast("Intervalo m\xEDnimo de 30min n\xE3o atingido.");
           } else if (liveTime) {
-            savePunch(liveTime);
+            if (savePunch(liveTime)) {
+              pendingAttemptTime = liveTime;
+            }
+          }
+        }, true);
+      }
+      const cancelBtn = findCancelButton(modal);
+      if (cancelBtn && !cancelBtn.dataset.ahgCancelHooked) {
+        cancelBtn.dataset.ahgCancelHooked = "true";
+        cancelBtn.addEventListener("click", () => {
+          if (pendingAttemptTime) {
+            rollbackPendingAttempt("Batida cancelada \u2014 registro local descartado.");
           }
         }, true);
       }
@@ -5680,6 +5907,10 @@
     const dias = extrairDados(hoje);
     if (!dias.length) return null;
     persistMirrorDays(dias, hoje);
+    const rawToday = dias.find((d) => d.isToday);
+    if (rawToday?.dateKey) {
+      syncDayLocalHistory(rawToday.dateKey, rawToday.batidas || []);
+    }
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
     const sharedTruthPrev = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);

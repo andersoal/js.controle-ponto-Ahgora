@@ -4,13 +4,13 @@
  * Extraído do entry point (main.js) para ser testável no seam real.
  */
 
-import { STORAGE_KEYS, gmGetJson, gmGetJsonCrossOrigin } from '../core/storage-adapter.js';
+import { STORAGE_KEYS, gmGetJson, gmGetJsonCrossOrigin, gmSetJson } from '../core/storage-adapter.js';
 import { nowMin } from '../core/time-utils.js';
 import { computeDayBalance, dayBalanceOptions } from '../mirror/calculator.js';
 import { buildMonthHistory, getMirrorDays } from './month-history.js';
 import { getAlarmConfig } from './alarm-engine.js';
 import { buildLoggerPunchTimeline, getMirrorTodayContext, getTodayBounds, getYesterdayContext } from './mirror-sync.js';
-import { getPunchHistory } from './punch-history.js';
+import { getPunchHistory, reconcileTodayLocalHistoryWithMirror } from './punch-history.js';
 
 /** Só a guidance atual, sem montar o VM completo (linha do tempo, histórico) — usado pelo tick do alarme. */
 export function getLoggerGuidance() {
@@ -25,8 +25,24 @@ export function getLoggerVm() {
     const sharedTruth = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
     const mirrorCtx = getMirrorTodayContext(sharedTruth, bounds.todayKey);
     const yesterdayCtx = getYesterdayContext(sharedTruth);
-    const history = getPunchHistory();
-    const timeline = buildLoggerPunchTimeline(history, mirrorCtx.mirrorPunches, bounds.startMs, bounds.endMs);
+    const rawHistory = getPunchHistory();
+    const { history, removedCount } = reconcileTodayLocalHistoryWithMirror(
+        rawHistory,
+        mirrorCtx.mirrorPunches,
+        bounds.startMs,
+        bounds.endMs,
+        { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+    );
+    if (removedCount > 0) {
+        gmSetJson(STORAGE_KEYS.PUNCH_HISTORY, history);
+    }
+    const timeline = buildLoggerPunchTimeline(
+        history,
+        mirrorCtx.mirrorPunches,
+        bounds.startMs,
+        bounds.endMs,
+        { mirrorSyncedAtMs: mirrorCtx.mirrorSyncedAtMs }
+    );
 
     // Ajuste manual de hoje (Punch Editor, no Logger ou no Mirror) manda na
     // linha do tempo do dia — o assistente e a última batida seguem o ajuste.
@@ -36,7 +52,8 @@ export function getLoggerVm() {
         mirrorDays: getMirrorDays(),
         overrides,
         history,
-        todayPunches: timeline.combinedPunches
+        todayPunches: timeline.combinedPunches,
+        todayMirrorPunches: mirrorCtx.mirrorPunches
     });
     if (todayOverride.length) {
         timeline.combinedPunches = [...todayOverride];

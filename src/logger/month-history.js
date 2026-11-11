@@ -75,7 +75,8 @@ export function buildMonthHistory({
     mirrorDays = {},
     overrides = {},
     history = [],
-    todayPunches = null
+    todayPunches = null,
+    todayMirrorPunches = null
 } = {}) {
     const startKey = historyWindowStartKey(hoje);
     const todayKey = formatDateKey(hoje);
@@ -94,13 +95,16 @@ export function buildMonthHistory({
 
     const days = [...keys].sort().reverse().map((dateKey) => {
         const isToday = dateKey === todayKey;
-        const mirror = mirrorDays?.[dateKey] || [];
+        const rawMirror = mirrorDays?.[dateKey] || [];
+        const mirror = isToday && Array.isArray(todayMirrorPunches) && todayMirrorPunches.length
+            ? sortPunches(todayMirrorPunches)
+            : sortPunches(rawMirror);
         const local = sortPunches(localByDay[dateKey] || []);
         // Hoje o espelho pode estar atrasado: a linha do tempo do Logger já
         // une espelho + capturas locais.
         const base = isToday && todayPunches?.length
             ? sortPunches(todayPunches)
-            : (mirror.length ? sortPunches(mirror) : local);
+            : (mirror.length ? mirror : local);
         const manualPunches = overrides?.[dateKey] || [];
         const manual = manualPunches.length > 0;
         const source = manual ? 'manual' : (mirror.length ? 'mirror' : 'local');
@@ -110,6 +114,8 @@ export function buildMonthHistory({
             isToday,
             punches: manual ? sortPunches(manualPunches) : base,
             basePunches: base,
+            mirrorPunches: mirror,
+            localPunches: local,
             manual,
             source
         };

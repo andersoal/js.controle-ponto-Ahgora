@@ -4,6 +4,8 @@ import {
     savePunch,
     updateTodayLocalPunch,
     removeTodayLocalPunch,
+    syncDayLocalHistory,
+    clearDayLocalHistory,
     reconcileTodayLocalHistoryWithMirror,
     LOGGER_HISTORY_MAX_ENTRIES
 } from '../../src/logger/punch-history.js';
@@ -65,5 +67,34 @@ describe('PunchHistory', () => {
         expect(result.removedCount).toBe(1);
         expect(result.history).toHaveLength(1);
         expect(result.history[0].time).toBe('09:00');
+    });
+
+    it('reconcileTodayLocalHistoryWithMirror descarta batida local ausente no mirror quando mirrorSyncedAtMs é posterior', () => {
+        const tPunch = 1794398160000; // 08:56
+        const tMirror = 1794398400000; // 09:00
+        const history = [
+            { time: '08:56', dateKey: '2026-11-11', timestamp: tPunch }
+        ];
+        const result = reconcileTodayLocalHistoryWithMirror(
+            history,
+            [],
+            tPunch - 3600000,
+            tPunch + 36000000,
+            { mirrorSyncedAtMs: tMirror }
+        );
+        expect(result.removedCount).toBe(1);
+        expect(result.history).toHaveLength(0);
+    });
+
+    it('syncDayLocalHistory e clearDayLocalHistory limpam batidas locais do dia', () => {
+        savePunch('08:56', new Date('2026-11-11T08:56:00'), 1794398160000);
+        savePunch('18:00', new Date('2026-11-10T18:00:00'), 1794344400000);
+        expect(syncDayLocalHistory('2026-11-11', [])).toBe(true);
+        expect(getPunchHistory().map((e) => e.dateKey)).toEqual(['2026-11-10']);
+
+        savePunch('09:00', new Date('2026-11-11T09:00:00'), 1794398400000);
+        const removed = clearDayLocalHistory('2026-11-11');
+        expect(removed.map((e) => e.time)).toEqual(['09:00']);
+        expect(getPunchHistory().map((e) => e.dateKey)).toEqual(['2026-11-10']);
     });
 });

@@ -87,15 +87,54 @@ export function removeTodayLocalPunch(time, startMs, endMs) {
     return { ok: true, message: 'Batida removida' };
 }
 
-export function reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, todayStartMs, todayEndMs) {
+/**
+ * Sincroniza as entradas locais de um dia (`dateKey`) com a lista de batidas
+ * desejada (ex.: após salvar/remover no Punch Editor ou reconciliar com o Mirror).
+ * Qualquer batida local daquele dia que não esteja em `targetPunches` é removida.
+ */
+export function syncDayLocalHistory(dateKey, targetPunches = []) {
+    if (!dateKey) return false;
+    const keepSet = new Set((targetPunches || []).map((t) => normalizePunchTime(t)).filter(Boolean));
+    const history = getPunchHistory();
+    const filtered = history.filter((entry) => {
+        const entryDateKey = entry.dateKey || (Number.isFinite(entry.timestamp) ? formatDateKey(new Date(entry.timestamp)) : '');
+        if (entryDateKey !== dateKey) return true;
+        return keepSet.has(entry.time);
+    });
+    if (filtered.length === history.length) return false;
+    setPunchHistory(filtered);
+    return true;
+}
+
+/**
+ * Remove todas as batidas locais pendentes de um dia (`dateKey`), retornando
+ * as entradas removidas (útil para ação de desfazer).
+ */
+export function clearDayLocalHistory(dateKey = formatDateKey()) {
+    if (!dateKey) return [];
+    const history = getPunchHistory();
+    const removed = [];
+    const kept = [];
+    history.forEach((entry) => {
+        const entryDateKey = entry.dateKey || (Number.isFinite(entry.timestamp) ? formatDateKey(new Date(entry.timestamp)) : '');
+        if (entryDateKey === dateKey) removed.push(entry);
+        else kept.push(entry);
+    });
+    if (removed.length === 0) return [];
+    setPunchHistory(kept);
+    return removed;
+}
+
+export function reconcileTodayLocalHistoryWithMirror(history, mirrorPunches, todayStartMs, todayEndMs, { mirrorSyncedAtMs = null } = {}) {
     const mirrorSet = new Set(mirrorPunches || []);
+    const hasFreshMirrorSync = Number.isFinite(mirrorSyncedAtMs);
     const kept = [];
     let removedCount = 0;
 
-    history.forEach((entry) => {
+    (history || []).forEach((entry) => {
         const ts = entry.timestamp;
         const isToday = ts >= todayStartMs && ts <= todayEndMs;
-        if (isToday && mirrorSet.has(entry.time)) {
+        if (isToday && (mirrorSet.has(entry.time) || (hasFreshMirrorSync && ts <= mirrorSyncedAtMs))) {
             removedCount++;
             return;
         }

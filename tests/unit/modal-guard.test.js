@@ -211,4 +211,102 @@ describe('ModalGuard', () => {
         expect(hints[0].classList.contains('ahg-modal-hint--banner')).toBe(true);
         expect(hints[0].textContent).toContain('Intervalo OK (125min)');
     });
+
+    it('quando bloqueado por batida apenas local, exibe botão no modal para descartá-la e desbloquear', async () => {
+        vi.useFakeTimers();
+        const { savePunch, getPunchHistory } = await import('../../src/logger/punch-history.js');
+        savePunch('14:15');
+        expect(getPunchHistory()).toHaveLength(1);
+
+        const { overlay, confirmBtn } = buildRealMuiModal(); // modal time: 14:23
+        const timelineGetter = () => ({
+            combinedPunches: getPunchHistory().map((e) => e.time),
+            localOnlyPunches: getPunchHistory().map((e) => e.time)
+        });
+
+        const id = monitorModal(timelineGetter, LOGGER_MONITOR_INTERVAL_MS);
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+
+        const discardBtn = overlay.querySelector('.ahg-modal-discard-local');
+        expect(discardBtn).not.toBeNull();
+        expect(confirmBtn.getAttribute('aria-disabled')).toBe('true');
+
+        discardBtn.click();
+        expect(getPunchHistory()).toHaveLength(0);
+        expect(confirmBtn.hasAttribute('aria-disabled')).toBe(false);
+
+        clearInterval(id);
+        vi.useRealTimers();
+    });
+
+    it('se o usuário clicar em Cancel após Clocking in travar no modal, desfaz o registro local', async () => {
+        vi.useFakeTimers();
+        const { getPunchHistory } = await import('../../src/logger/punch-history.js');
+        const { confirmBtn, cancelBtn } = buildRealMuiModal(); // 14:23
+        const timelineGetter = () => ({ combinedPunches: [] });
+
+        const id = monitorModal(timelineGetter, LOGGER_MONITOR_INTERVAL_MS);
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+
+        confirmBtn.click();
+        expect(getPunchHistory()).toHaveLength(1);
+        expect(getPunchHistory()[0].time).toBe('14:23');
+
+        // Modal travou e o usuário clicou em Cancel:
+        cancelBtn.click();
+        expect(getPunchHistory()).toHaveLength(0);
+
+        clearInterval(id);
+        vi.useRealTimers();
+    });
+
+    it('se o host exibir alerta de erro após Clocking in, desfaz o registro local automaticamente', async () => {
+        vi.useFakeTimers();
+        const { getPunchHistory } = await import('../../src/logger/punch-history.js');
+        const { overlay, confirmBtn } = buildRealMuiModal(); // 14:23
+        const timelineGetter = () => ({ combinedPunches: [] });
+
+        const id = monitorModal(timelineGetter, LOGGER_MONITOR_INTERVAL_MS);
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+
+        confirmBtn.click();
+        expect(getPunchHistory()).toHaveLength(1);
+
+        const errAlert = document.createElement('div');
+        errAlert.setAttribute('role', 'alert');
+        errAlert.textContent = 'Erro ao registrar batida. Tente novamente.';
+        overlay.appendChild(errAlert);
+
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+        expect(getPunchHistory()).toHaveLength(0);
+
+        clearInterval(id);
+        vi.useRealTimers();
+    });
+
+    it('se o modal de confirmação trocar para o modal "Colaborador não cadastrado no dispositivo", desfaz o registro local', async () => {
+        vi.useFakeTimers();
+        const { getPunchHistory } = await import('../../src/logger/punch-history.js');
+        const { overlay, confirmBtn } = buildRealMuiModal(); // 14:23
+        const timelineGetter = () => ({ combinedPunches: [] });
+
+        const id = monitorModal(timelineGetter, LOGGER_MONITOR_INTERVAL_MS);
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+
+        confirmBtn.click();
+        expect(getPunchHistory()).toHaveLength(1);
+
+        // O modal de confirmação fecha e o Ahgora abre o modal de erro do dispositivo:
+        overlay.remove();
+        const deviceErrModal = document.createElement('div');
+        deviceErrModal.setAttribute('role', 'presentation');
+        deviceErrModal.innerHTML = '<div class="MuiBox-root"><h2>Atenção</h2><p>Colaborador não cadastrado no dispositivo.</p><button>OK</button></div>';
+        document.body.appendChild(deviceErrModal);
+
+        vi.advanceTimersByTime(LOGGER_MONITOR_INTERVAL_MS + 10);
+        expect(getPunchHistory()).toHaveLength(0);
+
+        clearInterval(id);
+        vi.useRealTimers();
+    });
 });

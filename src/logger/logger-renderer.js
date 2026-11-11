@@ -18,8 +18,10 @@ import {
     getDockEdge,
     getDockMini,
     makePanelDraggable,
-    setFloatingPanelVisible
+    setFloatingPanelVisible,
+    showLoggerToast
 } from '../shared/ui-components.js';
+import { clearDayLocalHistory, getPunchHistory, setPunchHistory } from './punch-history.js';
 import { getJourneyPlan, setJourneyPlan } from '../core/journey-plan.js';
 import { buildAssistantPlan } from '../mirror/assistant-engine.js';
 import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml } from '../shared/assistant-card.js';
@@ -179,7 +181,9 @@ export function buildLoggerHtml(vm, view = {}) {
     `;
 
     if (pendingCount > 0) {
-        html += `<div class="a-row warn"><span class="a-lbl">Pendentes</span><span class="a-val warn">${pendingCount} local</span></div>`;
+        const pendingTimes = state.pendingLocalHistoryEntries.map((e) => renderText(e.time)).filter(Boolean).join(', ');
+        const titleHint = pendingTimes ? ` (${escapeHtml(pendingTimes)})` : '';
+        html += `<div class="a-row warn"><span class="a-lbl" title="Batidas locais ainda não confirmadas no espelho${titleHint}">Pendentes</span><span class="a-val warn ahg-items-center ahg-gap-4" style="display:inline-flex"><span>${pendingCount} local</span><button type="button" class="ahg-btn ahg-btn-sm ahg-btn-danger" id="ahg-logger-clear-pending" title="Descartar batida(s) local(is) pendente(s)${titleHint}" aria-label="Descartar pendentes locais">${icon('trash', { size: 11 })}</button></span></div>`;
     }
 
     // Modo Zen: painel enxuto — só o que responde "qual a próxima batida".
@@ -316,14 +320,32 @@ export function renderLoggerContainer(vm) {
             openPunchEditor({
                 dateKey: day.dateKey,
                 dateLabel: day.label,
-                mirrorPunches: day.basePunches,
-                localPunches: day.manual ? day.punches : [],
+                mirrorPunches: day.mirrorPunches ?? day.basePunches ?? [],
+                localPunches: day.manual ? day.punches : (day.punches || []),
                 targetEl: btn.closest('.ahg-hist-day'),
                 // O live-refresh escuta este evento e re-renderiza com VM novo.
                 onSave: () => bus.emit('punch-history:changed')
             });
         });
     });
+
+    const clearPendingBtn = panel.querySelector('#ahg-logger-clear-pending');
+    if (clearPendingBtn) {
+        clearPendingBtn.addEventListener('click', () => {
+            const previousHistory = getPunchHistory();
+            const removed = clearDayLocalHistory(formatDateKey());
+            if (!removed.length) return;
+            const removedLabel = removed.map((e) => renderText(e.time)).join(', ');
+            showLoggerToast(`Batida local descartada (${removedLabel}).`, {
+                action: {
+                    label: 'Desfazer',
+                    onClick: () => {
+                        setPunchHistory(previousHistory);
+                    }
+                }
+            });
+        });
+    }
 
     const dragHandle = getDockMini(PERSIST_KEY) ? '#ahg-dock-bar' : '.a-tit';
     makePanelDraggable(panel, dragHandle, { persistKey: PERSIST_KEY });
