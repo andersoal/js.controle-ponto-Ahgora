@@ -580,6 +580,12 @@ export const CSS_COMPONENTS = `
 .ahg-as-step.next { background: color-mix(in srgb, var(--ahg-primary) 10%, transparent); font-weight: 700; }
 .ahg-as-step-icon { width: 12px; text-align: center; color: var(--ahg-primary); }
 .ahg-as-step-label { flex: 1; color: var(--ahg-text-label); }
+.ahg-as-step-bound {
+    display: flex; align-items: center; gap: 6px; font-size: 10px;
+    padding: 1px 4px 1px 12px; border-radius: 4px; color: var(--ahg-text-label);
+}
+.ahg-as-step-bound .ahg-as-step-icon { color: var(--ahg-text-label); font-size: 10px; }
+.ahg-as-step-bound .ahg-as-step-time { font-weight: 600; color: var(--ahg-text); }
 .ahg-as-step-time { font-weight: 700; }
 .ahg-as-step-cal { display: inline-flex; gap: 2px; min-width: 24px; }
 .ahg-as-cal {

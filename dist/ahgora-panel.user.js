@@ -1143,7 +1143,7 @@
     ambos: "Solicita\xE7\xF5es de inclus\xE3o e exclus\xE3o",
     solicitacao: "Solicita\xE7\xE3o de ajuste pendente"
   };
-  function updateDayRequestBadge(dayEl, requestType, manualBatidas = []) {
+  function updateDayRequestBadge(dayEl, requestType, manualBatidas = [], pendingRequests = null) {
     if (!dayEl) return;
     if (!requestType) {
       removeDayChild(dayEl, "ahg-day-request-badge");
@@ -1153,7 +1153,12 @@
     badge.textContent = REQUEST_BADGE_LABELS[requestType] || "!";
     badge.className = `ahg-day-request-badge ${requestType}`;
     badge.title = REQUEST_BADGE_TITLES[requestType] || "";
-    if (manualBatidas.length > 0) {
+    const parts = [];
+    if (pendingRequests?.add?.length > 0) parts.push(`incluir: ${pendingRequests.add.join(", ")}`);
+    if (pendingRequests?.remove?.length > 0) parts.push(`desconsiderar: ${pendingRequests.remove.join(", ")}`);
+    if (parts.length > 0) {
+      badge.title += ` \u2014 ${parts.join(" | ")}`;
+    } else if (manualBatidas.length > 0) {
       badge.title += ` \u2014 inclus\xF5es: ${manualBatidas.join(", ")}`;
     }
   }
@@ -1172,7 +1177,7 @@
       updateDayViolationBadge(dia.dayEl, dia.isFuture ? [] : dia.violations);
       updateDayInconsistencyBadge(dia.dayEl, dia);
       updateDayToleranceMark(dia.dayEl, dia);
-      updateDayRequestBadge(dia.dayEl, dia.requestType, dia.manualBatidas);
+      updateDayRequestBadge(dia.dayEl, dia.requestType, dia.manualBatidas, dia.pendingRequests);
       updateDayManualPunchHighlight(dia.dayEl, dia.manualBatidas);
       updateDayEditButton(dia.dayEl, dia, localOverridesByDay[dia.dateKey], onOpenEditor);
     });
@@ -1530,12 +1535,54 @@
     if (looksLikeExclusion) return "exclusao";
     return "solicitacao";
   }
+  function extrairSolicitacoes(doc = document) {
+    try {
+      const appEl = doc?.querySelector?.(".application");
+      const ap = appEl?.__vue__?.$apuracao;
+      const raw = ap?._data?.solicitacoes || ap?.solicitacoes;
+      return raw && typeof raw === "object" ? raw : {};
+    } catch {
+      return {};
+    }
+  }
+  function parsePendingPunchRequests(requests = []) {
+    if (!Array.isArray(requests)) return { add: [], remove: [] };
+    const add = [];
+    const remove = [];
+    for (const req of requests) {
+      if (!req || typeof req !== "object") continue;
+      const estado = req.estado ? String(req.estado).toUpperCase() : "PENDENTE";
+      if (estado !== "PENDENTE") continue;
+      if (req.tipo === "addPunch") {
+        const hora = normalizePunchTime(req.addPunch?.hora);
+        if (hora) add.push(hora);
+      } else if (req.tipo === "removePunch") {
+        const hora = normalizePunchTime(req.removePunch?.hora);
+        if (hora) remove.push(hora);
+      }
+    }
+    return { add, remove };
+  }
+  function applyPendingPunchRequests(batidas = [], pendingRequests = { add: [], remove: [] }) {
+    const add = pendingRequests?.add || [];
+    const remove = pendingRequests?.remove || [];
+    if (add.length === 0 && remove.length === 0) return [...batidas];
+    const adjusted = [...batidas];
+    for (const hora of remove) {
+      const idx = adjusted.indexOf(hora);
+      if (idx !== -1) adjusted.splice(idx, 1);
+    }
+    for (const hora of add) {
+      if (!adjusted.includes(hora)) adjusted.push(hora);
+    }
+    return adjusted.sort((a, b) => (toMin(a) ?? 0) - (toMin(b) ?? 0));
+  }
   function isDayCellHoliday(dayEl) {
     if (!dayEl) return false;
     const icon2 = dayEl.querySelector(".material-icons");
     return icon2 ? icon2.textContent.trim() === "star" : false;
   }
-  function parseCalendarDayCell(dayEl, hoje = /* @__PURE__ */ new Date()) {
+  function parseCalendarDayCell(dayEl, hoje = /* @__PURE__ */ new Date(), solicitacoesByDay = {}) {
     if (!dayEl) return null;
     const dataAttr = dayEl.getAttribute("data-date");
     let data;
@@ -1555,9 +1602,18 @@
     if (isOutside) return null;
     const weekDay = data.getDay();
     const isHoliday = isDayCellHoliday(dayEl);
-    const batidas = readDayCellPunches(dayEl);
+    const rawBatidas = readDayCellPunches(dayEl);
     const manualBatidas = readDayCellManualPunches(dayEl);
-    const requestType = readDayCellRequestType(dayEl);
+    const pendingRequests = parsePendingPunchRequests(solicitacoesByDay?.[dateKey]);
+    const batidas = applyPendingPunchRequests(rawBatidas, pendingRequests);
+    let requestType = readDayCellRequestType(dayEl);
+    if (pendingRequests.add.length > 0 && pendingRequests.remove.length > 0) {
+      requestType = "ambos";
+    } else if (pendingRequests.add.length > 0) {
+      requestType = requestType === "exclusao" || requestType === "ambos" ? "ambos" : "inclusao";
+    } else if (pendingRequests.remove.length > 0) {
+      requestType = requestType === "inclusao" || requestType === "ambos" ? "ambos" : "exclusao";
+    }
     const isRestDay = weekDay === 0 || weekDay === 6 || isHoliday;
     const isBusinessDay = !isRestDay || batidas.length > 0;
     return {
@@ -1570,14 +1626,16 @@
       isBusinessDay,
       batidas,
       manualBatidas,
+      pendingRequests,
       requestType,
       dayEl
     };
   }
   function extrairDados(hoje = /* @__PURE__ */ new Date()) {
     const dias = [];
+    const solicitacoesByDay = extrairSolicitacoes();
     document.querySelectorAll(".v-calendar-weekly__day").forEach((dayEl) => {
-      const dia = parseCalendarDayCell(dayEl, hoje);
+      const dia = parseCalendarDayCell(dayEl, hoje, solicitacoesByDay);
       if (dia) dias.push(dia);
     });
     return dias;
@@ -1653,6 +1711,22 @@
       multiplier
     }));
   }
+  function computeTodayBankExit({
+    todayPlannedExit = null,
+    direction = null,
+    adjustmentMinutes = null,
+    planMinutes = CONFIG.CARGA_DIARIA,
+    now = null
+  } = {}) {
+    if (todayPlannedExit === null || todayPlannedExit === void 0) return null;
+    if (planMinutes > CONFIG.CARGA_DIARIA) return null;
+    if (!direction || adjustmentMinutes === null || adjustmentMinutes === void 0) return null;
+    if (direction === "early") {
+      const target = todayPlannedExit - adjustmentMinutes;
+      return now !== null && now !== void 0 ? Math.max(now, target) : target;
+    }
+    return todayPlannedExit + adjustmentMinutes;
+  }
   function effectiveBalance({ officialBalance = null, manualBalance = null, dias = [], hoje = /* @__PURE__ */ new Date() } = {}) {
     if (officialBalance !== null && officialBalance !== void 0) {
       return { value: officialBalance, source: "oficial" };
@@ -1724,8 +1798,14 @@
       const allocation = Math.min(capacity, base + (remainder > 0 ? 1 : 0));
       if (remainder > 0) remainder--;
       let suggestedExit = null;
-      if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== void 0 && planMinutes <= CONFIG.CARGA_DIARIA) {
-        suggestedExit = direction === "early" ? Math.max(now, todayPlannedExit - allocation) : todayPlannedExit + allocation;
+      if (day.isToday) {
+        suggestedExit = computeTodayBankExit({
+          todayPlannedExit,
+          direction,
+          adjustmentMinutes: allocation,
+          planMinutes,
+          now
+        });
       }
       return { ...day, adjustmentMinutes: allocation, suggestedExit };
     });
@@ -1743,12 +1823,13 @@
       holidayCredits
     };
   }
-  function buildBankPlanSnapshot(bankPlan, dateKey, planMinutes = null) {
+  function buildBankPlanSnapshot(bankPlan, dateKey, planMinutes = null, todayPlannedExit = null) {
     if (!bankPlan?.active) return { dateKey, active: false };
     const today = bankPlan.days?.find((d) => d.isToday) || null;
     return {
       dateKey,
       planMinutes,
+      todayPlannedExit,
       active: true,
       completed: !!bankPlan.completed,
       noBalance: !!bankPlan.noBalance,
@@ -2700,6 +2781,12 @@
 .ahg-as-step.next { background: color-mix(in srgb, var(--ahg-primary) 10%, transparent); font-weight: 700; }
 .ahg-as-step-icon { width: 12px; text-align: center; color: var(--ahg-primary); }
 .ahg-as-step-label { flex: 1; color: var(--ahg-text-label); }
+.ahg-as-step-bound {
+    display: flex; align-items: center; gap: 6px; font-size: 10px;
+    padding: 1px 4px 1px 12px; border-radius: 4px; color: var(--ahg-text-label);
+}
+.ahg-as-step-bound .ahg-as-step-icon { color: var(--ahg-text-label); font-size: 10px; }
+.ahg-as-step-bound .ahg-as-step-time { font-weight: 600; color: var(--ahg-text); }
 .ahg-as-step-time { font-weight: 700; }
 .ahg-as-step-cal { display: inline-flex; gap: 2px; min-width: 24px; }
 .ahg-as-cal {
@@ -4204,7 +4291,12 @@
       idealExit,
       workedPlanned,
       nextDayEntry,
-      nextEntryForecast
+      nextEntryForecast,
+      intervalGuide: {
+        recommended: interval,
+        min: CONFIG.INTERVALO_MINIMO,
+        max: CONFIG.INTERVALO_MAXIMO
+      }
     };
   }
   function buildWeekPlan({ dias = [], hoje = /* @__PURE__ */ new Date(), planMinutes = CONFIG.CARGA_DIARIA } = {}) {
@@ -4284,6 +4376,19 @@
     const amount = minutes % 60 === 0 ? `${minutes / 60}h` : fmtMin(minutes);
     return `Intervalo ${amount}`;
   }
+  function formatIntervalDuration(minutes) {
+    if (minutes < 60) return `${minutes}min`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, "0")}`;
+  }
+  function resolveIntervalBounds(assistant) {
+    return {
+      recommended: formatIntervalDuration(assistant?.intervalGuide?.recommended ?? 60),
+      min: formatIntervalDuration(assistant?.intervalGuide?.min ?? CONFIG.INTERVALO_MINIMO),
+      max: formatIntervalDuration(assistant?.intervalGuide?.max ?? CONFIG.INTERVALO_MAXIMO)
+    };
+  }
   var STAGE_TITLES = {
     entry: "Pr\xF3xima batida \u2014 Entrada",
     interval: "Pr\xF3xima batida \u2014 Sa\xEDda p/ intervalo",
@@ -4344,16 +4449,37 @@
   }
   function buildScheduleHtml(assistant, alarmConfig) {
     if (!assistant.schedule?.length) return "";
+    const bounds = resolveIntervalBounds(assistant);
     const steps = assistant.schedule.map((step) => {
       const stepIcon = step.status === "done" ? icon("check", { size: 11 }) : step.status === "next" ? icon("chevron-right", { size: 11 }) : icon("dot", { size: 11 });
-      const calendar = step.status === "done" ? "" : buildCalendarLinksHtml(step, alarmConfig);
+      const isActiveReturn = step.id === "return" && step.status === "next";
+      const stepLabel = isActiveReturn ? `${step.label} \xB7 ${bounds.recommended}` : step.label;
+      const calendar = step.status === "done" ? "" : buildCalendarLinksHtml(isActiveReturn ? { ...step, label: `${step.label} (${bounds.recommended})` } : step, alarmConfig);
+      let boundsRowsHtml = "";
+      if (isActiveReturn && step.windowMin !== null && step.windowMax !== null) {
+        const minCal = buildCalendarLinksHtml({ label: `Retorno m\xEDn (${bounds.min})`, time: step.windowMin }, alarmConfig);
+        const maxCal = buildCalendarLinksHtml({ label: `Retorno m\xE1x (${bounds.max})`, time: step.windowMax }, alarmConfig);
+        boundsRowsHtml = `
+        <div class="ahg-as-step-bound" data-bound="min" title="Intervalo m\xEDnimo intrajornada (${escapeHtml(bounds.min)} \u2014 BR-002)">
+            <span class="ahg-as-step-icon" aria-hidden="true">\u21B3</span>
+            <span class="ahg-as-step-label">m\xEDn ${escapeHtml(bounds.min)}</span>
+            <span class="ahg-as-step-time">${renderClock(step.windowMin)}</span>
+            <span class="ahg-as-step-cal">${minCal}</span>
+        </div>
+        <div class="ahg-as-step-bound" data-bound="max" title="Intervalo m\xE1ximo intrajornada (${escapeHtml(bounds.max)} \u2014 BR-003)">
+            <span class="ahg-as-step-icon" aria-hidden="true">\u21B3</span>
+            <span class="ahg-as-step-label">m\xE1x ${escapeHtml(bounds.max)}</span>
+            <span class="ahg-as-step-time">${renderClock(step.windowMax)}</span>
+            <span class="ahg-as-step-cal">${maxCal}</span>
+        </div>`;
+      }
       return `
         <div class="ahg-as-step ${step.status}">
             <span class="ahg-as-step-icon">${stepIcon}</span>
-            <span class="ahg-as-step-label">${escapeHtml(step.label)}</span>
+            <span class="ahg-as-step-label">${escapeHtml(stepLabel)}</span>
             <span class="ahg-as-step-time">${renderClock(step.time)}</span>
             <span class="ahg-as-step-cal">${calendar}</span>
-        </div>`;
+        </div>${boundsRowsHtml}`;
     }).join("");
     return `<div class="ahg-as-schedule">${steps}</div>`;
   }
@@ -4374,13 +4500,16 @@
     const headlineNext = hasBankOverride ? { ...assistant.next, time: bankExit } : assistant.next;
     let body = "";
     if (headlineNext) {
+      const isReturnStage = headlineNext.id === "return";
+      const bounds = isReturnStage ? resolveIntervalBounds(assistant) : null;
+      const labelSuffix = hasBankOverride ? " \xB7 meta" : isReturnStage ? ` ${bounds.recommended} \xB7 m\xEDn ${bounds.min} \xB7 m\xE1x ${bounds.max}` : "";
       const windowHtml = headlineNext.windowMin !== null || headlineNext.windowMax !== null ? `<div class="ahg-as-next-window">janela ${renderClock(headlineNext.windowMin)} \u2013 ${renderClock(headlineNext.windowMax)}</div>` : "";
       const normalHtml = hasBankOverride ? `<div class="ahg-as-next-window">normal <b>${renderClock(assistant.next.time)}</b> <small>respeita turno/dia</small></div>` : "";
       body = `
         <div class="ahg-as-next">
             <div class="ahg-as-next-time">${renderClock(headlineNext.time)}</div>
             <div class="ahg-as-next-info">
-                <span class="ahg-as-next-label">${escapeHtml(headlineNext.label)}${hasBankOverride ? " \xB7 meta" : ""}</span>
+                <span class="ahg-as-next-label">${escapeHtml(headlineNext.label)}${escapeHtml(labelSuffix)}</span>
                 ${windowHtml}
                 ${normalHtml}
             </div>
@@ -4604,7 +4733,7 @@
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-day-details"><summary class="a-sec">Hoje em detalhe</summary>`;
     html += buildShiftPairsHtml(r.turnos);
     if (r.retornoMinimo) {
-      html += `<div class="a-row infos"><span class="a-lbl">${icon("pause")} Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} \u2192 ${renderClock(r.retornoMaximo)}</span></div>`;
+      html += `<div class="a-row infos"><span class="a-lbl">${icon("pause")} Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} \u2192 ${renderClock(r.retornoMaximo)}<small class="a-cap">m\xEDn ${formatIntervalDuration(CONFIG.INTERVALO_MINIMO)} \xB7 rec 1h \xB7 m\xE1x ${formatIntervalDuration(CONFIG.INTERVALO_MAXIMO)}</small></span></div>`;
     }
     html += `<div class="a-row ${r.interjornada?.podeBater ? "ok" : "warn"}"><span class="a-lbl">${icon("moon")} Interjornada</span><span class="a-val ${r.interjornada?.podeBater ? "pos" : "warn"}">${renderText(r.interjornada?.texto)}<small class="a-cap">${r.interjornada?.proximaPermitida ? "m\xEDnimo: " + renderText(r.interjornada.proximaPermitida) : ""}</small></span></div>`;
     html += `<div class="a-sec">Marcos do dia</div>
@@ -4681,7 +4810,7 @@
     });
     if (bankPlan.completed) clearBankGoal();
     const bankTodayExit = bankPlan.days?.find((d) => d.isToday)?.suggestedExit ?? null;
-    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null, plan.minutes));
+    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null, plan.minutes, todayPlannedExit));
     const view = {
       assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
       weekHtml: buildWeekViewHtml(weekPlan),
@@ -5438,7 +5567,7 @@
       const bankHint = state.bankSource === "manual" ? "informado + acumulado" : "oficial Ahgora";
       html += `<div class="a-row infos" title="Banco de horas total (inclui meses anteriores) \u2014 ${bankHint}"><span class="a-lbl">Banco total</span><span class="a-val ${state.bankBalance >= 0 ? "pos" : "neg"}">${renderMinutes(state.bankBalance)}<small class="a-cap">${bankHint}</small></span></div>`;
     }
-    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl(), view.planMinutes);
+    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl(), view.planMinutes, view.bankTodayExit);
     html += buildHistoryHtml(state.monthHistory);
     html += `<hr class="a-div"><div class="a-sec">Alarme</div>
         <div class="a-row infos ahg-items-center ahg-gap-8">
@@ -5455,11 +5584,21 @@
     if (!snap?.active || snap.dateKey !== formatDateKey()) return false;
     return snap.planMinutes === planMinutes;
   }
-  function readBankTodayExit(planMinutes) {
-    const snap = readBankPlanSnapshot();
-    return isBankSnapshotFresh(snap, planMinutes) ? snap.todayExit ?? null : null;
+  function resolveBankTodayExit(snap, planMinutes, todayPlannedExit, punchesCount = 0) {
+    if (!isBankSnapshotFresh(snap, planMinutes)) return null;
+    if (todayPlannedExit === null || todayPlannedExit === void 0) return null;
+    const plannedChanged = snap.todayPlannedExit !== void 0 && snap.todayPlannedExit !== null ? snap.todayPlannedExit !== todayPlannedExit : punchesCount >= 2;
+    if (plannedChanged && snap.direction && snap.todayAdjustment !== null && snap.todayAdjustment !== void 0) {
+      return computeTodayBankExit({
+        todayPlannedExit,
+        direction: snap.direction,
+        adjustmentMinutes: snap.todayAdjustment,
+        planMinutes
+      });
+    }
+    return snap.todayExit ?? null;
   }
-  function buildBankGoalHtml(snap, mirrorUrl, planMinutes) {
+  function buildBankGoalHtml(snap, mirrorUrl, planMinutes, bankTodayExit) {
     if (!snap?.active) return "";
     const fresh = isBankSnapshotFresh(snap, planMinutes);
     let html = `<hr class="a-div"><div class="a-sec ahg-sec-action">Meta do banco</div>`;
@@ -5471,8 +5610,9 @@
     }
     const verbo = snap.direction === "early" ? "sair mais cedo" : "ficar a mais";
     html += `<div class="a-row infos"><span class="a-lbl">${icon("target")} Objetivo</span><span class="a-val ${(snap.targetBalance ?? 0) >= 0 ? "pos" : "neg"}">${renderMinutes(snap.targetBalance)}<small class="a-cap">${verbo} ${renderMinutes(snap.targetReduction)} \xB7 ${snap.days.length} dia${snap.days.length === 1 ? "" : "s"}</small></span></div>`;
-    if (fresh && snap.todayExit !== null && snap.todayExit !== void 0) {
-      html += `<div class="a-row warn"><span class="a-lbl">Hoje</span><span class="a-val warn">Saia at\xE9 ${renderClock(snap.todayExit)}<small class="a-cap">${snap.direction === "early" ? "\u2212" : "+"}${renderMinutes(snap.todayAdjustment || 0)} no dia</small></span></div>`;
+    const effectiveTodayExit = bankTodayExit !== void 0 ? bankTodayExit : snap.todayExit;
+    if (fresh && effectiveTodayExit !== null && effectiveTodayExit !== void 0) {
+      html += `<div class="a-row warn"><span class="a-lbl">Hoje</span><span class="a-val warn">Saia at\xE9 ${renderClock(effectiveTodayExit)}<small class="a-cap">${snap.direction === "early" ? "\u2212" : "+"}${renderMinutes(snap.todayAdjustment || 0)} no dia</small></span></div>`;
     } else if (fresh && snap.todayAdjustment) {
       html += `<div class="a-row infos"><span class="a-lbl">Hoje</span><span class="a-val neu">${snap.direction === "early" ? "\u2212" : "+"}${renderMinutes(snap.todayAdjustment)} no dia</span></div>`;
     }
@@ -5489,13 +5629,16 @@
     const rerender = () => renderLoggerContainer(vm);
     const alarmConfig = getAlarmConfig();
     const plan = getJourneyPlan();
+    const punches = vm.combinedPunches || [];
     const assistant = buildAssistantPlan({
-      batidas: vm.combinedPunches || [],
+      batidas: punches,
       planMinutes: plan.minutes,
       saldoSemana: vm.weekBalance || 0,
       yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
-    const bankTodayExit = readBankTodayExit(plan.minutes);
+    const exitFinalStep = assistant.schedule?.find((s) => s.id === "exitFinal");
+    const todayPlannedExit = exitFinalStep && exitFinalStep.status !== "done" ? exitFinalStep.time : null;
+    const bankTodayExit = resolveBankTodayExit(readBankPlanSnapshot(), plan.minutes, todayPlannedExit, punches.length);
     const view = {
       assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
       // Fixado numa borda: os 4 horários do dia; a saída final segue a meta
@@ -5508,6 +5651,7 @@
       }),
       dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY2), getDockMini(PERSIST_KEY2)),
       planMinutes: plan.minutes,
+      bankTodayExit,
       zen: !!ConfigStore.get().modoZen
     };
     const keepMinimized = panel.dataset.ahgRendered === "true" && !panel.classList.contains("active");

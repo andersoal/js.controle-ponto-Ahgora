@@ -322,4 +322,45 @@ describe('Logger: pílula fixada com os 4 horários', () => {
 
         setJourneyPlan('p8');
     });
+
+    it('recalcula a saída da meta no Logger quando o intervalo foi maior (ex.: 16:42 -> 18:08 após retorno às 13:38)', async () => {
+        const { setDockEdge } = await import('../../src/shared/ui-components.js');
+        const { STORAGE_KEYS, gmSetJsonCrossOrigin } = await import('../../src/core/storage-adapter.js');
+        const { formatDateKey } = await import('../../src/core/time-utils.js');
+        const { ConfigStore } = await import('../../src/core/config.js');
+        const { setJourneyPlan } = await import('../../src/core/journey-plan.js');
+        ConfigStore.patch({ modoZen: false });
+        setJourneyPlan('p8');
+        document.body.innerHTML = '';
+        setDockEdge('logger-panel', 'top');
+        // Snapshot criado antes do retorno do almoço (quando saída 8h prevista era 17:00 e meta era 17:00 - 00:18 = 16:42).
+        gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, {
+            dateKey: formatDateKey(),
+            planMinutes: 8 * 60,
+            todayPlannedExit: 17 * 60,
+            active: true,
+            targetBalance: 38 * 60,
+            direction: 'early',
+            targetReduction: 90,
+            achievableMinutes: 90,
+            feasible: true,
+            todayExit: 16 * 60 + 42,
+            todayAdjustment: 18,
+            days: [{ dateKey: formatDateKey(), weekdayLabel: 'qui', isToday: true, adjustmentMinutes: 18 }]
+        });
+        // Retorno às 13:38 (intervalo de 2h26): saída normal de 8h passa a 18:26, logo saída da meta passa a 18:26 - 00:18 = 18:08.
+        renderLoggerContainer({
+            combinedLastPunch: '13:38',
+            combinedPunches: ['08:00', '11:12', '13:38'],
+            hasMirrorData: true,
+            mirrorSource: 'truth',
+            pendingLocalHistoryEntries: [],
+            monthHistory: { months: [] },
+            weekBalance: -91
+        });
+        const panel = document.querySelector('#ahg-batida-panel');
+        expect(panel.querySelector('.ahg-as-next-time').textContent).toBe('18:08');
+        expect(panel.textContent).toContain('Saia até 18:08');
+        expect(panel.textContent).not.toContain('16:42');
+    });
 });

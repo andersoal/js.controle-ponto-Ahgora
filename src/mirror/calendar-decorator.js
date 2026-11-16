@@ -118,7 +118,7 @@ const REQUEST_BADGE_TITLES = {
     solicitacao: 'Solicitação de ajuste pendente'
 };
 
-export function updateDayRequestBadge(dayEl, requestType, manualBatidas = []) {
+export function updateDayRequestBadge(dayEl, requestType, manualBatidas = [], pendingRequests = null) {
     if (!dayEl) return;
     if (!requestType) {
         removeDayChild(dayEl, 'ahg-day-request-badge');
@@ -129,7 +129,13 @@ export function updateDayRequestBadge(dayEl, requestType, manualBatidas = []) {
     badge.textContent = REQUEST_BADGE_LABELS[requestType] || '!';
     badge.className = `ahg-day-request-badge ${requestType}`;
     badge.title = REQUEST_BADGE_TITLES[requestType] || '';
-    if (manualBatidas.length > 0) {
+
+    const parts = [];
+    if (pendingRequests?.add?.length > 0) parts.push(`incluir: ${pendingRequests.add.join(', ')}`);
+    if (pendingRequests?.remove?.length > 0) parts.push(`desconsiderar: ${pendingRequests.remove.join(', ')}`);
+    if (parts.length > 0) {
+        badge.title += ` — ${parts.join(' | ')}`;
+    } else if (manualBatidas.length > 0) {
         badge.title += ` — inclusões: ${manualBatidas.join(', ')}`;
     }
 }
@@ -151,7 +157,7 @@ export function decorateCalendarDays(dias, localOverridesByDay = {}, onOpenEdito
         updateDayViolationBadge(dia.dayEl, dia.isFuture ? [] : dia.violations);
         updateDayInconsistencyBadge(dia.dayEl, dia);
         updateDayToleranceMark(dia.dayEl, dia);
-        updateDayRequestBadge(dia.dayEl, dia.requestType, dia.manualBatidas);
+        updateDayRequestBadge(dia.dayEl, dia.requestType, dia.manualBatidas, dia.pendingRequests);
         updateDayManualPunchHighlight(dia.dayEl, dia.manualBatidas);
         updateDayEditButton(dia.dayEl, dia, localOverridesByDay[dia.dateKey], onOpenEditor);
     });

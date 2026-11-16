@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { readDayCellPunches, readDayCellManualPunches, readDayCellRequestType, isDayCellHoliday, parseCalendarDayCell } from '../../src/mirror/dom-scraper.js';
+import {
+    readDayCellPunches,
+    readDayCellManualPunches,
+    readDayCellRequestType,
+    extrairSolicitacoes,
+    parsePendingPunchRequests,
+    applyPendingPunchRequests,
+    isDayCellHoliday,
+    parseCalendarDayCell
+} from '../../src/mirror/dom-scraper.js';
 
 function createCell(html, attrs = {}) {
     const el = document.createElement('div');
@@ -91,5 +100,66 @@ describe('DOM Scraper', () => {
         const dia = parseCalendarDayCell(el, hoje);
         expect(dia.manualBatidas).toEqual(['13:00']);
         expect(dia.requestType).toBe('inclusao');
+    });
+
+    it('extrairSolicitacoes lê $apuracao._data.solicitacoes e retorna {} quando ausente', () => {
+        expect(extrairSolicitacoes(document)).toEqual({});
+        const appEl = document.createElement('div');
+        appEl.className = 'application';
+        appEl.__vue__ = {
+            $apuracao: {
+                _data: {
+                    solicitacoes: {
+                        '2026-11-13': [{ tipo: 'addPunch', estado: 'PENDENTE', addPunch: { hora: '19:00' } }]
+                    }
+                }
+            }
+        };
+        document.body.appendChild(appEl);
+        try {
+            expect(extrairSolicitacoes(document)['2026-11-13']).toHaveLength(1);
+        } finally {
+            appEl.remove();
+        }
+    });
+
+    it('parsePendingPunchRequests separa addPunch e removePunch apenas pendentes', () => {
+        const res = parsePendingPunchRequests([
+            { tipo: 'addPunch', estado: 'PENDENTE', addPunch: { hora: '19:00' } },
+            { tipo: 'removePunch', estado: 'PENDENTE', removePunch: { hora: '19:12' } },
+            { tipo: 'addPunch', estado: 'APROVADO', addPunch: { hora: '12:00' } },
+            { tipo: 'removePunch', estado: 'RECUSADO', removePunch: { hora: '07:37' } },
+            { tipo: 'abono', estado: 'PENDENTE' }
+        ]);
+        expect(res).toEqual({ add: ['19:00'], remove: ['19:12'] });
+    });
+
+    it('applyPendingPunchRequests desconsidera e inclui batidas ordenando cronologicamente', () => {
+        const adjusted = applyPendingPunchRequests(
+            ['07:37', '13:09', '14:32', '19:12'],
+            { add: ['19:00'], remove: ['19:12'] }
+        );
+        expect(adjusted).toEqual(['07:37', '13:09', '14:32', '19:00']);
+    });
+
+    it('parseCalendarDayCell ajusta batidas e define requestType ambos com solicitações pendentes', () => {
+        const hoje = new Date(2026, 10, 14);
+        const el = createCell(`
+            <div class="icon-attach"><i class="v-icon material-icons theme--light warning--text">mode_comment</i></div>
+            <span class="batida original">07:37</span>
+            <span class="batida original">13:09</span>
+            <span class="batida original">14:32</span>
+            <span class="batida original">19:12</span>
+        `, { 'data-date': '2026-11-13' });
+        const solicitacoes = {
+            '2026-11-13': [
+                { tipo: 'addPunch', estado: 'PENDENTE', addPunch: { hora: '19:00' } },
+                { tipo: 'removePunch', estado: 'PENDENTE', removePunch: { hora: '19:12' } }
+            ]
+        };
+        const dia = parseCalendarDayCell(el, hoje, solicitacoes);
+        expect(dia.batidas).toEqual(['07:37', '13:09', '14:32', '19:00']);
+        expect(dia.requestType).toBe('ambos');
+        expect(dia.pendingRequests).toEqual({ add: ['19:00'], remove: ['19:12'] });
     });
 });

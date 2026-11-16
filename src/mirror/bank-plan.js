@@ -110,6 +110,27 @@ export function workedHolidayCredits(dias = [], hoje = new Date(), multiplier = 
         }));
 }
 
+/**
+ * Calcula o horário de saída de hoje ajustado pela meta do banco de horas
+ * a partir da saída planejada atual da jornada (`todayPlannedExit`).
+ */
+export function computeTodayBankExit({
+    todayPlannedExit = null,
+    direction = null,
+    adjustmentMinutes = null,
+    planMinutes = CONFIG.CARGA_DIARIA,
+    now = null
+} = {}) {
+    if (todayPlannedExit === null || todayPlannedExit === undefined) return null;
+    if (planMinutes > CONFIG.CARGA_DIARIA) return null;
+    if (!direction || adjustmentMinutes === null || adjustmentMinutes === undefined) return null;
+    if (direction === 'early') {
+        const target = todayPlannedExit - adjustmentMinutes;
+        return now !== null && now !== undefined ? Math.max(now, target) : target;
+    }
+    return todayPlannedExit + adjustmentMinutes;
+}
+
 export function effectiveBalance({ officialBalance = null, manualBalance = null, dias = [], hoje = new Date() } = {}) {
     if (officialBalance !== null && officialBalance !== undefined) {
         return { value: officialBalance, source: 'oficial' };
@@ -214,10 +235,14 @@ export function buildBankPlan({
         // embute o excedente no banco de propósito — sugerir ajuste em cima
         // disso (sair bem mais cedo para "reduzir") contradiz a escolha do dia.
         let suggestedExit = null;
-        if (day.isToday && todayPlannedExit !== null && todayPlannedExit !== undefined && planMinutes <= CONFIG.CARGA_DIARIA) {
-            suggestedExit = direction === 'early'
-                ? Math.max(now, todayPlannedExit - allocation)
-                : todayPlannedExit + allocation;
+        if (day.isToday) {
+            suggestedExit = computeTodayBankExit({
+                todayPlannedExit,
+                direction,
+                adjustmentMinutes: allocation,
+                planMinutes,
+                now
+            });
         }
 
         return { ...day, adjustmentMinutes: allocation, suggestedExit };
@@ -245,12 +270,13 @@ export function buildBankPlan({
  * saída sugerida se o usuário já trocou de preset localmente (ela ficaria
  * incoerente até o Mirror recalcular com o preset novo).
  */
-export function buildBankPlanSnapshot(bankPlan, dateKey, planMinutes = null) {
+export function buildBankPlanSnapshot(bankPlan, dateKey, planMinutes = null, todayPlannedExit = null) {
     if (!bankPlan?.active) return { dateKey, active: false };
     const today = bankPlan.days?.find((d) => d.isToday) || null;
     return {
         dateKey,
         planMinutes,
+        todayPlannedExit,
         active: true,
         completed: !!bankPlan.completed,
         noBalance: !!bankPlan.noBalance,

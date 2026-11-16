@@ -18,6 +18,22 @@ export function interjornadaLabel(minutes = CONFIG.DESCANSO_MINIMO) {
     return `Intervalo ${amount}`;
 }
 
+/** Formata duração de intervalo intrajornada derivada de CONFIG (ex.: 30 -> "30min", 60 -> "1h", 210 -> "3h30"). */
+export function formatIntervalDuration(minutes) {
+    if (minutes < 60) return `${minutes}min`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, '0')}`;
+}
+
+function resolveIntervalBounds(assistant) {
+    return {
+        recommended: formatIntervalDuration(assistant?.intervalGuide?.recommended ?? 60),
+        min: formatIntervalDuration(assistant?.intervalGuide?.min ?? CONFIG.INTERVALO_MINIMO),
+        max: formatIntervalDuration(assistant?.intervalGuide?.max ?? CONFIG.INTERVALO_MAXIMO)
+    };
+}
+
 const STAGE_TITLES = {
     entry: 'Próxima batida — Entrada',
     interval: 'Próxima batida — Saída p/ intervalo',
@@ -96,18 +112,41 @@ function buildNextDayEntryHtml(assistant, alarmConfig) {
 
 function buildScheduleHtml(assistant, alarmConfig) {
     if (!assistant.schedule?.length) return '';
+    const bounds = resolveIntervalBounds(assistant);
     const steps = assistant.schedule.map((step) => {
         const stepIcon = step.status === 'done'
             ? icon('check', { size: 11 })
             : step.status === 'next' ? icon('chevron-right', { size: 11 }) : icon('dot', { size: 11 });
-        const calendar = step.status === 'done' ? '' : buildCalendarLinksHtml(step, alarmConfig);
+        const isActiveReturn = step.id === 'return' && step.status === 'next';
+        const stepLabel = isActiveReturn ? `${step.label} · ${bounds.recommended}` : step.label;
+        const calendar = step.status === 'done'
+            ? ''
+            : buildCalendarLinksHtml(isActiveReturn ? { ...step, label: `${step.label} (${bounds.recommended})` } : step, alarmConfig);
+        let boundsRowsHtml = '';
+        if (isActiveReturn && step.windowMin !== null && step.windowMax !== null) {
+            const minCal = buildCalendarLinksHtml({ label: `Retorno mín (${bounds.min})`, time: step.windowMin }, alarmConfig);
+            const maxCal = buildCalendarLinksHtml({ label: `Retorno máx (${bounds.max})`, time: step.windowMax }, alarmConfig);
+            boundsRowsHtml = `
+        <div class="ahg-as-step-bound" data-bound="min" title="Intervalo mínimo intrajornada (${escapeHtml(bounds.min)} — BR-002)">
+            <span class="ahg-as-step-icon" aria-hidden="true">↳</span>
+            <span class="ahg-as-step-label">mín ${escapeHtml(bounds.min)}</span>
+            <span class="ahg-as-step-time">${renderClock(step.windowMin)}</span>
+            <span class="ahg-as-step-cal">${minCal}</span>
+        </div>
+        <div class="ahg-as-step-bound" data-bound="max" title="Intervalo máximo intrajornada (${escapeHtml(bounds.max)} — BR-003)">
+            <span class="ahg-as-step-icon" aria-hidden="true">↳</span>
+            <span class="ahg-as-step-label">máx ${escapeHtml(bounds.max)}</span>
+            <span class="ahg-as-step-time">${renderClock(step.windowMax)}</span>
+            <span class="ahg-as-step-cal">${maxCal}</span>
+        </div>`;
+        }
         return `
         <div class="ahg-as-step ${step.status}">
             <span class="ahg-as-step-icon">${stepIcon}</span>
-            <span class="ahg-as-step-label">${escapeHtml(step.label)}</span>
+            <span class="ahg-as-step-label">${escapeHtml(stepLabel)}</span>
             <span class="ahg-as-step-time">${renderClock(step.time)}</span>
             <span class="ahg-as-step-cal">${calendar}</span>
-        </div>`;
+        </div>${boundsRowsHtml}`;
     }).join('');
     return `<div class="ahg-as-schedule">${steps}</div>`;
 }
@@ -138,6 +177,11 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
 
     let body = '';
     if (headlineNext) {
+        const isReturnStage = headlineNext.id === 'return';
+        const bounds = isReturnStage ? resolveIntervalBounds(assistant) : null;
+        const labelSuffix = hasBankOverride
+            ? ' · meta'
+            : (isReturnStage ? ` ${bounds.recommended} · mín ${bounds.min} · máx ${bounds.max}` : '');
         const windowHtml = headlineNext.windowMin !== null || headlineNext.windowMax !== null
             ? `<div class="ahg-as-next-window">janela ${renderClock(headlineNext.windowMin)} – ${renderClock(headlineNext.windowMax)}</div>`
             : '';
@@ -148,7 +192,7 @@ export function buildAssistantCardHtml(assistant, plan, opts = {}) {
         <div class="ahg-as-next">
             <div class="ahg-as-next-time">${renderClock(headlineNext.time)}</div>
             <div class="ahg-as-next-info">
-                <span class="ahg-as-next-label">${escapeHtml(headlineNext.label)}${hasBankOverride ? ' · meta' : ''}</span>
+                <span class="ahg-as-next-label">${escapeHtml(headlineNext.label)}${escapeHtml(labelSuffix)}</span>
                 ${windowHtml}
                 ${normalHtml}
             </div>

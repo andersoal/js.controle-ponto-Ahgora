@@ -119,7 +119,7 @@ async function runMirrorTests(browser) {
 
   // Assistente de fluxo de batidas lidera o painel.
   await assert('Assistente de fluxo renderizado', await page.locator('#ahg-panel #ahg-assistant').count() === 1);
-  await assert('Toggle de preset 8h/10h existe', await page.locator('#ahg-panel .ahg-as-preset').count() === 2);
+  await assert('Toggle de preset 8h/10h existe', await page.locator('#ahg-panel .ahg-as-preset[data-preset]').count() === 2);
   await assert('Visão semanal renderizada', await page.locator('#ahg-week-view').count() === 1);
 
   // FAB do espelho existe.
@@ -165,9 +165,9 @@ async function runBatidaTests(browser) {
   const panelText = await page.locator('#ahg-batida-panel').textContent();
   await assert('Overlay de batida abriu', panelText.length > 0);
   await assert('Overlay mostra última batida', panelText.includes('Última batida'));
-  await assert('Overlay mostra histórico recente', panelText.includes('Histórico recente'));
+  await assert('Overlay mostra histórico', await page.locator('#ahg-batida-panel #ahg-logger-history').count() === 1);
   await assert('Assistente presente no logger', await page.locator('#ahg-batida-panel #ahg-assistant').count() === 1);
-  await assert('Logger indica a fonte dos dados', await page.locator('#ahg-logger-source').count() === 1);
+  await assert('Logger indica a fonte dos dados', await page.locator('#ahg-batida-panel #ahg-logger-open-mirror .ahg-sync-dot').count() === 1);
 
   await context.close();
 }
@@ -202,7 +202,7 @@ async function runInteracaoTests(browser) {
   // Preset de jornada: alterna para 10h e verifica replanejamento persistido.
   await page.click('#ahg-panel .ahg-as-preset[data-preset="p10"]');
   await page.waitForTimeout(300);
-  const activePreset = await page.locator('#ahg-panel .ahg-as-preset.active').getAttribute('data-preset');
+  const activePreset = await page.locator('#ahg-panel .ahg-as-preset[data-preset].active').getAttribute('data-preset');
   await assert('Preset 10h ativa com um toque', activePreset === 'p10');
 
   // Detalhes mensais: expande a seção colapsada, clica no botão e verifica modal.

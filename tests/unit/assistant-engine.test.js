@@ -99,6 +99,7 @@ describe('AssistantEngine — buildAssistantPlan', () => {
             expect(plan.next.time).toBe(min(13, 0));
             expect(plan.next.windowMin).toBe(min(12, 30));
             expect(plan.next.windowMax).toBe(min(15, 30));
+            expect(plan.intervalGuide).toEqual({ recommended: 60, min: 30, max: 210 });
         });
 
         it('TC-BR002: intervalo mínimo 30min é hard-block (sugestão nunca antes)', () => {

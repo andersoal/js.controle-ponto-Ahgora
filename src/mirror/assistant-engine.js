@@ -312,7 +312,12 @@ export function buildAssistantPlan({
         idealExit,
         workedPlanned,
         nextDayEntry,
-        nextEntryForecast
+        nextEntryForecast,
+        intervalGuide: {
+            recommended: interval,
+            min: CONFIG.INTERVALO_MINIMO,
+            max: CONFIG.INTERVALO_MAXIMO
+        }
     };
 }
 

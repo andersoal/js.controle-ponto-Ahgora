@@ -24,6 +24,7 @@ import {
 import { clearDayLocalHistory, getPunchHistory, setPunchHistory } from './punch-history.js';
 import { getJourneyPlan, setJourneyPlan } from '../core/journey-plan.js';
 import { buildAssistantPlan } from '../mirror/assistant-engine.js';
+import { computeTodayBankExit } from '../mirror/bank-plan.js';
 import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml } from '../shared/assistant-card.js';
 import {
     applyPrivacyState,
@@ -202,7 +203,7 @@ export function buildLoggerHtml(vm, view = {}) {
         html += `<div class="a-row infos" title="Banco de horas total (inclui meses anteriores) — ${bankHint}"><span class="a-lbl">Banco total</span><span class="a-val ${state.bankBalance >= 0 ? 'pos' : 'neg'}">${renderMinutes(state.bankBalance)}<small class="a-cap">${bankHint}</small></span></div>`;
     }
 
-    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl(), view.planMinutes);
+    html += buildBankGoalHtml(readBankPlanSnapshot(), view.mirrorUrl || buildMirrorUrl(), view.planMinutes, view.bankTodayExit);
     html += buildHistoryHtml(state.monthHistory);
 
     html += `<hr class="a-div"><div class="a-sec">Alarme</div>
@@ -230,9 +231,26 @@ function isBankSnapshotFresh(snap, planMinutes) {
     return snap.planMinutes === planMinutes;
 }
 
-function readBankTodayExit(planMinutes) {
-    const snap = readBankPlanSnapshot();
-    return isBankSnapshotFresh(snap, planMinutes) ? snap.todayExit ?? null : null;
+/**
+ * Recalcula a saída sugerida pela meta de banco de horas quando as batidas de
+ * hoje (ex.: retorno de intervalo mais longo) alteraram a última saída normal
+ * (`todayPlannedExit`) em relação ao snapshot publicado pelo Mirror.
+ */
+function resolveBankTodayExit(snap, planMinutes, todayPlannedExit, punchesCount = 0) {
+    if (!isBankSnapshotFresh(snap, planMinutes)) return null;
+    if (todayPlannedExit === null || todayPlannedExit === undefined) return null;
+    const plannedChanged = snap.todayPlannedExit !== undefined && snap.todayPlannedExit !== null
+        ? snap.todayPlannedExit !== todayPlannedExit
+        : punchesCount >= 2;
+    if (plannedChanged && snap.direction && snap.todayAdjustment !== null && snap.todayAdjustment !== undefined) {
+        return computeTodayBankExit({
+            todayPlannedExit,
+            direction: snap.direction,
+            adjustmentMinutes: snap.todayAdjustment,
+            planMinutes
+        });
+    }
+    return snap.todayExit ?? null;
 }
 
 /**
@@ -240,7 +258,7 @@ function readBankTodayExit(planMinutes) {
  * dos dias do mês); aqui só o resumo publicado. De outro dia (ou outro
  * preset): mostra a meta, mas sem a saída de hoje, pedindo para abrir o espelho.
  */
-function buildBankGoalHtml(snap, mirrorUrl, planMinutes) {
+function buildBankGoalHtml(snap, mirrorUrl, planMinutes, bankTodayExit) {
     if (!snap?.active) return '';
     const fresh = isBankSnapshotFresh(snap, planMinutes);
     let html = `<hr class="a-div"><div class="a-sec ahg-sec-action">Meta do banco</div>`;
@@ -252,8 +270,9 @@ function buildBankGoalHtml(snap, mirrorUrl, planMinutes) {
     }
     const verbo = snap.direction === 'early' ? 'sair mais cedo' : 'ficar a mais';
     html += `<div class="a-row infos"><span class="a-lbl">${icon('target')} Objetivo</span><span class="a-val ${(snap.targetBalance ?? 0) >= 0 ? 'pos' : 'neg'}">${renderMinutes(snap.targetBalance)}<small class="a-cap">${verbo} ${renderMinutes(snap.targetReduction)} · ${snap.days.length} dia${snap.days.length === 1 ? '' : 's'}</small></span></div>`;
-    if (fresh && snap.todayExit !== null && snap.todayExit !== undefined) {
-        html += `<div class="a-row warn"><span class="a-lbl">Hoje</span><span class="a-val warn">Saia até ${renderClock(snap.todayExit)}<small class="a-cap">${snap.direction === 'early' ? '−' : '+'}${renderMinutes(snap.todayAdjustment || 0)} no dia</small></span></div>`;
+    const effectiveTodayExit = bankTodayExit !== undefined ? bankTodayExit : snap.todayExit;
+    if (fresh && effectiveTodayExit !== null && effectiveTodayExit !== undefined) {
+        html += `<div class="a-row warn"><span class="a-lbl">Hoje</span><span class="a-val warn">Saia até ${renderClock(effectiveTodayExit)}<small class="a-cap">${snap.direction === 'early' ? '−' : '+'}${renderMinutes(snap.todayAdjustment || 0)} no dia</small></span></div>`;
     } else if (fresh && snap.todayAdjustment) {
         html += `<div class="a-row infos"><span class="a-lbl">Hoje</span><span class="a-val neu">${snap.direction === 'early' ? '−' : '+'}${renderMinutes(snap.todayAdjustment)} no dia</span></div>`;
     }
@@ -273,13 +292,16 @@ export function renderLoggerContainer(vm) {
     const alarmConfig = getAlarmConfig();
 
     const plan = getJourneyPlan();
+    const punches = vm.combinedPunches || [];
     const assistant = buildAssistantPlan({
-        batidas: vm.combinedPunches || [],
+        batidas: punches,
         planMinutes: plan.minutes,
         saldoSemana: vm.weekBalance || 0,
         yesterdayLastPunch: vm.yesterdayLastPunch || null
     });
-    const bankTodayExit = readBankTodayExit(plan.minutes);
+    const exitFinalStep = assistant.schedule?.find((s) => s.id === 'exitFinal');
+    const todayPlannedExit = exitFinalStep && exitFinalStep.status !== 'done' ? exitFinalStep.time : null;
+    const bankTodayExit = resolveBankTodayExit(readBankPlanSnapshot(), plan.minutes, todayPlannedExit, punches.length);
     const view = {
         assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),
         // Fixado numa borda: os 4 horários do dia; a saída final segue a meta
@@ -292,6 +314,7 @@ export function renderLoggerContainer(vm) {
         }),
         dockMenuHtml: buildDockMenuHtml(getDockEdge(PERSIST_KEY), getDockMini(PERSIST_KEY)),
         planMinutes: plan.minutes,
+        bankTodayExit,
         zen: !!ConfigStore.get().modoZen
     };
 

@@ -54,6 +54,17 @@ describe('CalendarDecorator', () => {
         expect(badge.title).toContain('13:00');
     });
 
+    it('updateDayRequestBadge detalha incluir e desconsiderar quando pendingRequests está presente', () => {
+        const el = createDayCell();
+        updateDayRequestBadge(el, 'ambos', [], { add: ['19:00'], remove: ['19:12'] });
+        const badge = el.querySelector('.ahg-day-request-badge');
+        expect(badge).not.toBeNull();
+        expect(badge.textContent).toBe('±');
+        expect(badge.classList.contains('ambos')).toBe(true);
+        expect(badge.title).toContain('incluir: 19:00');
+        expect(badge.title).toContain('desconsiderar: 19:12');
+    });
+
     it('updateDayRequestBadge remove badge quando requestType é null', () => {
         const el = createDayCell();
         updateDayRequestBadge(el, 'exclusao');

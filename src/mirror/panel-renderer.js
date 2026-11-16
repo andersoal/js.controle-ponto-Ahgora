@@ -35,7 +35,7 @@ import { openPunchEditor } from './punch-editor.js';
 import { getAlarmConfig } from '../logger/alarm-engine.js';
 import { getJourneyPlan, setJourneyPlan } from '../core/journey-plan.js';
 import { buildAssistantPlan, buildWeekPlan } from './assistant-engine.js';
-import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml } from '../shared/assistant-card.js';
+import { bindAssistantCard, buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml, formatIntervalDuration } from '../shared/assistant-card.js';
 import {
     buildBankPlan,
     buildBankPlanSnapshot,
@@ -184,7 +184,7 @@ export function buildPanelHtml(resumo, cfg, view = {}) {
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-day-details"><summary class="a-sec">Hoje em detalhe</summary>`;
     html += buildShiftPairsHtml(r.turnos);
     if (r.retornoMinimo) {
-        html += `<div class="a-row infos"><span class="a-lbl">${icon('pause')} Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} → ${renderClock(r.retornoMaximo)}</span></div>`;
+        html += `<div class="a-row infos"><span class="a-lbl">${icon('pause')} Intrajornada</span><span class="a-val neu">${renderClock(r.retornoMinimo)} → ${renderClock(r.retornoMaximo)}<small class="a-cap">mín ${formatIntervalDuration(CONFIG.INTERVALO_MINIMO)} · rec 1h · máx ${formatIntervalDuration(CONFIG.INTERVALO_MAXIMO)}</small></span></div>`;
     }
     html += `<div class="a-row ${r.interjornada?.podeBater ? 'ok' : 'warn'}"><span class="a-lbl">${icon('moon')} Interjornada</span><span class="a-val ${r.interjornada?.podeBater ? 'pos' : 'warn'}">${renderText(r.interjornada?.texto)}<small class="a-cap">${r.interjornada?.proximaPermitida ? 'mínimo: ' + renderText(r.interjornada.proximaPermitida) : ''}</small></span></div>`;
     html += `<div class="a-sec">Marcos do dia</div>
@@ -276,7 +276,7 @@ export function renderMirrorPanel(resumo) {
     // O plano do banco só existe no Mirror: publica a saída de hoje para a
     // pílula do Logger (null quando não há meta).
     const bankTodayExit = bankPlan.days?.find((d) => d.isToday)?.suggestedExit ?? null;
-    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null, plan.minutes));
+    gmSetJsonCrossOrigin(STORAGE_KEYS.BANK_PLAN_SNAPSHOT, buildBankPlanSnapshot(bankPlan, resumo.hoje?.dateKey || null, plan.minutes, todayPlannedExit));
 
     const view = {
         assistantHtml: buildAssistantCardHtml(assistant, plan, { alarmConfig, bankExit: bankTodayExit }),

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { buildAssistantPlan, buildWeekPlan } from '../../src/mirror/assistant-engine.js';
-import { buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml, interjornadaLabel } from '../../src/shared/assistant-card.js';
+import { buildAssistantCardHtml, buildDockBarHtml, buildWeekViewHtml, formatIntervalDuration, interjornadaLabel } from '../../src/shared/assistant-card.js';
 import { setPrivacyHidden } from '../../src/core/privacy-engine.js';
 
 // Simula o storage do Tampermonkey (privacidade lê GM_getValue).
@@ -92,6 +92,51 @@ describe('AssistantCard', () => {
         });
         expect(el.textContent).toContain('encerrada');
         expect(el.textContent).toContain('04:00'); // 17:00 + 11h
+    });
+
+    it('na 2ª batida (return) exibe Retorno 1h · mín 30min · máx 3h30 e linhas mín/máx com links de calendário', () => {
+        const { el } = makeCard({
+            engineInput: { batidas: ['08:00', '11:12'], now: min(11, 13) },
+            opts: { alarmConfig: { quickGcalEnabled: true, quickCalendarProvider: 'both', quickGcalOffsetMinutes: 5 } }
+        });
+        expect(el.querySelector('.ahg-as-next-time').textContent).toContain('12:12');
+        expect(el.querySelector('.ahg-as-next-label').textContent).toBe('Retorno 1h · mín 30min · máx 3h30');
+        expect(el.querySelector('.ahg-as-next-window').textContent).toContain('janela 11:42 – 14:42');
+
+        const returnStep = el.querySelector('.ahg-as-step.next');
+        expect(returnStep.querySelector('.ahg-as-step-label').textContent).toBe('Retorno · 1h');
+        expect(returnStep.querySelector('.ahg-as-step-time').textContent).toBe('12:12');
+        expect(returnStep.querySelectorAll('a.ahg-as-cal').length).toBe(2);
+
+        const bounds = el.querySelectorAll('.ahg-as-step-bound');
+        expect(bounds.length).toBe(2);
+        expect(bounds[0].getAttribute('data-bound')).toBe('min');
+        expect(bounds[0].querySelector('.ahg-as-step-label').textContent).toBe('mín 30min');
+        expect(bounds[0].querySelector('.ahg-as-step-time').textContent).toBe('11:42');
+        expect(bounds[0].querySelectorAll('a.ahg-as-cal').length).toBe(2);
+
+        expect(bounds[1].getAttribute('data-bound')).toBe('max');
+        expect(bounds[1].querySelector('.ahg-as-step-label').textContent).toBe('máx 3h30');
+        expect(bounds[1].querySelector('.ahg-as-step-time').textContent).toBe('14:42');
+        expect(bounds[1].querySelectorAll('a.ahg-as-cal').length).toBe(2);
+    });
+
+    it('antes ou depois da 2ª batida não exibe as linhas extras de mín/máx do intervalo no cronograma', () => {
+        const { el: beforeEl } = makeCard({
+            engineInput: { batidas: ['08:00'], now: min(9, 0) }
+        });
+        expect(beforeEl.querySelectorAll('.ahg-as-step-bound').length).toBe(0);
+
+        const { el: afterEl } = makeCard({
+            engineInput: { batidas: ['08:00', '11:12', '12:12'], now: min(13, 0) }
+        });
+        expect(afterEl.querySelectorAll('.ahg-as-step-bound').length).toBe(0);
+    });
+
+    it('formatIntervalDuration deriva rótulos de duração de CONFIG', () => {
+        expect(formatIntervalDuration(30)).toBe('30min');
+        expect(formatIntervalDuration(60)).toBe('1h');
+        expect(formatIntervalDuration(210)).toBe('3h30');
     });
 });
 
