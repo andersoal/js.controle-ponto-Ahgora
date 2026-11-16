@@ -1,0 +1,19 @@
+{
+  "name": "tests",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node smoke.test.js",
+    "qa:assisted": "node e2e/assisted-qa.js",
+    "qa:assisted:auto": "node e2e/assisted-qa.js --auto",
+    "qa:assisted:local": "node e2e/assisted-qa.js --auto --local"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}
