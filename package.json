@@ -1,0 +1,26 @@
+{
+  "name": "js.controle-ponto-ahgora",
+  "version": "3.1.1",
+  "description": "Userscript Tampermonkey para painel inteligente do Ahgora",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "cd tests && npm test",
+    "qa:assisted": "cd tests && npm run qa:assisted",
+    "qa:assisted:auto": "cd tests && npm run qa:assisted:auto",
+    "qa:assisted:local": "cd tests && npm run qa:assisted:local"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "tampermonkey",
+    "userscript",
+    "ahgora"
+  ],
+  "license": "ISC"
+}
