@@ -18,6 +18,7 @@
 import { CONFIG, ConfigStore } from '../core/config.js';
 import { nowMin, sameWeek, toMin } from '../core/time-utils.js';
 import { saldoComTolerancia } from './calculator.js';
+import { exitAtBudget, returnWindow, shiftExitWindow } from './shift-windows.js';
 
 const WEEKDAY_LABELS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 
@@ -111,8 +112,8 @@ export function buildAssistantPlan({
 
     /** Aplica os tetos de turno contínuo (BR-004) e dia máximo (BR-005) a uma saída. */
     function capExit(desired, shiftStart, workedBefore, appliesTo) {
-        const shiftCap = shiftStart + CONFIG.MAX_HORAS_TURNO;
-        const dayCap = shiftStart + (CONFIG.MAX_HORAS_DIA - workedBefore);
+        const shiftCap = exitAtBudget(shiftStart, 0, CONFIG.MAX_HORAS_TURNO);
+        const dayCap = exitAtBudget(shiftStart, workedBefore, CONFIG.MAX_HORAS_DIA);
         const capped = Math.min(desired, shiftCap, dayCap);
         if (capped < desired) {
             const binding = dayCap <= shiftCap ? 'BR-005' : 'BR-004';
@@ -161,8 +162,7 @@ export function buildAssistantPlan({
         stage = 'interval';
         const entrada = toMin(batidas[0]);
         const shift1 = balancedFirstShift(planMinutes);
-        const windowMin = entrada + CONFIG.MIN_TURNO_COM_INTERVALO;
-        const windowMax = entrada + CONFIG.MAX_HORAS_TURNO;
+        const { min: windowMin, max: windowMax } = shiftExitWindow(entrada);
         const exit1 = clamp(entrada + shift1, windowMin, windowMax);
         const returnTime = exit1 + interval;
         let exitFinal = returnTime + (planMinutes - shift1);
@@ -181,8 +181,7 @@ export function buildAssistantPlan({
         const entrada = toMin(batidas[0]);
         const saida1 = toMin(batidas[1]);
         const turno1 = saida1 - entrada;
-        const windowMin = saida1 + CONFIG.INTERVALO_MINIMO;
-        const windowMax = saida1 + CONFIG.INTERVALO_MAXIMO;
+        const { min: windowMin, max: windowMax } = returnWindow(saida1);
         // BR-002 hard-block: nunca antes do mínimo; BR-003 warning-only: não clampa.
         const returnTime = Math.max(saida1 + interval, windowMin);
         let exitFinal = returnTime + (planMinutes - turno1);

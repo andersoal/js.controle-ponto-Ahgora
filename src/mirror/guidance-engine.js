@@ -5,6 +5,7 @@
 
 import { CONFIG } from '../core/config.js';
 import { fmtHour, toMin } from '../core/time-utils.js';
+import { exitAtBudget, returnWindow, shiftExitWindow } from './shift-windows.js';
 
 export function buildPunchGuidance(batidas, saldoSemana = 0) {
     const guidance = {
@@ -42,14 +43,15 @@ export function buildPunchGuidance(batidas, saldoSemana = 0) {
 
     if (batidas.length === 1) {
         const entrada = toMin(batidas[0]);
+        const exitWindow = shiftExitWindow(entrada);
         guidance.stage = 'interval';
         guidance.title = 'Intervalo';
-        guidance.firstExitMin = entrada + CONFIG.MIN_TURNO_COM_INTERVALO;
-        guidance.firstExitMax = entrada + CONFIG.MAX_HORAS_TURNO;
+        guidance.firstExitMin = exitWindow.min;
+        guidance.firstExitMax = exitWindow.max;
         guidance.firstTurn4h = entrada + 4 * 60;
         guidance.firstTurn6h = entrada + CONFIG.MAX_HORAS_TURNO;
-        guidance.day8h = entrada + CONFIG.CARGA_DIARIA;
-        guidance.day10h = entrada + CONFIG.MAX_HORAS_DIA;
+        guidance.day8h = exitAtBudget(entrada, 0, CONFIG.CARGA_DIARIA);
+        guidance.day10h = exitAtBudget(entrada, 0, CONFIG.MAX_HORAS_DIA);
         guidance.idealTime = guidance.day8h - saldoSemana;
         guidance.minTime = guidance.firstExitMin;
         guidance.maxTime = guidance.firstExitMax;
@@ -62,14 +64,15 @@ export function buildPunchGuidance(batidas, saldoSemana = 0) {
         const trabalhadoTurno1 = saida1 - entrada;
         guidance.stage = 'return';
         guidance.title = 'Retorno';
-        guidance.intervalMin = saida1 + CONFIG.INTERVALO_MINIMO;
-        guidance.intervalMax = saida1 + CONFIG.INTERVALO_MAXIMO;
+        const retorno = returnWindow(saida1);
+        guidance.intervalMin = retorno.min;
+        guidance.intervalMax = retorno.max;
         guidance.secondEntryMin = guidance.intervalMin;
         guidance.secondEntryMax = guidance.intervalMax;
         guidance.minTime = guidance.intervalMin;
         guidance.maxTime = guidance.intervalMax;
-        guidance.day8h = saida1 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
-        guidance.day10h = saida1 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
+        guidance.day8h = exitAtBudget(saida1, trabalhadoTurno1, CONFIG.CARGA_DIARIA);
+        guidance.day10h = exitAtBudget(saida1, trabalhadoTurno1, CONFIG.MAX_HORAS_DIA);
         guidance.idealTime = guidance.day8h - saldoSemana;
         guidance.summary = `Retorno entre ${fmtHour(guidance.intervalMin)} e ${fmtHour(guidance.intervalMax)}`;
         guidance.copyTarget = guidance.intervalMin;
@@ -79,11 +82,12 @@ export function buildPunchGuidance(batidas, saldoSemana = 0) {
         const trabalhadoTurno1 = toMin(batidas[1]) - toMin(batidas[0]);
         guidance.stage = 'exit';
         guidance.title = 'Saída';
-        guidance.day8h = entrada2 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
-        guidance.day10h = entrada2 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
+        guidance.day8h = exitAtBudget(entrada2, trabalhadoTurno1, CONFIG.CARGA_DIARIA);
+        guidance.day10h = exitAtBudget(entrada2, trabalhadoTurno1, CONFIG.MAX_HORAS_DIA);
         guidance.idealTime = guidance.day8h - saldoSemana;
-        guidance.minTime = entrada2 + CONFIG.MIN_TURNO_COM_INTERVALO;
-        guidance.maxTime = entrada2 + CONFIG.MAX_HORAS_TURNO;
+        const exitWindow3 = shiftExitWindow(entrada2);
+        guidance.minTime = exitWindow3.min;
+        guidance.maxTime = exitWindow3.max;
         guidance.secondTurn4h = entrada2 + 4 * 60;
         guidance.secondTurn6h = entrada2 + CONFIG.MAX_HORAS_TURNO;
         guidance.summary = `Saída 8h: ${fmtHour(guidance.day8h)} · 10h: ${fmtHour(guidance.day10h)}`;

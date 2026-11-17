@@ -32,30 +32,36 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
 - mode-dependent: depende do modo configurado.
 - informational: aviso sem alterar calculo.
 
-### Regras
-| ID | Regra | Enforcement | Flag principal | Parametros/flags padrao | Caso de teste |
-| --- | --- | --- | --- | --- | --- |
-| BR-001 | Interjornada minima 11h | hard-block | ENFORCE_INTERJORNADA_MIN | INTERJORNADA_MIN_MINUTES=660 | TC-BR001-01 |
-| BR-002 | Intrajornada minima 30m | hard-block | ENFORCE_INTRAJORNADA_MIN | INTRAJORNADA_MIN_MINUTES=30 | TC-BR002-01 |
-| BR-003 | Intrajornada maxima 3h30 | warning-only | ENFORCE_INTRAJORNADA_MAX | INTRAJORNADA_MAX_MINUTES=210 | TC-BR003-01 |
-| BR-004 | Turno unico maximo 6h | mixed | ENFORCE_MAX_CONTINUOUS_SHIFT | MAX_CONTINUOUS_SHIFT_MINUTES=360 | TC-BR004-01 |
-| BR-005 | Jornada diaria maxima 10h | hard-block | ENFORCE_MAX_DAILY_MINUTES | MAX_DAILY_MINUTES=600 | TC-BR005-01 |
-| BR-006 | Maximo 2 turnos por dia sem justificativa | hard-block | ENFORCE_MAX_TURNS_PER_DAY | MAX_TURNS_PER_DAY=2 | TC-BR006-01 |
-| BR-007 | Limite semanal de horas extras | warning-only | ENFORCE_WEEKLY_OVERTIME_CAP | ENFORCE_WEEKLY_OVERTIME_CAP=true | TC-BR007-01 |
-| BR-008 | Descanso semanal 24h apos 6 dias | warning-only | ENFORCE_WEEKLY_REST_24H | ENFORCE_WEEKLY_REST_24H=true | TC-BR008-01 |
-| BR-009 | Descanso dominical mensal | warning-only | ENFORCE_MONTHLY_SUNDAY_REST | ENFORCE_MONTHLY_SUNDAY_REST=true | TC-BR009-01 |
-| BR-010 | Sobreaviso janela maxima 24h | mode-dependent | ENABLE_ONCALL_RULES | ENABLE_ONCALL_RULES=true | TC-BR010-01 |
-| BR-011 | Sobreaviso acionamento maximo 10h | mode-dependent | ENABLE_ONCALL_RULES | ENABLE_ONCALL_RULES=true | TC-BR011-01 |
-| BR-012 | Descanso pos-acionamento 11h | hard-block | ENFORCE_POST_ONCALL_REST | ENFORCE_POST_ONCALL_REST=true | TC-BR012-01 |
-| BR-013 | Aviso de fechamento de folha | informational | SHOW_PAYROLL_CUTOFF_NOTICE | SHOW_PAYROLL_CUTOFF_NOTICE=true | TC-BR013-01 |
-| BR-014 | Aviso de folga/abono | informational | SHOW_COMP_LEAVE_NOTICE | SHOW_COMP_LEAVE_NOTICE=true | TC-BR014-01 |
-| BR-015 | Aviso de ausencias | informational | SHOW_ABSENCE_PROCESS_NOTICE | SHOW_ABSENCE_PROCESS_NOTICE=true | TC-BR015-01 |
+### Regras implementadas
+Config = constante real em `src/core/config.js` (`CONFIG.*`); nenhuma delas é um boolean `ENFORCE_*`/`ENABLE_*`/`SHOW_*` — a regra está sempre ativa, o valor é o parâmetro. Teste = `it()` correspondente em `tests/unit/assistant-engine.test.js` (prefixo `TC-BRxxx` no nome do teste).
 
-> **Nota — assistente de fluxo (v3.1):** a matriz acima classifica **violações**. O assistente
-> (`src/mirror/assistant-engine.js`) reporta o nível conforme a regra incide **sobre a sugestão**:
-> `hard-block` quando a sugestão foi limitada/movida pela regra; `warning-only` quando a sugestão
-> fica com destaque de risco; `informational` quando nada muda no cálculo (ex.: plano exatamente
-> no teto de 10h). Um mesmo ID pode, portanto, aparecer em níveis diferentes conforme o contexto.
+| ID | Regra | Enforcement | Config | Valor | Caso de teste |
+| --- | --- | --- | --- | --- | --- |
+| BR-001 | Interjornada minima 11h | hard-block | `CONFIG.DESCANSO_MINIMO` | 660 | `TC-BR001: interjornada 11h limita a entrada sugerida` |
+| BR-002 | Intrajornada minima 30m | hard-block | `CONFIG.INTERVALO_MINIMO` | 30 | `TC-BR002: intervalo mínimo 30min é hard-block` |
+| BR-003 | Intrajornada maxima 3h30 | warning-only | `CONFIG.INTERVALO_MAXIMO` | 210 | `TC-BR003: intervalo acima de 3h30 vira destaque de risco` |
+| BR-004 | Turno unico maximo 6h | hard-block | `CONFIG.MAX_HORAS_TURNO` | 360 | `TC-BR004: segundo turno maior que 6h é limitado` |
+| BR-005 | Jornada diaria maxima 10h | mixed (hard-block ao capar a saída; informational quando o plano só encosta no teto) | `CONFIG.MAX_HORAS_DIA` | 600 | `TC-BR005: saída ideal projetada respeita os tetos` / `TC-BR005: plano 10h marca aviso informativo` |
+| BR-006 | Maximo 2 turnos por dia sem justificativa | mixed (warning-only ao abrir 3º turno; hard-block/warning-only acima de 5 batidas conforme o dia estar aberto ou fechado) | `CONFIG.MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA` | 4 (= 2 turnos) | `TC-BR006: 5 batidas exigem justificativa` |
+
+> **Nota — assistente de fluxo (v3.1):** a tabela acima descreve o nível **mais comum** de cada regra; o assistente
+> (`src/mirror/assistant-engine.js`) reporta o nível conforme a regra incide **sobre a sugestão** no contexto do dia —
+> por isso BR-005 e BR-006 estão marcadas `mixed` (o mesmo ID aparece em mais de um nível dependendo do caso).
+
+### Backlog do catálogo (ainda não implementadas)
+As regras abaixo **não têm nenhuma implementação** em `src/` nem teste — descrevem comportamento desejado, não comportamento existente. Portar qualquer uma delas exige implementação própria (motor + config + teste) antes de poder ser movida para a tabela acima.
+
+| ID | Regra pretendida | Enforcement pretendido |
+| --- | --- | --- |
+| BR-007 | Limite semanal de horas extras | warning-only |
+| BR-008 | Descanso semanal 24h apos 6 dias | warning-only |
+| BR-009 | Descanso dominical mensal | warning-only |
+| BR-010 | Sobreaviso janela maxima 24h | mode-dependent |
+| BR-011 | Sobreaviso acionamento maximo 10h | mode-dependent |
+| BR-012 | Descanso pos-acionamento 11h | hard-block |
+| BR-013 | Aviso de fechamento de folha | informational |
+| BR-014 | Aviso de folga/abono | informational |
+| BR-015 | Aviso de ausencias | informational |
 
 ## Configuracao rapida
 - Instalar Tampermonkey.
@@ -81,8 +87,6 @@ Script Tampermonkey para apoiar jornada, saldo e sugestoes operacionais no Ahgor
   - Regras de sobreaviso (on-call: janela maxima 24h, descanso pos-acionamento).
   - Lembrete de entrada e lembrete de almoco configuraveis via notificacao do sistema (`GM_notification`), que funcionam mesmo com a aba em segundo plano.
   - Eleicao de aba lider para evitar notificacoes duplicadas com multiplas abas abertas.
-
-> ATENCAO (achado nao relacionado ao merge, verificado em 2026-11-10): nenhuma das 15 flags de `ENFORCE_*`/`ENABLE_*`/`SHOW_*` do catalogo acima (BR-001 a BR-015) existe hoje em `ahgora-panel.user.js`. O catalogo documenta regras/flags/casos de teste que ainda nao foram implementados no codigo deste fork, o que quebra o gate de "rastreabilidade Regra -> Config -> Teste" exigido pelo AGENTS.md. Nao implementado aqui por estar fora do escopo deste merge; precisa de decisao explicita antes do proximo merge que dependa desse gate.
 
 ## Calendario rapido (Google e Outlook)
 - No painel do logger, os botoes rapidos criam evento com inicio em `horario maximo - offset` e fim no horario maximo calculado para a fase atual.

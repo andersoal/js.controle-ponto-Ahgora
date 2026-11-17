@@ -1413,12 +1413,11 @@
   }
   function getPunchCountHealth(count, { isToday = false } = {}) {
     if (count === 0) {
-      return { level: "ok", icon: "\u2B1C", short: "sem batidas", text: "Sem batidas registradas" };
+      return { level: "ok", short: "sem batidas", text: "Sem batidas registradas" };
     }
     if (count > CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
       return {
         level: "neg",
-        icon: "\u26D4",
         short: `${count} batidas`,
         text: `${count} batidas: acima do limite de ${CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA}`
       };
@@ -1426,7 +1425,6 @@
     if (count === CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
       return {
         level: "warn",
-        icon: "\u{1F4DD}",
         short: "6 batidas",
         text: "6 batidas: permitido com justificativa"
       };
@@ -1434,7 +1432,6 @@
     if (count === 5) {
       return {
         level: "warn",
-        icon: "\u26A0\uFE0F",
         short: "5 batidas",
         text: "5 batidas: justificativa necess\xE1ria"
       };
@@ -1442,15 +1439,14 @@
     if (count % 2 !== 0) {
       return {
         level: isToday ? "warn" : "neg",
-        icon: "\u23F3",
         short: `${count} batidas`,
         text: isToday ? `${count} batidas: jornada aberta, precisa fechar com quantidade par` : `${count} batidas: registro inconsistente (esperado n\xFAmero par)`
       };
     }
     if (count >= 2 && count <= CONFIG.MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA) {
-      return { level: "ok", icon: "\u2705", short: `${count} batidas`, text: `${count} batidas: padr\xE3o v\xE1lido` };
+      return { level: "ok", short: `${count} batidas`, text: `${count} batidas: padr\xE3o v\xE1lido` };
     }
-    return { level: "warn", icon: "\u26A0\uFE0F", short: `${count} batidas`, text: `${count} batidas: fora do padr\xE3o esperado` };
+    return { level: "warn", short: `${count} batidas`, text: `${count} batidas: fora do padr\xE3o esperado` };
   }
   function getWeeklyRestWarning(dias, hoje = /* @__PURE__ */ new Date()) {
     if (!dias || !hoje) return null;
@@ -1952,6 +1948,23 @@
     return buildActivePlanHtml(bankPlan);
   }
 
+  // src/mirror/shift-windows.js
+  function exitAtBudget(anchor, workedBefore, budgetMinutes) {
+    return anchor + (budgetMinutes - workedBefore);
+  }
+  function shiftExitWindow(entrada) {
+    return {
+      min: entrada + CONFIG.MIN_TURNO_COM_INTERVALO,
+      max: entrada + CONFIG.MAX_HORAS_TURNO
+    };
+  }
+  function returnWindow(saida) {
+    return {
+      min: saida + CONFIG.INTERVALO_MINIMO,
+      max: saida + CONFIG.INTERVALO_MAXIMO
+    };
+  }
+
   // src/mirror/guidance-engine.js
   function buildPunchGuidance(batidas, saldoSemana = 0) {
     const guidance = {
@@ -1987,14 +2000,15 @@
     if (!batidas || batidas.length === 0) return guidance;
     if (batidas.length === 1) {
       const entrada = toMin(batidas[0]);
+      const exitWindow = shiftExitWindow(entrada);
       guidance.stage = "interval";
       guidance.title = "Intervalo";
-      guidance.firstExitMin = entrada + CONFIG.MIN_TURNO_COM_INTERVALO;
-      guidance.firstExitMax = entrada + CONFIG.MAX_HORAS_TURNO;
+      guidance.firstExitMin = exitWindow.min;
+      guidance.firstExitMax = exitWindow.max;
       guidance.firstTurn4h = entrada + 4 * 60;
       guidance.firstTurn6h = entrada + CONFIG.MAX_HORAS_TURNO;
-      guidance.day8h = entrada + CONFIG.CARGA_DIARIA;
-      guidance.day10h = entrada + CONFIG.MAX_HORAS_DIA;
+      guidance.day8h = exitAtBudget(entrada, 0, CONFIG.CARGA_DIARIA);
+      guidance.day10h = exitAtBudget(entrada, 0, CONFIG.MAX_HORAS_DIA);
       guidance.idealTime = guidance.day8h - saldoSemana;
       guidance.minTime = guidance.firstExitMin;
       guidance.maxTime = guidance.firstExitMax;
@@ -2007,14 +2021,15 @@
       const trabalhadoTurno1 = saida1 - entrada;
       guidance.stage = "return";
       guidance.title = "Retorno";
-      guidance.intervalMin = saida1 + CONFIG.INTERVALO_MINIMO;
-      guidance.intervalMax = saida1 + CONFIG.INTERVALO_MAXIMO;
+      const retorno = returnWindow(saida1);
+      guidance.intervalMin = retorno.min;
+      guidance.intervalMax = retorno.max;
       guidance.secondEntryMin = guidance.intervalMin;
       guidance.secondEntryMax = guidance.intervalMax;
       guidance.minTime = guidance.intervalMin;
       guidance.maxTime = guidance.intervalMax;
-      guidance.day8h = saida1 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
-      guidance.day10h = saida1 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
+      guidance.day8h = exitAtBudget(saida1, trabalhadoTurno1, CONFIG.CARGA_DIARIA);
+      guidance.day10h = exitAtBudget(saida1, trabalhadoTurno1, CONFIG.MAX_HORAS_DIA);
       guidance.idealTime = guidance.day8h - saldoSemana;
       guidance.summary = `Retorno entre ${fmtHour(guidance.intervalMin)} e ${fmtHour(guidance.intervalMax)}`;
       guidance.copyTarget = guidance.intervalMin;
@@ -2024,11 +2039,12 @@
       const trabalhadoTurno1 = toMin(batidas[1]) - toMin(batidas[0]);
       guidance.stage = "exit";
       guidance.title = "Sa\xEDda";
-      guidance.day8h = entrada2 + (CONFIG.CARGA_DIARIA - trabalhadoTurno1);
-      guidance.day10h = entrada2 + (CONFIG.MAX_HORAS_DIA - trabalhadoTurno1);
+      guidance.day8h = exitAtBudget(entrada2, trabalhadoTurno1, CONFIG.CARGA_DIARIA);
+      guidance.day10h = exitAtBudget(entrada2, trabalhadoTurno1, CONFIG.MAX_HORAS_DIA);
       guidance.idealTime = guidance.day8h - saldoSemana;
-      guidance.minTime = entrada2 + CONFIG.MIN_TURNO_COM_INTERVALO;
-      guidance.maxTime = entrada2 + CONFIG.MAX_HORAS_TURNO;
+      const exitWindow3 = shiftExitWindow(entrada2);
+      guidance.minTime = exitWindow3.min;
+      guidance.maxTime = exitWindow3.max;
       guidance.secondTurn4h = entrada2 + 4 * 60;
       guidance.secondTurn6h = entrada2 + CONFIG.MAX_HORAS_TURNO;
       guidance.summary = `Sa\xEDda 8h: ${fmtHour(guidance.day8h)} \xB7 10h: ${fmtHour(guidance.day10h)}`;
@@ -4126,8 +4142,8 @@
       ));
     }
     function capExit(desired, shiftStart, workedBefore, appliesTo) {
-      const shiftCap = shiftStart + CONFIG.MAX_HORAS_TURNO;
-      const dayCap = shiftStart + (CONFIG.MAX_HORAS_DIA - workedBefore);
+      const shiftCap = exitAtBudget(shiftStart, 0, CONFIG.MAX_HORAS_TURNO);
+      const dayCap = exitAtBudget(shiftStart, workedBefore, CONFIG.MAX_HORAS_DIA);
       const capped = Math.min(desired, shiftCap, dayCap);
       if (capped < desired) {
         const binding = dayCap <= shiftCap ? "BR-005" : "BR-004";
@@ -4167,8 +4183,7 @@
       stage = "interval";
       const entrada = toMin(batidas[0]);
       const shift1 = balancedFirstShift(planMinutes);
-      const windowMin = entrada + CONFIG.MIN_TURNO_COM_INTERVALO;
-      const windowMax = entrada + CONFIG.MAX_HORAS_TURNO;
+      const { min: windowMin, max: windowMax } = shiftExitWindow(entrada);
       const exit1 = clamp(entrada + shift1, windowMin, windowMax);
       const returnTime = exit1 + interval;
       let exitFinal = returnTime + (planMinutes - shift1);
@@ -4185,8 +4200,7 @@
       const entrada = toMin(batidas[0]);
       const saida1 = toMin(batidas[1]);
       const turno1 = saida1 - entrada;
-      const windowMin = saida1 + CONFIG.INTERVALO_MINIMO;
-      const windowMax = saida1 + CONFIG.INTERVALO_MAXIMO;
+      const { min: windowMin, max: windowMax } = returnWindow(saida1);
       const returnTime = Math.max(saida1 + interval, windowMin);
       let exitFinal = returnTime + (planMinutes - turno1);
       const beforeCap = exitFinal;

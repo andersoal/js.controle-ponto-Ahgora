@@ -109,12 +109,11 @@ export function getDayRuleViolations({ batidas, trabalhado }) {
 
 export function getPunchCountHealth(count, { isToday = false } = {}) {
     if (count === 0) {
-        return { level: 'ok', icon: '⬜', short: 'sem batidas', text: 'Sem batidas registradas' };
+        return { level: 'ok', short: 'sem batidas', text: 'Sem batidas registradas' };
     }
     if (count > CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
         return {
             level: 'neg',
-            icon: '⛔',
             short: `${count} batidas`,
             text: `${count} batidas: acima do limite de ${CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA}`
         };
@@ -122,7 +121,6 @@ export function getPunchCountHealth(count, { isToday = false } = {}) {
     if (count === CONFIG.MAX_BATIDAS_DIA_COM_JUSTIFICATIVA) {
         return {
             level: 'warn',
-            icon: '📝',
             short: '6 batidas',
             text: '6 batidas: permitido com justificativa'
         };
@@ -130,7 +128,6 @@ export function getPunchCountHealth(count, { isToday = false } = {}) {
     if (count === 5) {
         return {
             level: 'warn',
-            icon: '⚠️',
             short: '5 batidas',
             text: '5 batidas: justificativa necessária'
         };
@@ -138,7 +135,6 @@ export function getPunchCountHealth(count, { isToday = false } = {}) {
     if (count % 2 !== 0) {
         return {
             level: isToday ? 'warn' : 'neg',
-            icon: '⏳',
             short: `${count} batidas`,
             text: isToday
                 ? `${count} batidas: jornada aberta, precisa fechar com quantidade par`
@@ -146,9 +142,9 @@ export function getPunchCountHealth(count, { isToday = false } = {}) {
         };
     }
     if (count >= 2 && count <= CONFIG.MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA) {
-        return { level: 'ok', icon: '✅', short: `${count} batidas`, text: `${count} batidas: padrão válido` };
+        return { level: 'ok', short: `${count} batidas`, text: `${count} batidas: padrão válido` };
     }
-    return { level: 'warn', icon: '⚠️', short: `${count} batidas`, text: `${count} batidas: fora do padrão esperado` };
+    return { level: 'warn', short: `${count} batidas`, text: `${count} batidas: fora do padrão esperado` };
 }
 
 export function getWeeklyRestWarning(dias, hoje = new Date()) {
