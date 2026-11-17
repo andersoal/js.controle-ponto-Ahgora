@@ -14,6 +14,7 @@ export const STORAGE_KEYS = Object.freeze({
     PANEL_POSITIONS: 'ahgora_panel_positions_v1',
     BANK_GOAL: 'ahgora_bank_goal_v1',
     LOCAL_DAY_PUNCHES: 'ahgora_local_day_punches_v1',
+    LOCAL_DAY_TYPES: 'ahgora_local_day_types_v1',
     PUNCH_HISTORY: 'ahgora_history_v6',
     MIRROR_DAYS: 'ahgora_mirror_days_v1',
     // Resumo do plano da meta de banco de horas (Mirror → Logger).

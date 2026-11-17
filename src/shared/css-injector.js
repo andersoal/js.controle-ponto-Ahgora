@@ -230,6 +230,10 @@ export const CSS_COMPONENTS = `
 
 .ahg-btn-success { border-color: color-mix(in srgb, var(--ahg-ok) 45%, transparent); background: color-mix(in srgb, var(--ahg-ok) 12%, transparent); color: var(--ahg-ok); }
 .ahg-btn-danger { border-color: color-mix(in srgb, var(--ahg-danger) 45%, transparent); background: color-mix(in srgb, var(--ahg-danger) 12%, transparent); color: var(--ahg-danger); }
+.ahg-btn-active { background: var(--ahg-primary-strong); color: #fff; }
+
+.ahg-pe-day-type { display: flex; gap: 4px; margin: 2px 0 6px; }
+.ahg-pe-day-type .ahg-btn { flex: 1; }
 
 .ahg-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 11px; }
 .ahg-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }

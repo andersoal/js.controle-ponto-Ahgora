@@ -45,6 +45,25 @@ export function saveOverridesForDay(dateKey, punches) {
     setLocalDayPunches(overrides);
 }
 
+/** Tipo de dia marcado manualmente: 'abono' (folga/abono) ou 'falta' (ausência). 'normal' não é persistido. */
+export function getLocalDayTypes() {
+    return gmGetJson(STORAGE_KEYS.LOCAL_DAY_TYPES, {});
+}
+
+export function getDayType(dateKey) {
+    return getLocalDayTypes()[dateKey] || 'normal';
+}
+
+export function saveDayType(dateKey, type) {
+    const types = getLocalDayTypes();
+    if (type === 'abono' || type === 'falta') {
+        types[dateKey] = type;
+    } else {
+        delete types[dateKey];
+    }
+    gmSetJson(STORAGE_KEYS.LOCAL_DAY_TYPES, types);
+}
+
 /** Entre vários editores abertos, o clicado sobe — sempre abaixo do toast. */
 function bringEditorToFront(editor) {
     document.querySelectorAll('.ahg-punch-editor').forEach((p) => { p.style.zIndex = ''; });
@@ -52,6 +71,7 @@ function bringEditorToFront(editor) {
 }
 
 export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localPunches = [], onSave, targetEl }) {
+    let dayType = getDayType(dateKey);
     const editorId = `ahg-punch-editor-${dateKey}`;
     let existing = document.getElementById(editorId);
     if (existing) {
@@ -234,6 +254,30 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
         }
 
         return [row, renderHint(hint)];
+    }
+
+    function renderDayTypeRow() {
+        const options = [
+            { value: 'normal', label: 'Normal' },
+            { value: 'abono', label: 'Abono/Folga' },
+            { value: 'falta', label: 'Falta' }
+        ];
+        return el('div', {
+            className: 'ahg-pe-day-type',
+            children: options.map((opt) => el('button', {
+                className: `ahg-btn ahg-btn-sm${dayType === opt.value ? ' ahg-btn-active' : ''}`,
+                attrs: { type: 'button', 'aria-pressed': String(dayType === opt.value) },
+                text: opt.label,
+                on: {
+                    click: () => {
+                        dayType = opt.value;
+                        saveDayType(dateKey, dayType);
+                        if (typeof onSave === 'function') onSave(working);
+                        render();
+                    }
+                }
+            }))
+        });
     }
 
     function renderTotals({ trabalhado, saldo }) {
@@ -449,6 +493,7 @@ export function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localP
                     className: 'ahg-pe-meta',
                     text: `${mirrorPunches.length} no mirror${hasOverrides ? ' · ajustado localmente' : ''}`
                 }),
+                renderDayTypeRow(),
                 ...punchRows,
                 el('div', { className: 'ahg-pe-add-row', children: [addInput, addBtn] }),
                 renderTotals({ trabalhado, saldo }),

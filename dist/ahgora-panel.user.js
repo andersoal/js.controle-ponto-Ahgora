@@ -33,6 +33,7 @@
     PANEL_POSITIONS: "ahgora_panel_positions_v1",
     BANK_GOAL: "ahgora_bank_goal_v1",
     LOCAL_DAY_PUNCHES: "ahgora_local_day_punches_v1",
+    LOCAL_DAY_TYPES: "ahgora_local_day_types_v1",
     PUNCH_HISTORY: "ahgora_history_v6",
     MIRROR_DAYS: "ahgora_mirror_days_v1",
     // Resumo do plano da meta de banco de horas (Mirror → Logger).
@@ -155,6 +156,7 @@
     DESCANSO_MINIMO: 11 * 60,
     DESCANSO_SEMANAL: 24 * 60,
     LIMITE_ABSOLUTO_CLT: 12 * 60,
+    MAX_HORA_EXTRA_SEMANAL: 10 * 60,
     // Regras de batidas
     TOLERANCIA: 10,
     MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA: 4,
@@ -1451,14 +1453,14 @@
   function getWeeklyRestWarning(dias, hoje = /* @__PURE__ */ new Date()) {
     if (!dias || !hoje) return null;
     const currentWeekDays = dias.filter((d) => !d.isFuture && sameWeek(d.data, hoje));
-    const hasRestDay = currentWeekDays.some((d) => d.batidas.length === 0 || d.isHoliday);
+    const hasRestDay = currentWeekDays.some((d) => d.batidas.length === 0 || d.isHoliday || d.isAbono);
     if (hasRestDay) return null;
     const workedDays = currentWeekDays.filter((d) => d.batidas.length > 0);
     if (workedDays.length === 0) return null;
     return "\u26A0\uFE0F Ainda n\xE3o h\xE1 registro de 24h de descanso nesta semana.";
   }
   function getWeeklyOvertimeWarning(saldoSemana) {
-    const maxOvertime = 10 * 60;
+    const maxOvertime = CONFIG.MAX_HORA_EXTRA_SEMANAL;
     if (saldoSemana > maxOvertime) {
       return `\u26A0\uFE0F Saldo semanal excede +10h (${fmtMin(saldoSemana)}). Hora extra deve ser aprovada pela lideran\xE7a.`;
     }
@@ -1473,9 +1475,23 @@
       return !d.isFuture && date.getMonth() === currentMonth && date.getFullYear() === currentYear && date.getDay() === 0;
     });
     if (sundays.length === 0) return null;
-    const hasRestSunday = sundays.some((d) => d.batidas.length === 0 || d.isHoliday);
+    const hasRestSunday = sundays.some((d) => d.batidas.length === 0 || d.isHoliday || d.isAbono);
     if (hasRestSunday) return null;
     return "\u26A0\uFE0F Nenhum domingo de descanso registrado no m\xEAs.";
+  }
+  function getAbonoNotice(hojeDia) {
+    if (!hojeDia?.isAbono) return null;
+    return "\u2139\uFE0F Hoje marcado como abono/folga \u2014 n\xE3o conta como falta.";
+  }
+  function getMonthlyAbsenceWarning(dias, hoje = /* @__PURE__ */ new Date()) {
+    if (!dias || !hoje) return null;
+    const currentMonth = hoje.getMonth();
+    const currentYear = hoje.getFullYear();
+    const faltas = dias.filter(
+      (d) => !d.isFuture && d.isFalta && d.data.getMonth() === currentMonth && d.data.getFullYear() === currentYear
+    );
+    if (faltas.length === 0) return null;
+    return `\u2139\uFE0F ${faltas.length} falta${faltas.length > 1 ? "s" : ""} registrada${faltas.length > 1 ? "s" : ""} este m\xEAs.`;
   }
   function collectComplianceDays(dias) {
     const punchAnomalyDays = dias.filter((x) => !x.isFuture && x.batidas.length > 0).map((x) => ({
@@ -2194,6 +2210,8 @@
     const weeklyRestWarning = getWeeklyRestWarning(dias, hoje);
     const weeklyOvertimeWarning = getWeeklyOvertimeWarning(aggregates.saldoSemana);
     const monthlySundayRestWarning = getMonthlySundayRestWarning(dias, hoje);
+    const abonoNotice = getAbonoNotice(hojeDia);
+    const monthlyAbsenceWarning = getMonthlyAbsenceWarning(dias, hoje);
     const compliance = collectComplianceDays(dias);
     const bankBalance = effectiveBalance({ officialBalance: bancoHoras, manualBalance: getManualBalance(), dias, hoje });
     return {
@@ -2217,6 +2235,8 @@
       weeklyRestWarning,
       weeklyOvertimeWarning,
       monthlySundayRestWarning,
+      abonoNotice,
+      monthlyAbsenceWarning,
       saidaIdeal: milestones.h8 !== null ? milestones.h8 - aggregates.saldoSemana : null
     };
   }
@@ -2447,6 +2467,10 @@
 
 .ahg-btn-success { border-color: color-mix(in srgb, var(--ahg-ok) 45%, transparent); background: color-mix(in srgb, var(--ahg-ok) 12%, transparent); color: var(--ahg-ok); }
 .ahg-btn-danger { border-color: color-mix(in srgb, var(--ahg-danger) 45%, transparent); background: color-mix(in srgb, var(--ahg-danger) 12%, transparent); color: var(--ahg-danger); }
+.ahg-btn-active { background: var(--ahg-primary-strong); color: #fff; }
+
+.ahg-pe-day-type { display: flex; gap: 4px; margin: 2px 0 6px; }
+.ahg-pe-day-type .ahg-btn { flex: 1; }
 
 .ahg-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 11px; }
 .ahg-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
@@ -3464,6 +3488,21 @@
     }
     setLocalDayPunches(overrides);
   }
+  function getLocalDayTypes() {
+    return gmGetJson(STORAGE_KEYS.LOCAL_DAY_TYPES, {});
+  }
+  function getDayType(dateKey) {
+    return getLocalDayTypes()[dateKey] || "normal";
+  }
+  function saveDayType(dateKey, type) {
+    const types = getLocalDayTypes();
+    if (type === "abono" || type === "falta") {
+      types[dateKey] = type;
+    } else {
+      delete types[dateKey];
+    }
+    gmSetJson(STORAGE_KEYS.LOCAL_DAY_TYPES, types);
+  }
   function bringEditorToFront(editor) {
     document.querySelectorAll(".ahg-punch-editor").forEach((p) => {
       p.style.zIndex = "";
@@ -3471,6 +3510,7 @@
     editor.style.zIndex = "var(--z-punch-editor-front)";
   }
   function openPunchEditor({ dateKey, dateLabel, mirrorPunches = [], localPunches = [], onSave, targetEl }) {
+    let dayType = getDayType(dateKey);
     const editorId = `ahg-punch-editor-${dateKey}`;
     let existing = document.getElementById(editorId);
     if (existing) {
@@ -3633,6 +3673,29 @@
         row.appendChild(removeBtn);
       }
       return [row, renderHint(hint)];
+    }
+    function renderDayTypeRow() {
+      const options = [
+        { value: "normal", label: "Normal" },
+        { value: "abono", label: "Abono/Folga" },
+        { value: "falta", label: "Falta" }
+      ];
+      return el("div", {
+        className: "ahg-pe-day-type",
+        children: options.map((opt) => el("button", {
+          className: `ahg-btn ahg-btn-sm${dayType === opt.value ? " ahg-btn-active" : ""}`,
+          attrs: { type: "button", "aria-pressed": String(dayType === opt.value) },
+          text: opt.label,
+          on: {
+            click: () => {
+              dayType = opt.value;
+              saveDayType(dateKey, dayType);
+              if (typeof onSave === "function") onSave(working);
+              render();
+            }
+          }
+        }))
+      });
     }
     function renderTotals({ trabalhado, saldo }) {
       const colorClass = saldo >= 0 ? "ahg-color-pos" : "ahg-color-neg";
@@ -3844,6 +3907,7 @@
             className: "ahg-pe-meta",
             text: `${mirrorPunches.length} no mirror${hasOverrides ? " \xB7 ajustado localmente" : ""}`
           }),
+          renderDayTypeRow(),
           ...punchRows,
           el("div", { className: "ahg-pe-add-row", children: [addInput, addBtn] }),
           renderTotals({ trabalhado, saldo }),
@@ -4743,6 +4807,12 @@
     }
     if (r.monthlySundayRestWarning) {
       html += `<div class="a-row warn"><span class="a-lbl">Descanso mensal</span><span class="a-val warn"><small>${renderText(r.monthlySundayRestWarning)}</small></span></div>`;
+    }
+    if (r.abonoNotice) {
+      html += `<div class="a-row infos"><span class="a-lbl">Abono/Folga</span><span class="a-val neu"><small>${renderText(r.abonoNotice)}</small></span></div>`;
+    }
+    if (r.monthlyAbsenceWarning) {
+      html += `<div class="a-row infos"><span class="a-lbl">Aus\xEAncias</span><span class="a-val neu"><small>${renderText(r.monthlyAbsenceWarning)}</small></span></div>`;
     }
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-day-details"><summary class="a-sec">Hoje em detalhe</summary>`;
     html += buildShiftPairsHtml(r.turnos);
@@ -6083,6 +6153,23 @@
       dia.violations = getDayRuleViolations(dia);
     });
   }
+  function applyLocalDayTypes(dias, dayTypesByDay) {
+    dias.forEach((dia) => {
+      const type = dayTypesByDay[dia.dateKey];
+      if (!type || type === "normal") return;
+      dia.isAbono = type === "abono";
+      dia.isFalta = type === "falta";
+      if (dia.isAbono) {
+        dia.isRestDay = true;
+        dia.isBusinessDay = !dia.isRestDay || dia.batidas.length > 0;
+      }
+      const agora = dia.isToday ? nowMin() : 1440;
+      const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora, dayBalanceOptions(dia));
+      dia.trabalhado = balance.trabalhado;
+      dia.saldo = balance.saldo;
+      dia.violations = getDayRuleViolations(dia);
+    });
+  }
   function handleOpenPunchEditor(dia, hoje = /* @__PURE__ */ new Date()) {
     const overridesByDay = getLocalDayPunches();
     openPunchEditor({
@@ -6102,6 +6189,7 @@
     persistMirrorDays(dias, hoje);
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
+    applyLocalDayTypes(dias, getLocalDayTypes());
     const sharedTruthPrev = gmGetJsonCrossOrigin(STORAGE_KEYS.SHARED_TRUTH, null);
     const { yesterdayLastPunch: yesterdayLastPunchFallback } = getYesterdayContext(sharedTruthPrev, hoje);
     const resumo = buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback });

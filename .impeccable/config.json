@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/shared/css-injector.js"
+        ],
+        "createdAt": "2026-11-17T11:12:48.341Z",
+        "reason": "user confirmed: pre-existing .ahg-modal-hint--banner is a semantic alert banner in the host's light modal, border-left stripe + text tint signals info/ok/error state, documented in adjacent comment"
+      }
+    ]
+  }
+}

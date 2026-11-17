@@ -9,7 +9,9 @@ import {
     collectComplianceDays,
     getWeeklyRestWarning,
     getWeeklyOvertimeWarning,
-    getMonthlySundayRestWarning
+    getMonthlySundayRestWarning,
+    getAbonoNotice,
+    getMonthlyAbsenceWarning
 } from '../../src/mirror/compliance-engine.js';
 
 function day(opts) {
@@ -18,6 +20,9 @@ function day(opts) {
         isToday: opts.isToday || false,
         isFuture: opts.isFuture || false,
         isBusinessDay: opts.isBusinessDay !== false,
+        isHoliday: opts.isHoliday || false,
+        isAbono: opts.isAbono || false,
+        isFalta: opts.isFalta || false,
         batidas: opts.batidas || [],
         trabalhado: opts.trabalhado ?? 0
     };
@@ -154,6 +159,13 @@ describe('ComplianceEngine', () => {
             ];
             expect(getMonthlySundayRestWarning(dias, new Date(2026, 6, 8))).toContain('domingo');
         });
+
+        it('não alerta quando o domingo trabalhado está marcado como abono/folga', () => {
+            const dias = [
+                day({ data: new Date(2026, 6, 5), batidas: ['08:00', '12:00'], isAbono: true, isFuture: false })
+            ];
+            expect(getMonthlySundayRestWarning(dias, new Date(2026, 6, 8))).toBeNull();
+        });
     });
 
     describe('getWeeklyRestWarning', () => {
@@ -188,6 +200,44 @@ describe('ComplianceEngine', () => {
                 day({ data: new Date(2026, 6, 7), batidas: [], isFuture: true })
             ];
             expect(getWeeklyRestWarning(dias, new Date(2026, 6, 6))).toContain('24h de descanso');
+        });
+
+        it('não alerta quando há dia marcado como abono/folga na semana', () => {
+            const dias = [
+                day({ data: new Date(2026, 6, 6), batidas: ['08:00', '17:00'], isFuture: false }),
+                day({ data: new Date(2026, 6, 7), batidas: ['08:00', '17:00'], isAbono: true, isFuture: false })
+            ];
+            expect(getWeeklyRestWarning(dias, new Date(2026, 6, 8))).toBeNull();
+        });
+    });
+
+    describe('getAbonoNotice', () => {
+        it('avisa quando hoje está marcado como abono/folga', () => {
+            expect(getAbonoNotice(day({ isAbono: true }))).toContain('abono');
+        });
+
+        it('não avisa em dia normal', () => {
+            expect(getAbonoNotice(day({}))).toBeNull();
+        });
+    });
+
+    describe('getMonthlyAbsenceWarning', () => {
+        it('conta faltas do mês corrente', () => {
+            const dias = [
+                day({ data: new Date(2026, 6, 3), isFalta: true, isFuture: false }),
+                day({ data: new Date(2026, 6, 10), isFalta: true, isFuture: false })
+            ];
+            expect(getMonthlyAbsenceWarning(dias, new Date(2026, 6, 8))).toContain('2 faltas');
+        });
+
+        it('não avisa quando não há faltas no mês', () => {
+            const dias = [day({ data: new Date(2026, 6, 3), isFuture: false })];
+            expect(getMonthlyAbsenceWarning(dias, new Date(2026, 6, 8))).toBeNull();
+        });
+
+        it('ignora faltas futuras', () => {
+            const dias = [day({ data: new Date(2026, 6, 20), isFalta: true, isFuture: true })];
+            expect(getMonthlyAbsenceWarning(dias, new Date(2026, 6, 8))).toBeNull();
         });
     });
 });

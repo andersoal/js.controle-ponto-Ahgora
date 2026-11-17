@@ -3,6 +3,8 @@ import {
     getLocalDayPunches,
     saveOverridesForDay,
     getOverridesForDay,
+    getDayType,
+    saveDayType,
     openPunchEditor
 } from '../../src/mirror/punch-editor.js';
 import { setPrivacyHidden } from '../../src/core/privacy-engine.js';
@@ -33,6 +35,36 @@ describe('PunchEditor', () => {
         saveOverridesForDay('2026-07-06', []);
         expect(getOverridesForDay('2026-07-06')).toEqual([]);
         expect(Object.keys(getLocalDayPunches())).not.toContain('2026-07-06');
+    });
+
+    it('getDayType é "normal" por padrão e saveDayType persiste abono/falta', () => {
+        expect(getDayType('2026-07-06')).toBe('normal');
+        saveDayType('2026-07-06', 'abono');
+        expect(getDayType('2026-07-06')).toBe('abono');
+    });
+
+    it('saveDayType("normal") remove a marcação em vez de persistir', () => {
+        saveDayType('2026-07-06', 'falta');
+        saveDayType('2026-07-06', 'normal');
+        expect(getDayType('2026-07-06')).toBe('normal');
+        expect(Object.keys(JSON.parse(localStorage.getItem('ahgora_local_day_types_v1') || '{}'))).not.toContain('2026-07-06');
+    });
+
+    it('clicar em Abono/Folga marca o botão ativo, persiste e dispara onSave', () => {
+        let saved = false;
+        openPunchEditor({
+            dateKey: '2026-07-06',
+            mirrorPunches: ['08:00', '12:00'],
+            onSave: () => { saved = true; }
+        });
+        const editor = document.getElementById('ahg-punch-editor-2026-07-06');
+        const findAbonoBtn = () => [...editor.querySelectorAll('.ahg-pe-day-type .ahg-btn')]
+            .find((b) => b.textContent === 'Abono/Folga');
+        findAbonoBtn().click();
+        expect(getDayType('2026-07-06')).toBe('abono');
+        // render() reconstrói o DOM do editor: reconsulta o botão (a referência antiga ficou desanexada).
+        expect(findAbonoBtn().getAttribute('aria-pressed')).toBe('true');
+        expect(saved).toBe(true);
     });
 
     it('com privacidade ativa, mascara horários e totais no editor (não só blur)', () => {

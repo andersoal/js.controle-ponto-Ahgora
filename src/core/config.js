@@ -25,6 +25,7 @@ export const CONFIG = Object.freeze({
     DESCANSO_MINIMO: 11 * 60,
     DESCANSO_SEMANAL: 24 * 60,
     LIMITE_ABSOLUTO_CLT: 12 * 60,
+    MAX_HORA_EXTRA_SEMANAL: 10 * 60,
 
     // Regras de batidas
     TOLERANCIA: 10,

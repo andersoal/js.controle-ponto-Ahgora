@@ -13,7 +13,7 @@ import { getDayRuleViolations } from './mirror/compliance-engine.js';
 import { extrairDados } from './mirror/dom-scraper.js';
 import { buildMirrorSummary } from './mirror/mirror-summary.js';
 import { renderMirrorPanel } from './mirror/panel-renderer.js';
-import { getLocalDayPunches, openPunchEditor } from './mirror/punch-editor.js';
+import { getLocalDayPunches, getLocalDayTypes, openPunchEditor } from './mirror/punch-editor.js';
 import { persistMirrorDays } from './logger/month-history.js';
 import { startLoggerLiveRefresh } from './logger/live-refresh.js';
 import { buildSharedTruth, getYesterdayContext } from './logger/mirror-sync.js';
@@ -81,6 +81,25 @@ function applyLocalOverrides(dias, overridesByDay) {
     });
 }
 
+/** Abono/folga é um dia de descanso (carga 0, igual isHoliday); falta não altera a carga esperada. */
+function applyLocalDayTypes(dias, dayTypesByDay) {
+    dias.forEach((dia) => {
+        const type = dayTypesByDay[dia.dateKey];
+        if (!type || type === 'normal') return;
+        dia.isAbono = type === 'abono';
+        dia.isFalta = type === 'falta';
+        if (dia.isAbono) {
+            dia.isRestDay = true;
+            dia.isBusinessDay = !dia.isRestDay || dia.batidas.length > 0;
+        }
+        const agora = dia.isToday ? nowMin() : 1440;
+        const balance = computeDayBalance(dia.batidas, dia.isBusinessDay, agora, dayBalanceOptions(dia));
+        dia.trabalhado = balance.trabalhado;
+        dia.saldo = balance.saldo;
+        dia.violations = getDayRuleViolations(dia);
+    });
+}
+
 function handleOpenPunchEditor(dia, hoje = new Date()) {
     const overridesByDay = getLocalDayPunches();
     openPunchEditor({
@@ -106,6 +125,7 @@ function tryRenderMirror(hoje = new Date()) {
 
     const overridesByDay = getLocalDayPunches();
     applyLocalOverrides(dias, overridesByDay);
+    applyLocalDayTypes(dias, getLocalDayTypes());
 
     // Antes de sobrescrever o SHARED_TRUTH, resgata a última batida de ontem
     // persistida (virada de mês: ontem não está no calendário renderizado).

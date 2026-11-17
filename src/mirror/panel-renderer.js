@@ -179,6 +179,12 @@ export function buildPanelHtml(resumo, cfg, view = {}) {
     if (r.monthlySundayRestWarning) {
         html += `<div class="a-row warn"><span class="a-lbl">Descanso mensal</span><span class="a-val warn"><small>${renderText(r.monthlySundayRestWarning)}</small></span></div>`;
     }
+    if (r.abonoNotice) {
+        html += `<div class="a-row infos"><span class="a-lbl">Abono/Folga</span><span class="a-val neu"><small>${renderText(r.abonoNotice)}</small></span></div>`;
+    }
+    if (r.monthlyAbsenceWarning) {
+        html += `<div class="a-row infos"><span class="a-lbl">Ausências</span><span class="a-val neu"><small>${renderText(r.monthlyAbsenceWarning)}</small></span></div>`;
+    }
 
     // Dados densos do dia ficam fora da visão padrão, em expansão.
     html += `<hr class="a-div"><details class="ahg-details" id="ahg-day-details"><summary class="a-sec">Hoje em detalhe</summary>`;

@@ -43,29 +43,34 @@ Config = constante real em `src/core/config.js` (`CONFIG.*`); nenhuma delas é u
 | BR-004 | Turno unico maximo 6h | hard-block | `CONFIG.MAX_HORAS_TURNO` | 360 | `TC-BR004: segundo turno maior que 6h é limitado` |
 | BR-005 | Jornada diaria maxima 10h | mixed (hard-block ao capar a saída; informational quando o plano só encosta no teto) | `CONFIG.MAX_HORAS_DIA` | 600 | `TC-BR005: saída ideal projetada respeita os tetos` / `TC-BR005: plano 10h marca aviso informativo` |
 | BR-006 | Maximo 2 turnos por dia sem justificativa | mixed (warning-only ao abrir 3º turno; hard-block/warning-only acima de 5 batidas conforme o dia estar aberto ou fechado) | `CONFIG.MAX_BATIDAS_DIA_SEM_JUSTIFICATIVA` | 4 (= 2 turnos) | `TC-BR006: 5 batidas exigem justificativa` |
+| BR-007 | Limite semanal de horas extras | warning-only | `CONFIG.MAX_HORA_EXTRA_SEMANAL` | 600 | `getWeeklyOvertimeWarning > alerta quando saldo semanal excede +10h` |
+| BR-008 | Descanso semanal (ao menos 1 dia sem batida/feriado/abono por semana) | warning-only | — (checagem de presença, não de duração) | — | `getWeeklyRestWarning > alerta quando todos os dias da semana trabalharam` |
+| BR-009 | Descanso dominical mensal | warning-only | — (checagem de presença) | — | `getMonthlySundayRestWarning > alerta quando todos os domingos do mês têm batidas` |
+| BR-014 | Aviso de folga/abono (marcado manualmente no editor de ponto) | informational | — (tipo de dia manual, sem CONFIG) | — | `getAbonoNotice > avisa quando hoje está marcado como abono/folga` |
+| BR-015 | Aviso de ausências (marcadas manualmente no editor de ponto) | informational | — (tipo de dia manual, sem CONFIG) | — | `getMonthlyAbsenceWarning > conta faltas do mês corrente` |
 
 > **Nota — assistente de fluxo (v3.1):** a tabela acima descreve o nível **mais comum** de cada regra; o assistente
 > (`src/mirror/assistant-engine.js`) reporta o nível conforme a regra incide **sobre a sugestão** no contexto do dia —
 > por isso BR-005 e BR-006 estão marcadas `mixed` (o mesmo ID aparece em mais de um nível dependendo do caso).
+>
+> BR-007/008/009 vivem em `src/mirror/compliance-engine.js` (não no assistente) e aparecem no painel do Mirror. BR-014/015
+> dependem de o usuário marcar o dia como abono/folga ou falta no editor de ponto (`src/mirror/punch-editor.js`) — não há
+> fonte automática (scraping) para essa distinção hoje; um dia marcado "abono/folga" conta como descanso para BR-008/009,
+> igual feriado. "Falta" não altera a carga esperada do dia (a ausência continua gerando déficit no saldo).
 
 ### Backlog do catálogo (ainda não implementadas)
 As regras abaixo **não têm nenhuma implementação** em `src/` nem teste — descrevem comportamento desejado, não comportamento existente. Portar qualquer uma delas exige implementação própria (motor + config + teste) antes de poder ser movida para a tabela acima.
 
-| ID | Regra pretendida | Enforcement pretendido |
-| --- | --- | --- |
-| BR-007 | Limite semanal de horas extras | warning-only |
-| BR-008 | Descanso semanal 24h apos 6 dias | warning-only |
-| BR-009 | Descanso dominical mensal | warning-only |
-| BR-010 | Sobreaviso janela maxima 24h | mode-dependent |
-| BR-011 | Sobreaviso acionamento maximo 10h | mode-dependent |
-| BR-012 | Descanso pos-acionamento 11h | hard-block |
-| BR-013 | Aviso de fechamento de folha | informational |
-| BR-014 | Aviso de folga/abono | informational |
-| BR-015 | Aviso de ausencias | informational |
+| ID | Regra pretendida | Enforcement pretendido | Por que ainda não |
+| --- | --- | --- | --- |
+| BR-010 | Sobreaviso janela maxima 24h | mode-dependent | Regime de plantão/on-call que não se aplica a todo usuário; sem confirmação de que o usuário trabalha sob sobreaviso, implementar seria generalidade especulativa. |
+| BR-011 | Sobreaviso acionamento maximo 10h | mode-dependent | Mesmo motivo do BR-010 — depende de um conceito de "janela de acionamento" que não existe em nenhum engine hoje. |
+| BR-012 | Descanso pos-acionamento 11h | hard-block (rebaixar para recomendação se portado) | Mesmo motivo do BR-010/011. |
+| BR-013 | Aviso de fechamento de folha | informational | O dia de corte da folha varia por empresa/contrato e não existe em nenhum lugar do código hoje — sem esse dado não há cálculo legítimo a fazer. |
 
 ## Configuracao rapida
 - Instalar Tampermonkey.
-- Carregar `dist/ahgora-panel.user.js` (instalacao direta: https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/dev/dist/ahgora-panel.user.js).
+- Carregar `dist/ahgora-panel.user.js` (instalacao direta: https://github.com/andersoal/js.controle-ponto-Ahgora/raw/refs/heads/v3.0/dist/ahgora-panel.user.js).
 - Acessar mirror/app Ahgora e validar carregamento do painel.
 
 ## Tolerancia de saldo diario
@@ -119,6 +124,7 @@ Catalogo completo, verificado em 2026-11-10 lendo integralmente o monolito antig
 - Marca ⚪ em dias cujo saldo fica dentro da tolerancia configurada (nao conta nos totais semanal/mensal) — `calendar-decorator.js`.
 - Badge de contagem de batidas impar, e badge +/−/± quando o Ahgora mostra uma solicitacao de ajuste manual pendente para o dia — `calendar-decorator.js`, `dom-scraper.js`.
 - Lapis de edicao em qualquer dia util passado/presente, abrindo um editor flutuante para adicionar, editar, remover e salvar/restaurar batidas daquele dia — varios editores podem ficar abertos ao mesmo tempo para dias diferentes — `punch-editor.js`.
+- No mesmo editor, marcar o dia como Abono/Folga ou Falta (BR-014/BR-015): abono conta como descanso nos avisos semanal/mensal, falta so soma no aviso informativo de ausencias do mes — `punch-editor.js`, `compliance-engine.js`.
 - Turnos que cruzam a meia-noite (ex.: 22:00→02:00) sao calculados corretamente e creditados ao dia em que comecaram — `shift-pairs.js`, `calculator.js`.
 - Cartao "assistente" com a proxima batida sugerida, janela de contagem, e o planejamento completo do dia (entrada/intervalo/retorno/saida), cada etapa com botao de um clique para Google Calendar ou Outlook — `assistant-engine.js`, `shared/assistant-card.js`.
 - Mini grafico de barras semanal (trabalhado vs. meta por dia) e saldo semanal corrente — `assistant-engine.js`, `shared/assistant-card.js`.

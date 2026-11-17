@@ -16,7 +16,9 @@ import {
 } from './calculator.js';
 import {
     collectComplianceDays,
+    getAbonoNotice,
     getDayRuleViolations,
+    getMonthlyAbsenceWarning,
     getMonthlySundayRestWarning,
     getPunchCountHealth,
     getWeeklyOvertimeWarning,
@@ -90,6 +92,8 @@ export function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = nu
     const weeklyRestWarning = getWeeklyRestWarning(dias, hoje);
     const weeklyOvertimeWarning = getWeeklyOvertimeWarning(aggregates.saldoSemana);
     const monthlySundayRestWarning = getMonthlySundayRestWarning(dias, hoje);
+    const abonoNotice = getAbonoNotice(hojeDia);
+    const monthlyAbsenceWarning = getMonthlyAbsenceWarning(dias, hoje);
     const compliance = collectComplianceDays(dias);
 
     // Banco total (oficial do Ahgora ou o informado + acumulado): vai no
@@ -117,6 +121,8 @@ export function buildMirrorSummary(dias, hoje, { yesterdayLastPunchFallback = nu
         weeklyRestWarning,
         weeklyOvertimeWarning,
         monthlySundayRestWarning,
+        abonoNotice,
+        monthlyAbsenceWarning,
         saidaIdeal: milestones.h8 !== null ? milestones.h8 - aggregates.saldoSemana : null
     };
 }

@@ -151,7 +151,7 @@ export function getWeeklyRestWarning(dias, hoje = new Date()) {
     if (!dias || !hoje) return null;
 
     const currentWeekDays = dias.filter((d) => !d.isFuture && sameWeek(d.data, hoje));
-    const hasRestDay = currentWeekDays.some((d) => d.batidas.length === 0 || d.isHoliday);
+    const hasRestDay = currentWeekDays.some((d) => d.batidas.length === 0 || d.isHoliday || d.isAbono);
     if (hasRestDay) return null;
 
     const workedDays = currentWeekDays.filter((d) => d.batidas.length > 0);
@@ -161,7 +161,7 @@ export function getWeeklyRestWarning(dias, hoje = new Date()) {
 }
 
 export function getWeeklyOvertimeWarning(saldoSemana) {
-    const maxOvertime = 10 * 60;
+    const maxOvertime = CONFIG.MAX_HORA_EXTRA_SEMANAL;
     if (saldoSemana > maxOvertime) {
         return `⚠️ Saldo semanal excede +10h (${fmtMin(saldoSemana)}). Hora extra deve ser aprovada pela liderança.`;
     }
@@ -180,9 +180,30 @@ export function getMonthlySundayRestWarning(dias, hoje = new Date()) {
             date.getDay() === 0;
     });
     if (sundays.length === 0) return null;
-    const hasRestSunday = sundays.some((d) => d.batidas.length === 0 || d.isHoliday);
+    const hasRestSunday = sundays.some((d) => d.batidas.length === 0 || d.isHoliday || d.isAbono);
     if (hasRestSunday) return null;
     return '⚠️ Nenhum domingo de descanso registrado no mês.';
+}
+
+/** BR-014 — informativo: hoje está marcado manualmente como abono/folga. */
+export function getAbonoNotice(hojeDia) {
+    if (!hojeDia?.isAbono) return null;
+    return 'ℹ️ Hoje marcado como abono/folga — não conta como falta.';
+}
+
+/** BR-015 — informativo: conta faltas marcadas manualmente no mês corrente, sem limiar. */
+export function getMonthlyAbsenceWarning(dias, hoje = new Date()) {
+    if (!dias || !hoje) return null;
+    const currentMonth = hoje.getMonth();
+    const currentYear = hoje.getFullYear();
+    const faltas = dias.filter((d) =>
+        !d.isFuture &&
+        d.isFalta &&
+        d.data.getMonth() === currentMonth &&
+        d.data.getFullYear() === currentYear
+    );
+    if (faltas.length === 0) return null;
+    return `ℹ️ ${faltas.length} falta${faltas.length > 1 ? 's' : ''} registrada${faltas.length > 1 ? 's' : ''} este mês.`;
 }
 
 export function collectComplianceDays(dias) {
